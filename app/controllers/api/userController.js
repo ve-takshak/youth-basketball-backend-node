@@ -11,27 +11,14 @@ const OTP_MIN = 1000;
 const OTP_MAX = 9999;
 const generateOtp = () => Math.floor(OTP_MIN + Math.random() * (OTP_MAX - OTP_MIN + 1));
 
-// Minimum wait between two OTP sends to the same address (signup, resend, forgot-password all
-// share this so someone can't hammer the mail server from any one of the three screens).
-const RESEND_COOLDOWN_MS = 60 * 1000;
-// How long an OTP stays valid, checked against otp_generated_at in verify_otp.
-const OTP_VALID_MINUTES = 10;
 
+const RESEND_COOLDOWN_MS = 60 * 1000;
+const OTP_VALID_MINUTES = 10;
 const PUBLIC_FIELDS = "-password -otp -otp_generated_at -resend_blocked_at -otp_resend -otp_verify_at -reset_key";
 
 const signupWithEmail = async (req, res) => {
     try {
-        let {
-            firstname = "",
-            lastname = "",
-            password = "",
-            username = "",
-            email = "",
-            countryCode = "+1",
-            mobileNumber = "",
-            device_udid = "",
-            device_type = ""
-        } = req.body;
+        let { firstname = "", lastname = "", password = "", username = "", email = "", countryCode = "+1", mobileNumber = "", device_udid = "", device_type = "" } = req.body;
 
 
         firstname = firstname.trim();
@@ -241,10 +228,7 @@ const verify_otp = async (req, res) => {
 
 }
 
-// POST /api/user/resend-otp  { email }
-// Generates a fresh OTP and sends it with the same sendOtpEmail() helper as signup/login/forgot
-// password, so it looks identical to whichever OTP it's replacing. Used by both the sign-in
-// screen's "not verified yet" step and the forgot-password OTP step.
+
 const resendOtp = async (req, res) => {
     try {
         const { email = '' } = req.body;
@@ -423,9 +407,7 @@ const loginWithEmail = async (req, res) => {
 };
 
 
-// POST /api/user/forgotPassword  { email }
-// Sends an OTP the same way signup/login/resend do. The frontend then calls verify_otp with that
-// OTP to get a reset_key, and finally resetPassword with that reset_key + the new password.
+
 const forgotPassword = async (req, res) => {
     try {
         const { email } = req.body;
@@ -496,20 +478,16 @@ const resetPassword = async (req, res) => {
 
         user.password = hashed;
 
-        // Reset key ko invalidate kar do
+
         user.reset_key = null;
 
         await user.save();
 
-        // =========================
-        // Get login data
-        // =========================
+
 
         const login_data = await User.findById(user._id).select(PUBLIC_FIELDS);
 
-        // =========================
-        // Generate JWT
-        // =========================
+
 
         const token = jwt.sign(
             {
