@@ -1,48 +1,33 @@
+const mongoose = require("../../config/database");
 
-const mongoose = require("../../config/database")
+const UserSchema = new mongoose.Schema(
+    {
+        firstname: { type: String, trim: true, default: "" },
+        lastname: { type: String, trim: true, default: "" },
+         username: { type: String },
+        email: { type: String, trim: true, lowercase: true, unique: true, sparse: true },
 
-var UserSchema = new mongoose.Schema({
+        // Login isi se hoga
+        countryCode: { type: String, default: "+972" },
+        mobileNumber: { type: String, required: true, trim: true },
 
-    firstname: { type: String },
-    lastname: { type: String },
-    username: { type: String },
-    password: { type: String },
-    email: { type: String, default: "", index: { unique: true } },
+        role: { type: String, enum: ["admin", "coach", "parent"], default: "parent" },
 
-    reset_key: {
-        type: String,
-        default: ""
+        // OTP
+        is_verify: { type: Boolean, default: false },
+        otp: { type: String, default: "", select: false },
+        otp_generated_at: { type: Date, default: null },
+        otp_verify_at: { type: Date, default: null },
+
+        // Mobile push notifications
+        device_type: { type: String, enum: ["android", "ios", "web", ""], default: "" },
+        device_token: { type: String, default: "" },
     },
-    countryCode: {
-        type: String,
-        default: "+1"
-    },
-    mobileNumber: {
-        type: String,
-        default: ""
-    },
-    device_type: {
-        type: String,   // android, ios
-        default: ""
-    },
-    email_verified_at: { type: Date, default: "" },
-    is_verify: { type: String, default: '0' },
-    signup_type: { type: String, enum: ['Normal', 'Google', 'Apple'], default: 'Normal' },
+    { timestamps: true }
+);
 
-    otp: { type: Number, default: 0 },
-    otp_generated_at: { type: Date, default: 0 },
-    resend_blocked_at: { type: Date, default: 0 },
-    otp_resend: { type: Number, default: 0 },
-    otp_verify_at: { type: Date, default: "" },
-    device_token: { type: String, default: "" },
+// Same country code + mobile number se do account nahi banenge
+UserSchema.index({ countryCode: 1, mobileNumber: 1 }, { unique: true });
 
-    role: {
-        type: String,
-        enum: ['user', 'admin'],
-        default: 'user'
-    },
-
-}, { timestamps: true })
-
-const User = mongoose.model('users', UserSchema);
-module.exports = User
+const User = mongoose.model("User", UserSchema);
+module.exports = User;

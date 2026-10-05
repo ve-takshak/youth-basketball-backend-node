@@ -1,97 +1,46 @@
-const jwt = require("jsonwebtoken")
-let User = require("../models/User");
-require('dotenv').config()
+const jwt = require("jsonwebtoken");
+const User = require("../models/User");
+
+const sendError = (res, status, message) =>
+    res.status(status).json({ error: true, status, message, message_desc: message, data: {} });
+
+
+const getUserFromToken = async (req) => {
+    const header = req.header("Authorization") || "";
+    const [type, token] = header.split(" ");
+
+    if (!token || type.toLowerCase() !== "bearer") return { error: "Token is required." };
+
+    try {
+        const decoded = jwt.verify(token, process.env.JWTKEY);
+        const user = await User.findById(decoded.id);
+
+        if (!user) return { error: "User no longer exists." };
+        if (!user.is_verify) return { error: "Please verify your account." };
+
+        return { user };
+    } catch (e) {
+        return { error: "Invalid or expired token." };
+    }
+};
+
 
 const authentication = async (req, res, next) => {
-    try {
-        const token = req.header('Authorization');
+    const { user, error } = await getUserFromToken(req);
+    if (error) return sendError(res, 401, error);
 
-        if (!token) {
-            return res.status(401).send({
-                error: true,
-                message: "Token is required.",
-                message_desc: "Token is required.",
-                data: {},
-                auth: {}
-            });
-        }
-
-        const bearerToken = token.split(" ");
-
-        if (bearerToken[0] === 'Bearer' || bearerToken[0] === 'bearer') {
-            let Token = bearerToken.length === 2 ? bearerToken[1] : '';
-
-            if (Token.length === 0) {
-                return res.send({
-                    error: false,
-                    message: "Token is required.",
-                    message_desc: "Token is required.",
-                    data: {},
-                    auth: {}
-                });
-            }
-
-            jwt.verify(Token, process.env.JWTKEY, async (err, userDetails) => {
-                if (err === null) {
-                    req.user = userDetails;
-
-                    if (userDetails.login_data._id) {
-                        const isUserExist = await User.findOne({ _id: userDetails.login_data._id });
-
-                        if (!isUserExist) {
-                            return res.status(401).send({
-                                error: true,
-                                message: "User no longer exist (Unauthorized).",
-                                message_desc: "Unauthorized",
-                                data: {},
-                                auth: {}
-                            });
-                        }
-                
-
-                        if (isUserExist.is_verify == 0 && isUserExist.signup_type == 'Normal') {
-                            return res.send({
-                                error: true,
-                                message: "Please verify your account.",
-                                message_desc: "Please verify your account.",
-                                data: {},
-                                auth: {}
-                            });
-                        }
-                    }
-
-                    next();
-                } else {
-                    return res.status(401).send({
-                        error: true,
-                        message: "Unauthorized." + err,
-                        message_desc: "Unauthorized",
-                        data: {},
-                        auth: {}
-                    });
-                }
-            });
-
-        } else {
-            return res.status(401).send({
-                error: true,
-                message: "Invalid authorization type (Unauthorized).",
-                message_desc: "Unauthorized",
-                data: {},
-                auth: {}
-            });
-        }
-
-    } catch (e) {
-        return res.status(401).send({
-            error: true,
-            message: "Unauthenticated.",
-            message_desc: "Unauthorized",
-            data: {},
-            auth: {}
-        });
-    }
-}
+    req.user = user;
+    next();
+};
 
 
-module.exports = { authentication }
+const adminAuthentication = async (req, res, next) => {
+    const { user, error } = await getUserFromToken(req);
+    if (error) return sendError(res, 401, error);
+    if (user.role !== "admin") return sendError(res, 403, "Access denied. Admin only.");
+
+    req.user = user;
+    next();
+};
+
+module.exports = { authentication, adminAuthentication };

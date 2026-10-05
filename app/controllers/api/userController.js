@@ -1,531 +1,159 @@
 const jwt = require("jsonwebtoken");
-const bcrypt = require("bcryptjs");
-const crypto = require("crypto");
 const validator = require("validator");
-const { sendOtpEmail } = require("../../../utils/mailer");
-const MOMENT = require('moment');
-
 const User = require("../../models/User");
 
-const OTP_MIN = 1000;
-const OTP_MAX = 9999;
-const generateOtp = () => Math.floor(OTP_MIN + Math.random() * (OTP_MAX - OTP_MIN + 1));
-
-
-const RESEND_COOLDOWN_MS = 60 * 1000;
+// Abhi testing ke liye OTP hamesha 0000. Baad mein SMS lagane pe sirf generateOtp() badalna hoga.
+const STATIC_OTP = "0000";
 const OTP_VALID_MINUTES = 10;
-const PUBLIC_FIELDS = "-password -otp -otp_generated_at -resend_blocked_at -otp_resend -otp_verify_at -reset_key";
+const ROLES = ["admin", "coach", "parent"];
 
-const signupWithEmail = async (req, res) => {
+const generateOtp = () => STATIC_OTP;
+
+// Response ka ek hi format sab API mein
+const send = (res, status, error, message, data = {}) =>
+    res.status(status).json({ error, status, message, message_desc: message, data });
+
+// Mobile number clean: sirf digits
+const cleanMobile = (mobile = "") => String(mobile).replace(/\D/g, "");
+
+const createToken = (user) =>
+    jwt.sign({ id: user._id, role: user.role }, process.env.JWTKEY, {
+        algorithm: "HS256",
+        expiresIn: "180d",
+    });
+
+// Response mein jaane wala user data
+const publicUser = (user) => ({
+    _id: user._id,
+    firstname: user.firstname,
+    lastname: user.lastname,
+    username: user.username || "",
+    email: user.email || "",
+    countryCode: user.countryCode,
+    mobileNumber: user.mobileNumber,
+    role: user.role,
+    is_verify: user.is_verify,
+});
+
+/**
+ * POST /api/user/register
+ * body: { mobileNumber, countryCode?, firstname?, lastname?, username?, email?, role? }
+ */
+const register = async (req, res) => {
     try {
-        let { firstname = "", lastname = "", password = "", username = "", email = "", countryCode = "+1", mobileNumber = "", device_udid = "", device_type = "" } = req.body;
+        let {
+            firstname = "",
+            lastname = "",
+            username = "",
+            email = "",
+            countryCode = "+972",
+            mobileNumber = "",
+            role = "parent",
+            device_type = "",
+            device_token = "",
+        } = req.body;
 
+        firstname = String(firstname).trim();
+        lastname = String(lastname).trim();
+        username = String(username).trim();
+        email = String(email).trim().toLowerCase();
+        mobileNumber = cleanMobile(mobileNumber);
 
-        firstname = firstname.trim();
-        lastname = lastname.trim();
-        email = email.trim().toLowerCase();
+        if (!mobileNumber || mobileNumber.length < 7) return send(res, 400, true, "Valid mobile number is required.");
+        if (email && !validator.isEmail(email)) return send(res, 400, true, "Please enter a valid email.");
+        if (!ROLES.includes(role)) return send(res, 400, true, "Invalid role.");
 
-        if (firstname === '') {
+        const mobileExists = await User.findOne({ countryCode, mobileNumber });
+        if (mobileExists) return send(res, 409, true, "This mobile number is already registered.");
 
-            return res.send({ "error": true, 'status': 201, "message": "Firstname name is required.", "message_desc": "Full name is required." })
-
+        if (email) {
+            const emailExists = await User.findOne({ email });
+            if (emailExists) return send(res, 409, true, "This email is already registered.");
         }
 
-        else if (lastname === '') {
-
-            return res.send({ "error": true, 'status': 201, "message": "Lastname is required.", "message_desc": "Username is required" })
-
-        }
-
-        if (email === '') {
-
-            return res.send({ "error": true, 'status': 201, "message": "Email is required.", "message_desc": "Email is required" })
-
-        }
-
-        if (!validator.isEmail(email)) {
-            return res.status(400).json({
-                error: true,
-                message: "Please enter a valid email.",
-                message_desc: "Please enter a valid email.",
-                data: {}
-            });
-        }
-
-        if (!password) {
-            return res.status(400).json({
-                error: true,
-                message: "Password is required.",
-                message_desc: "Password is required.",
-                data: {}
-            });
-        }
-
-        if (password.length < 8) {
-            return res.status(400).json({
-                error: true,
-                message: "Password must be at least 8 characters.",
-                message_desc: "Password must be at least 8 characters.",
-                data: {}
-            });
-        }
-        // Check if email already exists
-        const existingUser = await User.findOne({ email });
-
-        if (existingUser) {
-            return res.status(409).json({
-                error: true,
-                message: "This email is already registered.",
-                message_desc: "This email is already registered.",
-                data: {}
-            });
-        }
-
-        const otp = generateOtp();
-
-        const passwordHash = await bcrypt.hash(password, 12);
-
-        const resetKey = crypto.randomBytes(20).toString("hex");
-
-        // =========================
-        // 6. Create user
-        // =========================
-
-        const user = new User({
+        const user = await User.create({
             firstname,
             lastname,
             username,
-            email,
-            password: passwordHash,
-
-            reset_key: resetKey,
-
-            otp,
-            otp_generated_at: new Date(),
-            resend_blocked_at: new Date(Date.now() + RESEND_COOLDOWN_MS),
-
+            email: email || undefined, // khaali email save nahi karna
             countryCode,
             mobileNumber,
-            device_udid,
+            role,
             device_type,
-
-            signup_type: "Normal",
-            is_verify: "0",
-            role: "user"
+            device_token,
+            otp: generateOtp(),
+            otp_generated_at: new Date(),
         });
 
-        const savedUser = await user.save();
-
-        // =========================
-        // 7. Send verification email (shared OTP template — see utils/mailer.js)
-        // =========================
-
-        await sendOtpEmail({
-            to: email,
-            name: firstname,
-            otp,
-            subject: "Verify your Courtside account",
-            intro: "Thank you for creating an account with Courtside. Please use the code below to verify your email address.",
-        });
-
-        const login_data = await User.findById(savedUser._id).select(PUBLIC_FIELDS);
-
-        return res.status(201).json({
-            error: false,
-            message: "Signup successful! An OTP has been sent to your email for verification.",
-            message_desc: "Signup successful! An OTP has been sent to your email for verification.",
-            data: login_data
-        });
-
-    } catch (error) {
-
-        console.error("Signup error:", error);
-
-        return res.status(500).json({
-            error: true,
-            message: "Something went wrong.",
-            message_desc: error.message,
-            data: {}
-        });
+        return send(res, 201, false, "Signup successful. OTP sent to your mobile number.", publicUser(user));
+    } catch (e) {
+        console.error("Register error:", e);
+        return send(res, 500, true, "Something went wrong.");
     }
 };
 
-
-const verify_otp = async (req, res) => {
-
-
+/**
+ * POST /api/user/login
+ * body: { countryCode, mobileNumber }
+ * Ye OTP bhejta hai. Isi API ko "resend OTP" ke liye bhi call kar sakte ho.
+ */
+const login = async (req, res) => {
     try {
+        let { countryCode = "+972", mobileNumber = "" } = req.body;
+        mobileNumber = cleanMobile(mobileNumber);
 
-        const { email = '', otp = '' } = req.body
+        if (!mobileNumber) return send(res, 400, true, "Mobile number is required.");
 
-        if (email.trim() === '' || !validator.isEmail(email.trim())) {
-            return res.send({
-                error: true,
-                status: 201,
-                message: "Email field is required and must be valid email.",
-                message_desc: "Email field is required and must be valid email."
-            });
-        }
+        const user = await User.findOne({ countryCode, mobileNumber });
+        if (!user) return send(res, 404, true, "Mobile number not registered with us.");
 
-        if (otp == '' || otp == 0) {
-
-            return res.send({ "error": true, 'status': 201, "message": "Otp is required.", "message_desc": "Enter your otp which you have recieved in your mobile number." })
-
-        }
-
-        const normalizedEmail = email.trim().toLowerCase();
-        const data = await User.findOne({ email: normalizedEmail }, { resend_blocked_at: 0 })
-
-
-        if (data == null) {
-
-            return res.send({ "error": true, 'status': 201, "message": "Email id not registered with us.", "message_desc": "The Email you provided is not registered with us." })
-        }
-
-        if (data.otp === 0) {
-
-            return res.send({ "error": true, 'status': 201, "message": "No OTP found.", "message_desc": "No OTP found." })
-        }
-
-        if (data.otp != otp) {
-
-            return res.send({ "error": true, 'status': 201, "message": "Invalid otp.", "message_desc": "OTP verifcation failled due to wrong otp provided." })
-        }
-
-
-        startTime = MOMENT(data.otp_generated_at, 'YYYY-MM-DD HH:mm:ss');
-        endTime = MOMENT(new Date(Date.now()), 'YYYY-MM-DD HH:mm:ss');
-        var reset_keys = crypto.randomBytes(20).toString('hex');
-        let timeDiff = endTime.diff(startTime, "minute");
-
-        if (timeDiff > OTP_VALID_MINUTES) {
-
-            return res.send({ "error": true, 'status': 201, "message": "OTP has been expired.", "message_desc": `Please request a new OTP — codes are valid for ${OTP_VALID_MINUTES} minutes.` })
-
-        }
-
-        login_data = data
-
-        const token = jwt.sign({ login_data }, process.env.JWTKEY, {
-            algorithm: "HS256",
-            expiresIn: '180d',
-        })
-
-
-
-        const isupdated = await User.updateMany({ email: normalizedEmail }, { $set: { otp: 0, reset_key: reset_keys, otp_generated_at: "", "otp_verify_at": Date.now(), "email_verified_at": Date.now(), "is_verify": 1, "otp_resend": 0 } });
-        const keys = await User.findOne({ email: normalizedEmail }, { email_verified_at: 1, email: 1, username: 1, firstname: 1, lastname: 1, reset_key: 1 });
-
-        keys._doc.is_emailVerified = keys.is_verify ? 1 : 0;
-        keys._doc.token = token
-
-        return res.send({ "error": false, 'status': 200, "message": "Otp verification successfull.", "message_desc": "OTP verification successfull.", "data": keys, reset_key: reset_keys })
-
-    } catch (e) {
-
-        return res.send({ "error": true, 'status': 201, "message": "Something went wrong.", "message_desc": "Unhandeled exception found" + e, "data": {} })
-    }
-
-}
-
-
-const resendOtp = async (req, res) => {
-    try {
-        const { email = '' } = req.body;
-
-        if (email.trim() === '' || !validator.isEmail(email.trim())) {
-            return res.send({
-                error: true,
-                status: 201,
-                message: "Email field is required and must be valid email.",
-                message_desc: "Email field is required and must be valid email."
-            });
-        }
-
-        const normalizedEmail = email.trim().toLowerCase();
-        const user = await User.findOne({ email: normalizedEmail });
-
-        if (!user) {
-            return res.send({ "error": true, 'status': 201, "message": "Email id not registered with us.", "message_desc": "The Email you provided is not registered with us." });
-        }
-
-        if (user.resend_blocked_at && new Date(user.resend_blocked_at).getTime() > Date.now()) {
-            const waitSeconds = Math.ceil((new Date(user.resend_blocked_at).getTime() - Date.now()) / 1000);
-            return res.send({
-                error: true,
-                status: 201,
-                message: `Please wait ${waitSeconds}s before requesting another OTP.`,
-                message_desc: `Please wait ${waitSeconds}s before requesting another OTP.`
-            });
-        }
-
-        const otp = generateOtp();
-
-        user.otp = otp;
+        user.otp = generateOtp();
         user.otp_generated_at = new Date();
-        user.otp_resend = (user.otp_resend || 0) + 1;
-        user.resend_blocked_at = new Date(Date.now() + RESEND_COOLDOWN_MS);
         await user.save();
 
-        await sendOtpEmail({
-            to: user.email,
-            name: user.firstname,
-            otp,
-            subject: "Your Courtside verification code",
-            intro: "Here is your new one-time verification code.",
-        });
+        return send(res, 200, false, "OTP sent to your mobile number.", { countryCode, mobileNumber });
+    } catch (e) {
+        console.error("Login error:", e);
+        return send(res, 500, true, "Something went wrong.");
+    }
+};
 
-        return res.send({
-            error: false,
-            status: 200,
-            message: "A new OTP has been sent to your email.",
-            message_desc: "A new OTP has been sent to your email."
+/**
+ * POST /api/user/verify-otp
+ * body: { countryCode, mobileNumber, otp }
+ * Signup aur login dono ke baad yahi call hoga. Sahi OTP pe token milega.
+ */
+const verifyOtp = async (req, res) => {
+    try {
+        let { countryCode = "+972", mobileNumber = "", otp = "" } = req.body;
+        mobileNumber = cleanMobile(mobileNumber);
+        otp = String(otp).trim();
+
+        if (!mobileNumber) return send(res, 400, true, "Mobile number is required.");
+        if (!otp) return send(res, 400, true, "OTP is required.");
+
+        const user = await User.findOne({ countryCode, mobileNumber }).select("+otp");
+        if (!user) return send(res, 404, true, "Mobile number not registered with us.");
+
+        if (!user.otp || user.otp !== otp) return send(res, 400, true, "Invalid OTP.");
+
+        const minutes = (Date.now() - new Date(user.otp_generated_at).getTime()) / 60000;
+        if (minutes > OTP_VALID_MINUTES) return send(res, 400, true, "OTP has expired. Please request a new one.");
+
+        user.otp = "";
+        user.otp_generated_at = null;
+        user.otp_verify_at = new Date();
+        user.is_verify = true;
+        await user.save();
+
+        return send(res, 200, false, "OTP verified successfully.", {
+            ...publicUser(user),
+            token: createToken(user),
         });
     } catch (e) {
-        return res.send({ "error": true, 'status': 201, "message": "Something went wrong.", "message_desc": "Unhandeled exception found" + e });
+        console.error("Verify OTP error:", e);
+        return send(res, 500, true, "Something went wrong.");
     }
 };
 
-
-const loginWithEmail = async (req, res) => {
-    try {
-        let { email = '', password = '' } = req.body;
-
-        if (email.trim() === '' || !validator.isEmail(email.trim())) {
-            return res.send({
-                error: true,
-                status: 201,
-                message: "Email field is required and must be valid email.",
-                message_desc: "Email field is required and must be valid email."
-            });
-        }
-
-        if (password === '' || password.length < 4) {
-            return res.send({
-                error: true,
-                status: 201,
-                message: "Password is required and must be four character.",
-                message_desc: "Password is required and must be four character."
-            });
-        }
-
-        email = email.toLowerCase();
-        const isExist = await User.findOne({ email });
-
-        if (!isExist) {
-            return res.send({
-                error: true,
-                status: 201,
-                message: "Email not registered with us.",
-                message_desc: "Email not registered with us."
-            });
-        }
-
-        // Email verification
-        if (isExist.is_verify == 0) {
-
-            const newOtp = generateOtp();
-
-            // Update OTP in DB
-            await User.updateOne({ email }, {
-                $set: {
-                    otp: newOtp,
-                    otp_generated_at: new Date(),
-                    resend_blocked_at: new Date(Date.now() + RESEND_COOLDOWN_MS),
-                }
-            });
-
-            await sendOtpEmail({
-                to: email,
-                name: isExist.firstname,
-                otp: newOtp,
-                subject: "Verify your Courtside account",
-                intro: "Your account isn't verified yet. Use the code below to verify it and finish signing in.",
-            });
-
-            return res.send({
-                error: true,
-                status: 200,
-                message: "Please verify your account (an OTP has been sent to your email).",
-                message_desc: "Please verify your account (an OTP has been sent to your email).",
-                data: {
-                    _id: isExist._id,
-                    firstname: isExist.firstname,
-                    lastname: isExist.lastname,
-                    username: isExist.username,
-                    email: isExist.email,
-                    token: isExist.token || "",
-                    is_emailVerified: 0
-                }
-            });
-        }
-
-        const isPasswordMatched = bcrypt.compareSync(password, isExist.password);
-        if (!isPasswordMatched) {
-            return res.send({
-                error: true,
-                status: 201,
-                message: "Check email or password.",
-                message_desc: "Check email or password."
-            });
-        }
-
-
-
-        const login_data = await User.findOne({ email }, {
-            password: 0,
-            otp: 0,
-            login_location: 0
-        });
-
-        // Generate token
-        const token = jwt.sign({ login_data }, process.env.JWTKEY, {
-            algorithm: "HS256",
-            expiresIn: '180d',
-        });
-
-        login_data._doc.is_emailVerified = login_data.email_verified_at ? 1 : 0;
-        login_data._doc.token = token;
-
-
-        return res.send({
-            error: false,
-            status: 200,
-            message: "Login Successfull.",
-            message_desc: "Login Successfull.",
-            data: login_data
-        });
-
-    } catch (e) {
-        return res.send({
-            error: true,
-            status: 201,
-            message: "Something went wrong.",
-            message_desc: "Unhandled exception found: " + e
-        });
-    }
-};
-
-
-
-const forgotPassword = async (req, res) => {
-    try {
-        const { email } = req.body;
-        if (!email || !validator.isEmail(email.trim())) {
-            return res.status(400).json({ error: true, message: "Enter a valid email address." });
-        }
-
-        const normalizedEmail = email.trim().toLowerCase();
-        const user = await User.findOne({ email: normalizedEmail });
-        if (!user) {
-            return res.status(404).json({ error: true, message: "Email not found" });
-        }
-
-        const otp = generateOtp();
-
-        user.otp = otp;
-        // Shares the same field verify_otp checks (was otp_expiry before, which isn't in the
-        // schema and was never actually saved — verify_otp's expiry check needs otp_generated_at).
-        user.otp_generated_at = new Date();
-        user.resend_blocked_at = new Date(Date.now() + RESEND_COOLDOWN_MS);
-        await user.save();
-
-        await sendOtpEmail({
-            to: user.email,
-            name: user.firstname,
-            otp,
-            subject: "Your password reset code",
-            intro: `Use the code below to verify it's you, then you'll be able to choose a new password. This code is valid for ${OTP_VALID_MINUTES} minutes.`,
-        });
-
-        return res.json({ error: false, message: "OTP sent to email" });
-    } catch (err) {
-        return res.status(500).json({ error: true, message: err.message });
-    }
-};
-
-
-const resetPassword = async (req, res) => {
-    try {
-        const { reset_key, password } = req.body;
-
-        if (!reset_key || !password) {
-            return res.status(400).json({
-                error: true,
-                message: "Reset key & password required"
-            });
-        }
-
-        if (password.length < 8) {
-            return res.status(400).json({
-                error: true,
-                message: "Password must be at least 8 characters."
-            });
-        }
-
-        // Find user
-        const user = await User.findOne({ reset_key });
-
-        if (!user) {
-            return res.status(400).json({
-                error: true,
-                message: "Invalid reset key"
-            });
-        }
-
-        // Hash new password
-        const hashed = await bcrypt.hash(password, 12);
-
-        user.password = hashed;
-
-
-        user.reset_key = null;
-
-        await user.save();
-
-
-
-        const login_data = await User.findById(user._id).select(PUBLIC_FIELDS);
-
-
-
-        const token = jwt.sign(
-            {
-                login_data
-            },
-            process.env.JWTKEY,
-            {
-                algorithm: "HS256",
-                expiresIn: "180d"
-            }
-        );
-
-        // Same as login response
-        login_data._doc.is_emailVerified = login_data.email_verified_at ? 1 : 0;
-        login_data._doc.token = token;
-
-        return res.status(200).json({
-            error: false,
-            status: 200,
-            message: "Password reset successful.",
-            message_desc: "Password reset successful.",
-            data: login_data
-        });
-
-    } catch (err) {
-
-        console.error("Reset password error:", err);
-
-        return res.status(500).json({
-            error: true,
-            status: 500,
-            message: "Something went wrong.",
-            message_desc: err.message,
-            data: {}
-        });
-    }
-};
-
-module.exports = {
-    signupWithEmail, verify_otp, resendOtp, loginWithEmail, forgotPassword, resetPassword
-};
+module.exports = { register, login, verifyOtp };
