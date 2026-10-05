@@ -13,7 +13,7 @@ const UserSchema = new mongoose.Schema(
         countryCode: { type: String, default: "+972" },
         mobileNumber: { type: String, required: true, trim: true },
 
-        role: { type: String, enum: ["admin", "coach", "parent"], default: "parent" },
+        role: { type: String, enum: ["owner", "admin", "coach", "parent"], default: "parent" },
 
         // OTP
         is_verify: { type: Boolean, default: false },

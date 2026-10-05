@@ -196,7 +196,12 @@ const login = async (req, res) => {
  */
 const verifyOtp = async (req, res) => {
     try {
-        let { countryCode = "+972", mobileNumber = "", otp = "" } = req.body;
+        let {
+            countryCode = "+972",
+            mobileNumber = "",
+            otp = ""
+        } = req.body;
+
         mobileNumber = cleanMobile(mobileNumber);
         otp = String(otp).trim();
 
@@ -210,7 +215,11 @@ const verifyOtp = async (req, res) => {
             });
         }
 
-        const user = await User.findOne({ countryCode, mobileNumber }).select("+otp");
+        const user = await User.findOne({
+            countryCode,
+            mobileNumber
+        }).select("+otp");
+
         if (!user) {
             return res.status(404).json({
                 error: true,
@@ -221,8 +230,9 @@ const verifyOtp = async (req, res) => {
             });
         }
 
+        // OTP Verification
         if (USE_STATIC_OTP) {
-            // Testing: sirf "0000" check, baaki kuch nahi
+
             if (otp !== STATIC_OTP) {
                 return res.status(400).json({
                     error: true,
@@ -232,8 +242,9 @@ const verifyOtp = async (req, res) => {
                     data: {},
                 });
             }
+
         } else {
-            // Asli SMS wala flow: DB wala OTP match + expiry check
+
             if (!user.otp || user.otp !== otp) {
                 return res.status(400).json({
                     error: true,
@@ -244,8 +255,16 @@ const verifyOtp = async (req, res) => {
                 });
             }
 
-            const minutes = (Date.now() - new Date(user.otp_generated_at).getTime()) / 60000;
-            if (minutes > OTP_VALID_MINUTES) {
+            const minutes =
+                (Date.now() -
+                    new Date(user.otp_generated_at).getTime()) / 60000;
+
+            if (
+                !user.otp_generated_at ||
+                !Number.isFinite(minutes) ||
+                minutes < 0 ||
+                minutes > OTP_VALID_MINUTES
+            ) {
                 return res.status(400).json({
                     error: true,
                     status: 400,
@@ -256,20 +275,41 @@ const verifyOtp = async (req, res) => {
             }
         }
 
+        // Update user verification
         user.otp = "";
         user.otp_generated_at = null;
         user.otp_verify_at = new Date();
         user.is_verify = true;
+
         await user.save();
 
-        // Coach hai toh uska coachId aur club (id + name) bhi bhejna
+        // Coach data
         let coachData = {};
+
         if (user.role === "coach") {
-            const coach = await Coach.findOne({ userId: user._id }).populate("clubId", "name");
+            const coach = await Coach.findOne({
+                userId: user._id
+            }).populate("clubId", "name");
+
             coachData = {
                 coachId: coach ? coach._id : null,
-                club: coach && coach.clubId ? { _id: coach.clubId._id, name: coach.clubId.name } : null,
+                club:
+                    coach && coach.clubId
+                        ? {
+                            _id: coach.clubId._id,
+                            name: coach.clubId.name
+                        }
+                        : null
             };
+        }
+
+        // Response user data
+        const userData = publicUser(user);
+
+        // Database mein admin hi rahega,
+        // lekin API response mein clubAdmin jayega
+        if (user.role === "admin") {
+            userData.role = "clubAdmin";
         }
 
         return res.status(200).json({
@@ -277,10 +317,16 @@ const verifyOtp = async (req, res) => {
             status: 200,
             message: "OTP verified successfully.",
             message_desc: "OTP verified successfully.",
-            data: { ...publicUser(user), ...coachData, token: createToken(user) },
+            data: {
+                ...userData,
+                ...coachData,
+                token: createToken(user)
+            }
         });
+
     } catch (e) {
         console.error("Verify OTP error:", e);
+
         return res.status(500).json({
             error: true,
             status: 500,
@@ -290,5 +336,4 @@ const verifyOtp = async (req, res) => {
         });
     }
 };
-
 module.exports = { register, login, verifyOtp };
