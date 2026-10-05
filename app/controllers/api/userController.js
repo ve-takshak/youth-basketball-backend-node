@@ -1,19 +1,12 @@
 const jwt = require("jsonwebtoken");
 const validator = require("validator");
 const User = require("../../models/User");
-const Coach = require("../../models/Coach");
+const { ROLES, USE_STATIC_OTP, STATIC_OTP, OTP_VALID_MINUTES } = require("../../helpers/constants");
+const { cleanMobile } = require("../../helpers/common");
+const { publicUser, getRoleData } = require("../../helpers/userHelper");
 
-// TESTING MODE: true rehne tak har user ka OTP hamesha "0000" chalega
-// (login call kiya ho ya nahi, pehle verify hua ho ya nahi, expiry bhi check nahi hogi).
-// Twilio / koi SMS service lagane ke baad isko false kar dena, aur generateOtp() mein random OTP + SMS bhejna.
-const USE_STATIC_OTP = true;
-const STATIC_OTP = "0000";
-const OTP_VALID_MINUTES = 10;
-
+// Abhi OTP hamesha 0000. SMS lagane pe yahan random OTP banake SMS bhejna.
 const generateOtp = () => STATIC_OTP;
-
-// Mobile number clean: sirf digits
-const cleanMobile = (mobile = "") => String(mobile).replace(/\D/g, "");
 
 const createToken = (user) =>
     jwt.sign({ id: user._id, role: user.role }, process.env.JWTKEY, {
@@ -21,22 +14,9 @@ const createToken = (user) =>
         expiresIn: "180d",
     });
 
-// Response mein jaane wala user data
-const publicUser = (user) => ({
-    _id: user._id,
-    firstname: user.firstname,
-    lastname: user.lastname,
-    username: user.username || "",
-    email: user.email || "",
-    countryCode: user.countryCode,
-    mobileNumber: user.mobileNumber,
-    role: user.role,
-    is_verify: user.is_verify,
-});
-
 /**
  * POST /api/user/register
- * Sirf ADMIN ka signup. Coach admin banata hai (createCoach), wo yahan se nahi banega.
+ * Sirf SUPER ADMIN ka signup. ClubAdmin aur Coach yahan se nahi bante, unhe superAdmin/clubAdmin banata hai.
  * body: { firstname, lastname, countryCode, mobileNumber, username?, email? }
  */
 const register = async (req, res) => {
@@ -109,7 +89,7 @@ const register = async (req, res) => {
             email: email || undefined, // khaali email save nahi karna
             countryCode,
             mobileNumber,
-            role: "admin", // body se role nahi lete, signup sirf admin ka
+            role: ROLES.SUPER_ADMIN, // body se role nahi lete
             device_type,
             device_token,
             otp: generateOtp(),
@@ -138,7 +118,7 @@ const register = async (req, res) => {
 /**
  * POST /api/user/login
  * body: { countryCode, mobileNumber }
- * Admin, coach, parent sab ke liye. OTP set karta hai. Resend OTP ke liye bhi yahi.
+ * Sab roles ke liye. OTP set karta hai. Resend OTP ke liye bhi yahi.
  */
 const login = async (req, res) => {
     try {
@@ -191,17 +171,12 @@ const login = async (req, res) => {
 
 /**
  * POST /api/user/verify-otp
- * body: { countryCode, mobileNumber, otp }
- * Signup aur login dono ke baad yahi call hoga. Sahi OTP pe token milta hai.
+ * body: { countryCode, mobileNumber, otp, device_type?, device_token? }
+ * Sahi OTP pe token milta hai. coach/clubAdmin ko unka club bhi milta hai.
  */
 const verifyOtp = async (req, res) => {
     try {
-        let {
-            countryCode = "+972",
-            mobileNumber = "",
-            otp = ""
-        } = req.body;
-
+        let { countryCode = "+972", mobileNumber = "", otp = "", device_type, device_token } = req.body;
         mobileNumber = cleanMobile(mobileNumber);
         otp = String(otp).trim();
 
@@ -215,11 +190,7 @@ const verifyOtp = async (req, res) => {
             });
         }
 
-        const user = await User.findOne({
-            countryCode,
-            mobileNumber
-        }).select("+otp");
-
+        const user = await User.findOne({ countryCode, mobileNumber }).select("+otp");
         if (!user) {
             return res.status(404).json({
                 error: true,
@@ -230,9 +201,8 @@ const verifyOtp = async (req, res) => {
             });
         }
 
-        // OTP Verification
         if (USE_STATIC_OTP) {
-
+            // Testing: sirf "0000" check
             if (otp !== STATIC_OTP) {
                 return res.status(400).json({
                     error: true,
@@ -242,9 +212,8 @@ const verifyOtp = async (req, res) => {
                     data: {},
                 });
             }
-
         } else {
-
+            // Asli SMS wala flow: DB wala OTP match + expiry
             if (!user.otp || user.otp !== otp) {
                 return res.status(400).json({
                     error: true,
@@ -255,16 +224,8 @@ const verifyOtp = async (req, res) => {
                 });
             }
 
-            const minutes =
-                (Date.now() -
-                    new Date(user.otp_generated_at).getTime()) / 60000;
-
-            if (
-                !user.otp_generated_at ||
-                !Number.isFinite(minutes) ||
-                minutes < 0 ||
-                minutes > OTP_VALID_MINUTES
-            ) {
+            const minutes = (Date.now() - new Date(user.otp_generated_at).getTime()) / 60000;
+            if (minutes > OTP_VALID_MINUTES) {
                 return res.status(400).json({
                     error: true,
                     status: 400,
@@ -275,58 +236,25 @@ const verifyOtp = async (req, res) => {
             }
         }
 
-        // Update user verification
         user.otp = "";
         user.otp_generated_at = null;
         user.otp_verify_at = new Date();
         user.is_verify = true;
-
+        if (device_type !== undefined) user.device_type = device_type;
+        if (device_token !== undefined) user.device_token = device_token;
         await user.save();
 
-        // Coach data
-        let coachData = {};
-
-        if (user.role === "coach") {
-            const coach = await Coach.findOne({
-                userId: user._id
-            }).populate("clubId", "name");
-
-            coachData = {
-                coachId: coach ? coach._id : null,
-                club:
-                    coach && coach.clubId
-                        ? {
-                            _id: coach.clubId._id,
-                            name: coach.clubId.name
-                        }
-                        : null
-            };
-        }
-
-        // Response user data
-        const userData = publicUser(user);
-
-        // Database mein admin hi rahega,
-        // lekin API response mein clubAdmin jayega
-        if (user.role === "admin") {
-            userData.role = "clubAdmin";
-        }
+        const roleData = await getRoleData(user);
 
         return res.status(200).json({
             error: false,
             status: 200,
             message: "OTP verified successfully.",
             message_desc: "OTP verified successfully.",
-            data: {
-                ...userData,
-                ...coachData,
-                token: createToken(user)
-            }
+            data: { ...publicUser(user), ...roleData, token: createToken(user) },
         });
-
     } catch (e) {
         console.error("Verify OTP error:", e);
-
         return res.status(500).json({
             error: true,
             status: 500,
@@ -336,4 +264,32 @@ const verifyOtp = async (req, res) => {
         });
     }
 };
-module.exports = { register, login, verifyOtp };
+
+/**
+ * GET /api/user/profile   (koi bhi logged-in user)
+ * App/panel refresh pe user ki latest details (aur coach/clubAdmin ka club).
+ */
+const getProfile = async (req, res) => {
+    try {
+        const roleData = await getRoleData(req.user);
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Profile fetched successfully.",
+            message_desc: "Profile fetched successfully.",
+            data: { ...publicUser(req.user), ...roleData },
+        });
+    } catch (e) {
+        console.error("Get profile error:", e);
+        return res.status(500).json({
+            error: true,
+            status: 500,
+            message: "Something went wrong.",
+            message_desc: e.message,
+            data: {},
+        });
+    }
+};
+
+module.exports = { register, login, verifyOtp, getProfile };

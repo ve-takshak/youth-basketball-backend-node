@@ -1,4 +1,4 @@
-require("dotenv").config();
+require("dotenv").config(); // sabse upar, taaki database.js ko MONGODB_URI mil jaye
 
 const express = require("express");
 const cors = require("cors");

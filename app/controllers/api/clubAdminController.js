@@ -1,12 +1,12 @@
 const User = require("../../models/User");
 const Club = require("../../models/Club");
-const Coach = require("../../models/Coach");
+const ClubAdmin = require("../../models/ClubAdmin");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, escapeRegex, getPagination } = require("../../helpers/common");
 const { validatePersonInput, findDuplicateUser, applyPersonUpdates } = require("../../helpers/userHelper");
 
-// Coach + uska User + Club ek flat object mein (frontend ke liye aasaan)
-const formatCoach = (record) => ({
+// ClubAdmin + uska User + Club ek flat object mein (frontend ke liye aasaan)
+const formatClubAdmin = (record) => ({
     _id: record._id,
     userId: record.userId?._id || record.userId,
     firstname: record.userId?.firstname || "",
@@ -19,21 +19,17 @@ const formatCoach = (record) => ({
     createdAt: record.createdAt,
 });
 
-const populateCoach = (query) =>
+const populateClubAdmin = (query) =>
     query
         .populate("userId", "firstname lastname email countryCode mobileNumber is_verify")
         .populate("clubId", "name");
 
-// clubAdmin sirf apne club ke coach ko chhu sakta hai. SuperAdmin sab ko.
-const canAccess = (req, coachClubId) =>
-    req.user.role === ROLES.SUPER_ADMIN || String(req.clubId) === String(coachClubId?._id || coachClubId);
-
 /**
- * POST /api/user/createCoach   (superAdmin ya clubAdmin)
- * body: { firstname, lastname, countryCode, mobileNumber, clubId (clubAdmin ke liye ignore), email? }
- * User (role: coach) + Coach record dono banata hai.
+ * POST /api/user/createClubAdmin   (sirf superAdmin)
+ * body: { firstname, lastname, countryCode, mobileNumber, clubId, email? }
+ * User (role: clubAdmin) + ClubAdmin record dono banata hai.
  */
-const createCoach = async (req, res) => {
+const createClubAdmin = async (req, res) => {
     let user = null;
     try {
         const checked = validatePersonInput(req.body);
@@ -48,8 +44,7 @@ const createCoach = async (req, res) => {
         }
         const { firstname, lastname, email, countryCode, mobileNumber } = checked.values;
 
-        // clubAdmin apne hi club mein coach banayega, superAdmin body se club chunega
-        const clubId = req.user.role === ROLES.CLUB_ADMIN ? String(req.clubId) : String(req.body.clubId || "").trim();
+        const clubId = String(req.body.clubId || "").trim();
 
         if (!isValidId(clubId)) {
             return res.status(400).json({
@@ -90,29 +85,29 @@ const createCoach = async (req, res) => {
             email: email || undefined,
             countryCode,
             mobileNumber,
-            role: ROLES.COACH,
+            role: ROLES.CLUB_ADMIN,
         });
 
-        // 2. Coach record jo club se juda hai
-        const record = await Coach.create({
+        // 2. ClubAdmin record jo club se juda hai
+        const record = await ClubAdmin.create({
             userId: user._id,
             clubId: club._id,
             createdBy: req.user._id,
         });
 
-        const saved = await populateCoach(Coach.findById(record._id));
+        const saved = await populateClubAdmin(ClubAdmin.findById(record._id));
 
         return res.status(201).json({
             error: false,
             status: 201,
-            message: "Coach created successfully.",
-            message_desc: "Coach created successfully.",
-            data: formatCoach(saved),
+            message: "Club admin created successfully.",
+            message_desc: "Club admin created successfully.",
+            data: formatClubAdmin(saved),
         });
     } catch (e) {
-        // Coach record fail hua toh adhoora user bhi hata do
+        // ClubAdmin record fail hua toh adhoora user bhi hata do
         if (user) await User.findByIdAndDelete(user._id).catch(() => {});
-        console.error("Create coach error:", e);
+        console.error("Create club admin error:", e);
         return res.status(500).json({
             error: true,
             status: 500,
@@ -124,10 +119,10 @@ const createCoach = async (req, res) => {
 };
 
 /**
- * GET /api/user/listCoaches?clubId=&search=&page=1&limit=10   (superAdmin ya clubAdmin)
+ * GET /api/user/listClubAdmins?clubId=&search=&page=1&limit=10   (sirf superAdmin)
  * search: naam ya mobile number se
  */
-const listCoaches = async (req, res) => {
+const listClubAdmins = async (req, res) => {
     try {
         const search = String(req.query.search || "").trim();
         const clubId = String(req.query.clubId || "").trim();
@@ -135,10 +130,7 @@ const listCoaches = async (req, res) => {
 
         const filter = {};
 
-        if (req.user.role === ROLES.CLUB_ADMIN) {
-            // clubAdmin sirf apne club ke coaches dekhega
-            filter.clubId = req.clubId;
-        } else if (clubId) {
+        if (clubId) {
             if (!isValidId(clubId)) {
                 return res.status(400).json({
                     error: true,
@@ -155,29 +147,29 @@ const listCoaches = async (req, res) => {
         if (search) {
             const regex = new RegExp(escapeRegex(search), "i");
             const users = await User.find({
-                role: ROLES.COACH,
+                role: ROLES.CLUB_ADMIN,
                 $or: [{ firstname: regex }, { lastname: regex }, { mobileNumber: regex }],
             }).select("_id");
             filter.userId = { $in: users.map((u) => u._id) };
         }
 
         const [records, total] = await Promise.all([
-            populateCoach(Coach.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit)),
-            Coach.countDocuments(filter),
+            populateClubAdmin(ClubAdmin.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit)),
+            ClubAdmin.countDocuments(filter),
         ]);
 
         return res.status(200).json({
             error: false,
             status: 200,
-            message: "Coaches fetched successfully.",
-            message_desc: "Coaches fetched successfully.",
+            message: "Club admins fetched successfully.",
+            message_desc: "Club admins fetched successfully.",
             data: {
-                coaches: records.map(formatCoach),
+                clubAdmins: records.map(formatClubAdmin),
                 pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
             },
         });
     } catch (e) {
-        console.error("List coaches error:", e);
+        console.error("List club admins error:", e);
         return res.status(500).json({
             error: true,
             status: 500,
@@ -189,9 +181,9 @@ const listCoaches = async (req, res) => {
 };
 
 /**
- * GET /api/user/getCoach/:id   (superAdmin ya clubAdmin, :id = Coach ki _id)
+ * GET /api/user/getClubAdmin/:id   (sirf superAdmin, :id = ClubAdmin ki _id)
  */
-const getCoach = async (req, res) => {
+const getClubAdmin = async (req, res) => {
     try {
         const { id } = req.params;
 
@@ -199,19 +191,19 @@ const getCoach = async (req, res) => {
             return res.status(400).json({
                 error: true,
                 status: 400,
-                message: "Invalid coach id.",
-                message_desc: "Invalid coach id.",
+                message: "Invalid club admin id.",
+                message_desc: "Invalid club admin id.",
                 data: {},
             });
         }
 
-        const record = await populateCoach(Coach.findById(id));
-        if (!record || !canAccess(req, record.clubId)) {
+        const record = await populateClubAdmin(ClubAdmin.findById(id));
+        if (!record) {
             return res.status(404).json({
                 error: true,
                 status: 404,
-                message: "Coach not found.",
-                message_desc: "Coach not found.",
+                message: "Club admin not found.",
+                message_desc: "Club admin not found.",
                 data: {},
             });
         }
@@ -219,12 +211,12 @@ const getCoach = async (req, res) => {
         return res.status(200).json({
             error: false,
             status: 200,
-            message: "Coach fetched successfully.",
-            message_desc: "Coach fetched successfully.",
-            data: formatCoach(record),
+            message: "Club admin fetched successfully.",
+            message_desc: "Club admin fetched successfully.",
+            data: formatClubAdmin(record),
         });
     } catch (e) {
-        console.error("Get coach error:", e);
+        console.error("Get club admin error:", e);
         return res.status(500).json({
             error: true,
             status: 500,
@@ -236,10 +228,10 @@ const getCoach = async (req, res) => {
 };
 
 /**
- * PUT /api/user/updateCoach/:id   (superAdmin ya clubAdmin, :id = Coach ki _id)
- * body: jo badalna hai wahi { firstname?, lastname?, email?, countryCode?, mobileNumber?, clubId? (clubAdmin ke liye ignore) }
+ * PUT /api/user/updateClubAdmin/:id   (sirf superAdmin, :id = ClubAdmin ki _id)
+ * body: jo badalna hai wahi { firstname?, lastname?, email?, countryCode?, mobileNumber?, clubId? }
  */
-const updateCoach = async (req, res) => {
+const updateClubAdmin = async (req, res) => {
     try {
         const { id } = req.params;
 
@@ -247,19 +239,19 @@ const updateCoach = async (req, res) => {
             return res.status(400).json({
                 error: true,
                 status: 400,
-                message: "Invalid coach id.",
-                message_desc: "Invalid coach id.",
+                message: "Invalid club admin id.",
+                message_desc: "Invalid club admin id.",
                 data: {},
             });
         }
 
-        const record = await Coach.findById(id);
-        if (!record || !canAccess(req, record.clubId)) {
+        const record = await ClubAdmin.findById(id);
+        if (!record) {
             return res.status(404).json({
                 error: true,
                 status: 404,
-                message: "Coach not found.",
-                message_desc: "Coach not found.",
+                message: "Club admin not found.",
+                message_desc: "Club admin not found.",
                 data: {},
             });
         }
@@ -269,8 +261,8 @@ const updateCoach = async (req, res) => {
             return res.status(404).json({
                 error: true,
                 status: 404,
-                message: "Coach user not found.",
-                message_desc: "Coach user not found.",
+                message: "Club admin user not found.",
+                message_desc: "Club admin user not found.",
                 data: {},
             });
         }
@@ -287,7 +279,7 @@ const updateCoach = async (req, res) => {
         }
 
         const { clubId } = req.body;
-        if (clubId !== undefined && req.user.role === ROLES.SUPER_ADMIN) {
+        if (clubId !== undefined) {
             if (!isValidId(clubId) || !(await Club.exists({ _id: clubId }))) {
                 return res.status(400).json({
                     error: true,
@@ -303,17 +295,17 @@ const updateCoach = async (req, res) => {
         await user.save();
         await record.save();
 
-        const saved = await populateCoach(Coach.findById(record._id));
+        const saved = await populateClubAdmin(ClubAdmin.findById(record._id));
 
         return res.status(200).json({
             error: false,
             status: 200,
-            message: "Coach updated successfully.",
-            message_desc: "Coach updated successfully.",
-            data: formatCoach(saved),
+            message: "Club admin updated successfully.",
+            message_desc: "Club admin updated successfully.",
+            data: formatClubAdmin(saved),
         });
     } catch (e) {
-        console.error("Update coach error:", e);
+        console.error("Update club admin error:", e);
         return res.status(500).json({
             error: true,
             status: 500,
@@ -325,10 +317,10 @@ const updateCoach = async (req, res) => {
 };
 
 /**
- * DELETE /api/user/deleteCoach/:id   (superAdmin ya clubAdmin, :id = Coach ki _id)
- * Coach record aur uska User dono hatata hai.
+ * DELETE /api/user/deleteClubAdmin/:id   (sirf superAdmin, :id = ClubAdmin ki _id)
+ * ClubAdmin record aur uska User dono hatata hai.
  */
-const deleteCoach = async (req, res) => {
+const deleteClubAdmin = async (req, res) => {
     try {
         const { id } = req.params;
 
@@ -336,35 +328,35 @@ const deleteCoach = async (req, res) => {
             return res.status(400).json({
                 error: true,
                 status: 400,
-                message: "Invalid coach id.",
-                message_desc: "Invalid coach id.",
+                message: "Invalid club admin id.",
+                message_desc: "Invalid club admin id.",
                 data: {},
             });
         }
 
-        const record = await Coach.findById(id);
-        if (!record || !canAccess(req, record.clubId)) {
+        const record = await ClubAdmin.findById(id);
+        if (!record) {
             return res.status(404).json({
                 error: true,
                 status: 404,
-                message: "Coach not found.",
-                message_desc: "Coach not found.",
+                message: "Club admin not found.",
+                message_desc: "Club admin not found.",
                 data: {},
             });
         }
 
-        await Coach.findByIdAndDelete(record._id);
+        await ClubAdmin.findByIdAndDelete(record._id);
         await User.findByIdAndDelete(record.userId);
 
         return res.status(200).json({
             error: false,
             status: 200,
-            message: "Coach deleted successfully.",
-            message_desc: "Coach deleted successfully.",
+            message: "Club admin deleted successfully.",
+            message_desc: "Club admin deleted successfully.",
             data: { _id: record._id },
         });
     } catch (e) {
-        console.error("Delete coach error:", e);
+        console.error("Delete club admin error:", e);
         return res.status(500).json({
             error: true,
             status: 500,
@@ -375,4 +367,4 @@ const deleteCoach = async (req, res) => {
     }
 };
 
-module.exports = { createCoach, listCoaches, getCoach, updateCoach, deleteCoach };
+module.exports = { createClubAdmin, listClubAdmins, getClubAdmin, updateClubAdmin, deleteClubAdmin };

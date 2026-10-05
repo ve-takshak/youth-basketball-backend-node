@@ -1,14 +1,9 @@
 const mongoose = require("mongoose");
 
-const MONGO_URL = process.env.MONGODB_URL
-
+// Connection string .env ke MONGODB_URI se aata hai. Password code mein nahi rakhna.
 mongoose
-    .connect(MONGO_URL)
-    .then(() => {
-        console.log("Database connected");
-    })
-    .catch((error) => {
-        console.error("MongoDB connection error:", error);
-    });
+    .connect(process.env.MONGODB_URI)
+    .then(() => console.log("Database connected"))
+    .catch((error) => console.error("MongoDB connection error:", error));
 
 module.exports = mongoose;
