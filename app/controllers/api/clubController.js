@@ -6,10 +6,10 @@ const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 const isHexColor = (color) => /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/.test(color);
 
-// Regex ke special characters escape karna (search aur name check ke liye)
+
 const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-// theme object se sirf valid colors nikalta hai, galat ho toh error message deta hai
+
 const pickTheme = (theme = {}) => {
     const result = {};
     for (const key of ["primary", "secondary", "background"]) {

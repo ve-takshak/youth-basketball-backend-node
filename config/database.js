@@ -1,9 +1,9 @@
 const mongoose = require("mongoose");
 
-const MONGO_URI = "mongodb+srv://shubhamchaudhari707_db_user:FZloRdJNxX0eacgm@cluster0.ilnxzqf.mongodb.net/basketball?retryWrites=true&w=majority";
+const MONGO_URL = process.env.MONGODB_URL
 
 mongoose
-    .connect(MONGO_URI)
+    .connect(MONGO_URL)
     .then(() => {
         console.log("Database connected");
     })

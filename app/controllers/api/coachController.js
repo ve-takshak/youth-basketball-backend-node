@@ -6,13 +6,12 @@ const Club = require("../../models/Club");
 
 const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
 
-// Mobile number clean: sirf digits
 const cleanMobile = (mobile = "") => String(mobile).replace(/\D/g, "");
 
-// Regex ke special characters escape karna (search ke liye)
+
 const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-// Coach + uske User + Club ko ek flat object mein badalna (frontend ke liye aasaan)
+
 const formatCoach = (coach) => ({
     _id: coach._id,
     userId: coach.userId?._id || coach.userId,
@@ -31,11 +30,7 @@ const populateCoach = (query) =>
         .populate("userId", "firstname lastname email countryCode mobileNumber is_verify")
         .populate("clubId", "name");
 
-/**
- * POST /api/user/createCoach   (sirf admin)
- * body: { firstname, lastname, countryCode, mobileNumber, clubId, email? }
- * User (role: coach) + Coach record dono banata hai.
- */
+
 const createCoach = async (req, res) => {
     let user = null;
     try {
@@ -121,7 +116,6 @@ const createCoach = async (req, res) => {
             }
         }
 
-        // 1. Login wala user. OTP nahi, coach pehli baar app pe login karega tab OTP aayega.
         user = await User.create({
             firstname,
             lastname,
@@ -131,11 +125,10 @@ const createCoach = async (req, res) => {
             role: "coach",
         });
 
-        // 2. Coach record jo club se juda hai
         const coach = await Coach.create({
             userId: user._id,
             clubId: club._id,
-            createdBy: req.user._id, // token se aaya admin
+            createdBy: req.user._id,
         });
 
         const saved = await populateCoach(Coach.findById(coach._id));
@@ -149,7 +142,7 @@ const createCoach = async (req, res) => {
         });
     } catch (e) {
         // Coach record fail hua toh adhoora user bhi hata do
-        if (user) await User.findByIdAndDelete(user._id).catch(() => {});
+        if (user) await User.findByIdAndDelete(user._id).catch(() => { });
         console.error("Create coach error:", e);
         return res.status(500).json({
             error: true,
@@ -161,10 +154,6 @@ const createCoach = async (req, res) => {
     }
 };
 
-/**
- * GET /api/user/listCoaches?clubId=&search=&page=1&limit=10   (sirf admin)
- * search: naam ya mobile number se
- */
 const listCoaches = async (req, res) => {
     try {
         const search = String(req.query.search || "").trim();
@@ -187,7 +176,6 @@ const listCoaches = async (req, res) => {
             filter.clubId = clubId;
         }
 
-        // Naam/mobile User mein hai, isliye pehle matching coach users dhundo
         if (search) {
             const regex = new RegExp(escapeRegex(search), "i");
             const users = await User.find({
@@ -229,10 +217,7 @@ const listCoaches = async (req, res) => {
     }
 };
 
-/**
- * PUT /api/user/updateCoach/:id   (sirf admin, :id = Coach ki _id)
- * body: jo badalna hai wahi { firstname?, lastname?, email?, countryCode?, mobileNumber?, clubId? }
- */
+
 const updateCoach = async (req, res) => {
     try {
         const { id } = req.params;
@@ -393,10 +378,7 @@ const updateCoach = async (req, res) => {
     }
 };
 
-/**
- * DELETE /api/user/deleteCoach/:id   (sirf admin, :id = Coach ki _id)
- * Coach record aur uska User dono hatata hai.
- */
+
 const deleteCoach = async (req, res) => {
     try {
         const { id } = req.params;
