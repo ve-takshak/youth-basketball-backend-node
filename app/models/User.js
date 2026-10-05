@@ -4,10 +4,12 @@ const UserSchema = new mongoose.Schema(
     {
         firstname: { type: String, trim: true, default: "" },
         lastname: { type: String, trim: true, default: "" },
-         username: { type: String },
+        username: { type: String, trim: true, default: "" },
+
+        // Optional. sparse = jinke paas email nahi unpe unique check nahi lagega
         email: { type: String, trim: true, lowercase: true, unique: true, sparse: true },
 
-        // Login isi se hoga
+        // Login isi se hota hai
         countryCode: { type: String, default: "+972" },
         mobileNumber: { type: String, required: true, trim: true },
 

@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const Club = require("../../models/Club");
+const Coach = require("../../models/Coach");
 
 const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
 
@@ -232,6 +233,18 @@ const deleteClub = async (req, res) => {
                 status: 400,
                 message: "Invalid club id.",
                 message_desc: "Invalid club id.",
+                data: {},
+            });
+        }
+
+        // Club mein coach hain toh delete nahi karna, warna coaches bina club ke reh jayenge
+        const coachCount = await Coach.countDocuments({ clubId: id });
+        if (coachCount > 0) {
+            return res.status(409).json({
+                error: true,
+                status: 409,
+                message: `This club has ${coachCount} coach(es). Remove them first.`,
+                message_desc: `This club has ${coachCount} coach(es). Remove them first.`,
                 data: {},
             });
         }
