@@ -17,6 +17,13 @@ const {
     deleteClubAdmin,
 } = require("../app/controllers/api/clubAdminController");
 const { createCoach, listCoaches, getCoach, updateCoach, deleteCoach } = require("../app/controllers/api/coachController");
+const {
+    createTeamCategory,
+    listTeamCategories,
+    getTeamCategory,
+    updateTeamCategory,
+    deleteTeamCategory,
+} = require("../app/controllers/api/teamCategoryController");
 
 router.get("/test", (req, res) => res.send("API working"));
 
@@ -28,11 +35,13 @@ router.post("/user/resend-otp", resendOtp);
 router.get("/user/profile", authentication, getProfile);
 
 
+const { uploadClubLogo } = require("../app/middleware/upload");
+
 // ---------- Club ----------
-router.post("/user/createClub", superAdminAuthentication, createClub);
+router.post("/user/createClub", superAdminAuthentication, uploadClubLogo.single("logo"), createClub);
 router.get("/user/listClubs", superAdminOrClubAdminAuthentication, listClubs);   // clubAdmin ko sirf apna club
 router.get("/user/getClub/:id", superAdminOrClubAdminAuthentication, getClub);
-router.put("/user/updateClub/:id", superAdminAuthentication, updateClub);
+router.put("/user/updateClub/:id", superAdminAuthentication, uploadClubLogo.single("logo"), updateClub);
 router.delete("/user/deleteClub/:id", superAdminAuthentication, deleteClub);
 
 // ---------- Club Admin (sirf superAdmin banata hai) ----------
@@ -48,5 +57,12 @@ router.get("/user/listCoaches", superAdminOrClubAdminAuthentication, listCoaches
 router.get("/user/getCoach/:id", superAdminOrClubAdminAuthentication, getCoach);
 router.put("/user/updateCoach/:id", superAdminOrClubAdminAuthentication, updateCoach);
 router.delete("/user/deleteCoach/:id", superAdminOrClubAdminAuthentication, deleteCoach);
+
+// Teams categories
+router.post("/user/teams/categories/create", superAdminOrClubAdminAuthentication, createTeamCategory);
+router.get("/user/teams/categories", authentication, listTeamCategories);
+router.get("/user/teams/categories/:id", authentication, getTeamCategory);
+router.put("/user/teams/categories/:id/update", superAdminOrClubAdminAuthentication, updateTeamCategory);
+router.delete("/user/teams/categories/:id/delete", superAdminOrClubAdminAuthentication, deleteTeamCategory);
 
 module.exports = router;

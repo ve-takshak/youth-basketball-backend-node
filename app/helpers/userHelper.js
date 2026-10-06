@@ -99,25 +99,64 @@ const publicUser = (user) => ({
     is_verify: user.is_verify,
 });
 
+const formatClubData = async (clubDoc) => {
+    if (!clubDoc) return null;
+    const obj = clubDoc.toObject ? clubDoc.toObject() : { ...clubDoc };
+    const appUrl = process.env.APP_URL || "http://localhost:5000";
+
+    if (obj.logo) {
+        obj.logoUrl = obj.logo.startsWith("http") ? obj.logo : `${appUrl}/${obj.logo.replace(/\\/g, "/")}`;
+    } else {
+        obj.logoUrl = "";
+    }
+    delete obj.logo;
+
+    if (!obj.theme) {
+        obj.theme = { primary: "#1E40AF", secondary: "#F59E0B", background: "#FFFFFF" };
+    }
+
+    // Attach primary club owner / admin info
+    const primaryAdmin = await ClubAdmin.findOne({ clubId: obj._id })
+        .populate("userId", "firstname lastname countryCode mobileNumber email")
+        .sort({ createdAt: 1 });
+
+    if (primaryAdmin && primaryAdmin.userId) {
+        obj.owner = {
+            _id: primaryAdmin.userId._id,
+            firstname: primaryAdmin.userId.firstname,
+            lastname: primaryAdmin.userId.lastname,
+            email: primaryAdmin.userId.email || "",
+            countryCode: primaryAdmin.userId.countryCode,
+            mobileNumber: primaryAdmin.userId.mobileNumber,
+        };
+    } else {
+        obj.owner = null;
+    }
+
+    return obj;
+};
+
 /**
  * Role ke hisaab se extra data (verify-otp aur profile mein):
- * coach     -> coachId + club
- * clubAdmin -> clubAdminId + club
+ * coach     -> coachId + club (with logoUrl, theme, owner)
+ * clubAdmin -> clubAdminId + club (with logoUrl, theme, owner)
  */
 const getRoleData = async (user) => {
     if (user.role === ROLES.COACH) {
         const coach = await Coach.findOne({ userId: user._id }).populate("clubId", "name logo theme");
+        const club = coach && coach.clubId ? await formatClubData(coach.clubId) : null;
         return {
             coachId: coach ? coach._id : null,
-            club: coach && coach.clubId ? coach.clubId : null,
+            club,
         };
     }
 
     if (user.role === ROLES.CLUB_ADMIN) {
         const clubAdmin = await ClubAdmin.findOne({ userId: user._id }).populate("clubId", "name logo theme");
+        const club = clubAdmin && clubAdmin.clubId ? await formatClubData(clubAdmin.clubId) : null;
         return {
             clubAdminId: clubAdmin ? clubAdmin._id : null,
-            club: clubAdmin && clubAdmin.clubId ? clubAdmin.clubId : null,
+            club,
         };
     }
 

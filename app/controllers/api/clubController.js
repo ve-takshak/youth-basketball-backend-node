@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const User = require("../../models/User");
 const Club = require("../../models/Club");
 const Coach = require("../../models/Coach");
@@ -7,6 +9,19 @@ const { isValidId, escapeRegex, getPagination } = require("../../helpers/common"
 const { validatePersonInput, findDuplicateUser } = require("../../helpers/userHelper");
 
 const isHexColor = (color) => /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/.test(color);
+
+const formatClub = (club) => {
+    if (!club) return null;
+    const obj = club.toObject ? club.toObject() : { ...club };
+    const appUrl = process.env.APP_URL || "http://localhost:5000";
+    if (obj.logo) {
+        obj.logoUrl = obj.logo.startsWith("http") ? obj.logo : `${appUrl}/${obj.logo.replace(/\\/g, "/")}`;
+    } else {
+        obj.logoUrl = "";
+    }
+    delete obj.logo;
+    return obj;
+};
 
 // theme object se sirf valid colors nikalna, galat ho toh error
 const pickTheme = (theme = {}) => {
@@ -41,6 +56,20 @@ const createClub = async (req, res) => {
 
     try {
         let { name = "", logo = "", theme = {}, clubAdmin = {} } = req.body;
+
+        // In multipart/form-data, objects arrive as JSON strings
+        if (typeof theme === "string") {
+            try { theme = JSON.parse(theme); } catch (e) { theme = {}; }
+        }
+        if (typeof clubAdmin === "string") {
+            try { clubAdmin = JSON.parse(clubAdmin); } catch (e) { clubAdmin = {}; }
+        }
+
+        // If a file was uploaded via multer
+        if (req.file) {
+            logo = `uploads/clubs/${req.file.filename}`;
+        }
+
         name = String(name).trim();
 
         // ---- 1. Pehle saari checking, kuch bhi banne se pehle ----
@@ -135,7 +164,7 @@ const createClub = async (req, res) => {
             message: "Club and club admin created successfully.",
             message_desc: "Club and club admin created successfully.",
             data: {
-                club,
+                club: formatClub(club),
                 clubAdmin: {
                     _id: clubAdminRecord._id,
                     userId: user._id,
@@ -192,7 +221,7 @@ const listClubs = async (req, res) => {
             .sort({ createdAt: 1 });
 
         const clubsWithAdmins = clubs.map((club) => ({
-            ...club.toObject(),
+            ...formatClub(club),
             clubAdmins: admins
                 .filter((admin) => String(admin.clubId) === String(club._id))
                 .map((admin) => ({
@@ -289,7 +318,7 @@ const getClub = async (req, res) => {
             message: "Club fetched successfully.",
             message_desc: "Club fetched successfully.",
             data: {
-                club,
+                club: formatClub(club),
                 clubAdmins: clubAdmins.map(flatten),
                 coaches: coaches.map(flatten),
             },
@@ -335,7 +364,7 @@ const updateClub = async (req, res) => {
             });
         }
 
-        const { name, logo, theme } = req.body;
+        const { name, logo, theme, clubAdmin } = req.body;
 
         if (name !== undefined) {
             const newName = String(name).trim();
@@ -363,10 +392,23 @@ const updateClub = async (req, res) => {
             club.name = newName;
         }
 
-        if (logo !== undefined) club.logo = String(logo).trim();
+        let oldLogoToDelete = null;
+        if (req.file) {
+            oldLogoToDelete = club.logo;
+            club.logo = `uploads/clubs/${req.file.filename}`;
+        } else if (logo !== undefined) {
+            if (!logo && club.logo) {
+                oldLogoToDelete = club.logo;
+            }
+            club.logo = String(logo).trim();
+        }
 
         if (theme !== undefined) {
-            const picked = pickTheme(theme);
+            let parsedTheme = theme;
+            if (typeof parsedTheme === "string") {
+                try { parsedTheme = JSON.parse(parsedTheme); } catch (e) { parsedTheme = {}; }
+            }
+            const picked = pickTheme(parsedTheme);
             if (picked.error) {
                 return res.status(400).json({
                     error: true,
@@ -379,14 +421,121 @@ const updateClub = async (req, res) => {
             Object.assign(club.theme, picked.theme); // sirf bheje gaye colors badlenge
         }
 
+        // Club Admin / Owner details update (agar bheji gayi hon)
+        if (clubAdmin !== undefined) {
+            let parsedAdmin = clubAdmin;
+            if (typeof parsedAdmin === "string") {
+                try { parsedAdmin = JSON.parse(parsedAdmin); } catch (e) { parsedAdmin = undefined; }
+            }
+
+            if (parsedAdmin && typeof parsedAdmin === "object" && (parsedAdmin.firstname || parsedAdmin.mobileNumber)) {
+                const checked = validatePersonInput(parsedAdmin);
+                if (checked.message) {
+                    const message = `Club admin: ${checked.message}`;
+                    return res.status(checked.status).json({
+                        error: true,
+                        status: checked.status,
+                        message,
+                        message_desc: message,
+                        data: {},
+                    });
+                }
+                const adminData = checked.values;
+
+                let adminRecord = await ClubAdmin.findOne({ clubId: id }).sort({ createdAt: 1 });
+                if (adminRecord) {
+                    const duplicate = await findDuplicateUser({
+                        countryCode: adminData.countryCode,
+                        mobileNumber: adminData.mobileNumber,
+                        email: adminData.email,
+                        excludeUserId: adminRecord.userId,
+                    });
+                    if (duplicate) {
+                        const message = `Club admin: ${duplicate.message}`;
+                        return res.status(duplicate.status).json({
+                            error: true,
+                            status: duplicate.status,
+                            message,
+                            message_desc: message,
+                            data: {},
+                        });
+                    }
+
+                    await User.findByIdAndUpdate(adminRecord.userId, {
+                        firstname: adminData.firstname,
+                        lastname: adminData.lastname,
+                        email: adminData.email || undefined,
+                        countryCode: adminData.countryCode,
+                        mobileNumber: adminData.mobileNumber,
+                    });
+                } else {
+                    const duplicate = await findDuplicateUser({
+                        countryCode: adminData.countryCode,
+                        mobileNumber: adminData.mobileNumber,
+                        email: adminData.email,
+                    });
+                    if (duplicate) {
+                        const message = `Club admin: ${duplicate.message}`;
+                        return res.status(duplicate.status).json({
+                            error: true,
+                            status: duplicate.status,
+                            message,
+                            message_desc: message,
+                            data: {},
+                        });
+                    }
+                    const newUser = await User.create({
+                        firstname: adminData.firstname,
+                        lastname: adminData.lastname,
+                        email: adminData.email || undefined,
+                        countryCode: adminData.countryCode,
+                        mobileNumber: adminData.mobileNumber,
+                        role: ROLES.CLUB_ADMIN,
+                    });
+                    await ClubAdmin.create({
+                        userId: newUser._id,
+                        clubId: club._id,
+                        createdBy: req.user._id,
+                    });
+                }
+            }
+        }
+
         await club.save();
+
+        if (oldLogoToDelete && !oldLogoToDelete.startsWith("http") && oldLogoToDelete !== club.logo) {
+            try {
+                const oldLogoPath = path.resolve(__dirname, "../../../", oldLogoToDelete);
+                if (fs.existsSync(oldLogoPath)) {
+                    fs.unlinkSync(oldLogoPath);
+                }
+            } catch (fileErr) {
+                console.warn("Failed to delete old club logo file:", fileErr.message);
+            }
+        }
+
+        const admins = await ClubAdmin.find({ clubId: club._id })
+            .populate("userId", "firstname lastname countryCode mobileNumber email")
+            .sort({ createdAt: 1 });
+
+        const formattedClub = {
+            ...formatClub(club),
+            clubAdmins: admins.map((admin) => ({
+                _id: admin._id,
+                firstname: admin.userId?.firstname || "",
+                lastname: admin.userId?.lastname || "",
+                email: admin.userId?.email || "",
+                countryCode: admin.userId?.countryCode || "",
+                mobileNumber: admin.userId?.mobileNumber || "",
+            })),
+        };
 
         return res.status(200).json({
             error: false,
             status: 200,
             message: "Club updated successfully.",
             message_desc: "Club updated successfully.",
-            data: club,
+            data: formattedClub,
         });
     } catch (e) {
         console.error("Update club error:", e);
@@ -402,8 +551,11 @@ const updateClub = async (req, res) => {
 
 /**
  * DELETE /api/user/deleteClub/:id   (sirf superAdmin)
- * Club ke coaches hain toh delete nahi hoga.
- * Club ke club admins (unke login account samet) club ke saath hi delete ho jayenge.
+ * Club ke saath:
+ * 1. Club admins aur Coaches ke User accounts delete hote hain (user table)
+ * 2. ClubAdmin aur Coach records delete hote hain
+ * 3. Club ka uploaded logo file filesystem se delete hoti hai (with try/catch)
+ * 4. Club document delete hota hai (club table)
  */
 const deleteClub = async (req, res) => {
     try {
@@ -430,32 +582,54 @@ const deleteClub = async (req, res) => {
             });
         }
 
-        const coachCount = await Coach.countDocuments({ clubId: id });
-        if (coachCount > 0) {
-            const message = `This club has ${coachCount} coach(es). Remove them first.`;
-            return res.status(409).json({
-                error: true,
-                status: 409,
-                message,
-                message_desc: message,
-                data: {},
-            });
+        // 1. Club ke saare club admins aur coaches find karo
+        const [clubAdmins, coaches] = await Promise.all([
+            ClubAdmin.find({ clubId: id }),
+            Coach.find({ clubId: id }),
+        ]);
+
+        const userIdsToDelete = [
+            ...clubAdmins.map((record) => record.userId),
+            ...coaches.map((record) => record.userId),
+        ].filter(Boolean);
+
+        // 2. ClubAdmin & Coach collections se records delete karo
+        await Promise.all([
+            ClubAdmin.deleteMany({ clubId: id }),
+            Coach.deleteMany({ clubId: id }),
+        ]);
+
+        // 3. User collection se in sabke accounts delete karo
+        if (userIdsToDelete.length > 0) {
+            await User.deleteMany({ _id: { $in: userIdsToDelete } });
         }
 
-        // Club admins + unke User accounts
-        const clubAdmins = await ClubAdmin.find({ clubId: id });
-        const adminUserIds = clubAdmins.map((record) => record.userId);
-        await ClubAdmin.deleteMany({ clubId: id });
-        if (adminUserIds.length > 0) await User.deleteMany({ _id: { $in: adminUserIds } });
+        // 4. Logo file agar uploaded hai toh filesystem se safely delete karo (try/catch ke sath)
+        if (club.logo && !club.logo.startsWith("http")) {
+            try {
+                const logoPath = path.resolve(__dirname, "../../../", club.logo);
+                if (fs.existsSync(logoPath)) {
+                    fs.unlinkSync(logoPath);
+                }
+            } catch (fileErr) {
+                console.warn("Failed to delete club logo file on disk:", fileErr.message);
+            }
+        }
 
+        // 5. Club table se record delete karo
         await Club.findByIdAndDelete(id);
 
         return res.status(200).json({
             error: false,
             status: 200,
-            message: "Club deleted successfully.",
-            message_desc: "Club deleted successfully.",
-            data: { _id: club._id, deletedClubAdmins: clubAdmins.length },
+            message: "Club and associated users deleted successfully.",
+            message_desc: "Club and associated users deleted successfully.",
+            data: {
+                _id: club._id,
+                deletedClubAdmins: clubAdmins.length,
+                deletedCoaches: coaches.length,
+                deletedUsers: userIdsToDelete.length,
+            },
         });
     } catch (e) {
         console.error("Delete club error:", e);
