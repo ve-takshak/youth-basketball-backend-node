@@ -10,6 +10,7 @@ const app = express();
 const allowedOrigins = [
     "http://localhost:3000",
     "https://youth-basketball-backend-bfjf37gfh-ve-4d94.vercel.app",
+    "http://13.63.166.225"
 ];
 
 
