@@ -6,8 +6,25 @@ const router = require("./routes/api.js");
 
 const app = express();
 
+// Kaun se frontend is API ko call kar sakte hain
+const allowedOrigins = [
+    "http://localhost:3000",
+    "https://youth-basketball-backend-bfjf37gfh-ve-4d94.vercel.app",
+];
+
+// Aapke Vercel project ke saare deployments (production + har naya preview link)
+const vercelProjectPattern = /^https:\/\/youth-basketball-backend[a-z0-9-]*\.vercel\.app$/;
+
 app.use(cors({
-    origin: "http://localhost:3000",
+    origin: (origin, callback) => {
+        // Postman / server-to-server calls mein origin nahi hota, unhe allow karo
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.includes(origin) || vercelProjectPattern.test(origin)) {
+            return callback(null, true);
+        }
+        console.warn(`CORS blocked: ${origin}`);
+        return callback(null, false);
+    },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
 }));
