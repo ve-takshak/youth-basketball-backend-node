@@ -265,6 +265,56 @@ const verifyOtp = async (req, res) => {
     }
 };
 
+
+const resendOtp = async (req, res) => {
+    try {
+        let { countryCode = "+972", mobileNumber = "" } = req.body;
+        mobileNumber = cleanMobile(mobileNumber);
+ 
+        if (!mobileNumber) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "Mobile number is required.",
+                message_desc: "Mobile number is required.",
+                data: {},
+            });
+        }
+ 
+        const user = await User.findOne({ countryCode, mobileNumber });
+        if (!user) {
+            return res.status(404).json({
+                error: true,
+                status: 404,
+                message: "Mobile number not registered with us.",
+                message_desc: "Mobile number not registered with us.",
+                data: {},
+            });
+        }
+ 
+        user.otp = generateOtp();
+        user.otp_generated_at = new Date();
+        await user.save();
+ 
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "OTP resent to your mobile number.",
+            message_desc: "OTP resent to your mobile number.",
+            data: { countryCode, mobileNumber },
+        });
+    } catch (e) {
+        console.error("Resend OTP error:", e);
+        return res.status(500).json({
+            error: true,
+            status: 500,
+            message: "Something went wrong.",
+            message_desc: e.message,
+            data: {},
+        });
+    }
+};
+
 /**
  * GET /api/user/profile   (koi bhi logged-in user)
  * App/panel refresh pe user ki latest details (aur coach/clubAdmin ka club).
@@ -292,4 +342,4 @@ const getProfile = async (req, res) => {
     }
 };
 
-module.exports = { register, login, verifyOtp, getProfile };
+module.exports = { register, login, verifyOtp, getProfile, resendOtp };

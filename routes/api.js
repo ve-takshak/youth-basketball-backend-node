@@ -7,7 +7,7 @@ const {
     superAdminOrClubAdminAuthentication,
 } = require("../app/middleware/authentication");
 
-const { register, login, verifyOtp, getProfile } = require("../app/controllers/api/userController");
+const { register, login, verifyOtp, getProfile, resendOtp } = require("../app/controllers/api/userController");
 const { createClub, listClubs, getClub, updateClub, deleteClub } = require("../app/controllers/api/clubController");
 const {
     createClubAdmin,
@@ -24,7 +24,9 @@ router.get("/test", (req, res) => res.send("API working"));
 router.post("/user/register", register);            // sirf superAdmin signup
 router.post("/user/login", login);                  // sab roles
 router.post("/user/verify-otp", verifyOtp);         // sab roles, token yahin milta hai
+router.post("/user/resend-otp", resendOtp);
 router.get("/user/profile", authentication, getProfile);
+
 
 // ---------- Club ----------
 router.post("/user/createClub", superAdminAuthentication, createClub);
