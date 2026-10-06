@@ -12,7 +12,7 @@ const allowedOrigins = [
     "https://youth-basketball-backend-bfjf37gfh-ve-4d94.vercel.app",
 ];
 
-// Aapke Vercel project ke saare deployments (production + har naya preview link)
+
 const vercelProjectPattern = /^https:\/\/youth-basketball-backend[a-z0-9-]*\.vercel\.app$/;
 
 app.use(cors({
