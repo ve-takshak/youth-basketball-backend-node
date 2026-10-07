@@ -67,7 +67,7 @@ router.delete("/user/coaches/:id/delete", superAdminOrClubAdminAuthentication, d
 
 // Teams categories
 router.post("/user/teams/categories/create", superAdminOrClubAdminAuthentication, createTeamCategory);
-router.get("/user/teams/categories", authentication, listTeamCategories);
+router.get("/user/teams/categories", listTeamCategories);
 router.get("/user/teams/categories/:id", authentication, getTeamCategory);
 router.put("/user/teams/categories/:id/update", superAdminOrClubAdminAuthentication, updateTeamCategory);
 router.delete("/user/teams/categories/:id/delete", superAdminOrClubAdminAuthentication, deleteTeamCategory);
