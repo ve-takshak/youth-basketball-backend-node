@@ -1,4 +1,5 @@
 const TeamCategory = require("../../models/TeamCategory");
+const Team = require("../../models/Team");
 const { isValidId, escapeRegex, getPagination } = require("../../helpers/common");
 
 /**
@@ -305,6 +306,19 @@ const deleteTeamCategory = async (req, res) => {
                 status: 404,
                 message: "Team category not found.",
                 message_desc: "Team category not found.",
+                data: {},
+            });
+        }
+
+        // Koi team is category ko use kar rahi hai toh delete nahi
+        const teamCount = await Team.countDocuments({ categoryId: id });
+        if (teamCount > 0) {
+            const message = `This category is used by ${teamCount} team(s). Change their category first.`;
+            return res.status(409).json({
+                error: true,
+                status: 409,
+                message,
+                message_desc: message,
                 data: {},
             });
         }

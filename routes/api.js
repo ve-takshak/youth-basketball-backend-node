@@ -65,12 +65,12 @@ router.get("/user/coaches/:id", superAdminOrClubAdminAuthentication, getCoach);
 router.put("/user/coaches/:id/update", superAdminOrClubAdminAuthentication, updateCoach);
 router.delete("/user/coaches/:id/delete", superAdminOrClubAdminAuthentication, deleteCoach);
 
-// Teams categories
-router.post("/user/teams/categories/create", superAdminOrClubAdminAuthentication, createTeamCategory);
-router.get("/user/teams/categories", listTeamCategories);
+// Team categories: banana/badalna sirf superAdmin, dekhna koi bhi logged-in user (team form ke dropdown ke liye)
+router.post("/user/teams/categories/create", superAdminAuthentication, createTeamCategory);
+router.get("/user/teams/categories", authentication, listTeamCategories);
 router.get("/user/teams/categories/:id", authentication, getTeamCategory);
-router.put("/user/teams/categories/:id/update", superAdminOrClubAdminAuthentication, updateTeamCategory);
-router.delete("/user/teams/categories/:id/delete", superAdminOrClubAdminAuthentication, deleteTeamCategory);
+router.put("/user/teams/categories/:id/update", superAdminAuthentication, updateTeamCategory);
+router.delete("/user/teams/categories/:id/delete", superAdminAuthentication, deleteTeamCategory);
 
 // Teams
 router.post("/user/teams/create", superAdminOrClubAdminAuthentication, createTeam);

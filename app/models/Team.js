@@ -36,6 +36,12 @@ const TeamSchema = new mongoose.Schema(
             type: Number,
             default: 20,
         },
+        // Active / inactive (team form ka Status toggle)
+        status: {
+            type: String,
+            enum: ["active", "inactive"],
+            default: "active",
+        },
         // Coach assignment is optional
         coachId: {
             type: mongoose.Schema.Types.ObjectId,

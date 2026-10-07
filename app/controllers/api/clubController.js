@@ -296,7 +296,7 @@ const getClub = async (req, res) => {
         }
 
         const personFields = "firstname lastname email countryCode mobileNumber is_verify";
-        const [clubAdmins, coaches] = await Promise.all([
+        const [clubAdmins, coaches, teams] = await Promise.all([
             ClubAdmin.find({ clubId: id }).populate("userId", personFields).sort({ createdAt: -1 }),
             Coach.find({ clubId: id }).populate("userId", personFields).sort({ createdAt: -1 }),
             Team.find({ clubId: id })
@@ -328,6 +328,7 @@ const getClub = async (req, res) => {
             teamType: t.teamType,
             season: t.season,
             teamCapacity: t.teamCapacity,
+            status: t.status || "active",
             category: t.categoryId ? { _id: t.categoryId._id, name: t.categoryId.name } : null,
             coach: t.coachId && t.coachId.userId ? {
                 _id: t.coachId._id,

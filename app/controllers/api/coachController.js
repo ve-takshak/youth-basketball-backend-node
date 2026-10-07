@@ -223,7 +223,7 @@ const getCoach = async (req, res) => {
         // Fetch any teams assigned to this coach
         const assignedTeams = await Team.find({ coachId: record._id })
             .populate("categoryId", "name")
-            .select("name season gender teamType categoryId");
+            .select("name season gender teamType status categoryId");
 
         return res.status(200).json({
             error: false,

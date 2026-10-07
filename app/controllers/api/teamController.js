@@ -7,6 +7,7 @@ const { isValidId, escapeRegex, getPagination } = require("../../helpers/common"
 
 const VALID_GENDERS = ["boys", "girls", "mixed"];
 const VALID_TEAM_TYPES = ["league", "non-league"];
+const VALID_STATUSES = ["active", "inactive"];
 
 /**
  * Format team object for API response
@@ -35,6 +36,7 @@ const formatTeam = (record) => {
         teamType: record.teamType || "league",
         season: record.season || "",
         teamCapacity: record.teamCapacity !== undefined ? record.teamCapacity : 20,
+        status: record.status || "active",
         createdBy: record.createdBy,
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
@@ -63,7 +65,7 @@ const canAccess = (req, teamClubId) =>
  */
 const createTeam = async (req, res) => {
     try {
-        const { name, categoryId, gender, teamType, season, teamCapacity, coachId } = req.body;
+        const { name, categoryId, gender, teamType, season, teamCapacity, coachId, status } = req.body;
 
         // 1. Validate team name
         if (!name || typeof name !== "string" || !name.trim()) {
@@ -208,6 +210,7 @@ const createTeam = async (req, res) => {
             season: season ? String(season).trim() : "",
             teamCapacity: isNaN(capacityNum) || capacityNum < 1 ? 20 : capacityNum,
             coachId: resolvedCoachId,
+            status: status && VALID_STATUSES.includes(String(status).toLowerCase()) ? String(status).toLowerCase() : "active",
             createdBy: req.user._id,
         });
 
@@ -248,9 +251,26 @@ const listTeams = async (req, res) => {
 
         const filter = {};
 
-        // Club scoping
-        if (req.user.role === ROLES.CLUB_ADMIN) {
+        // Club scoping: clubAdmin aur coach sirf apne club ki teams. SuperAdmin sab (ya clubId filter).
+        if ([ROLES.CLUB_ADMIN, ROLES.COACH].includes(req.user.role)) {
+            if (!req.clubId) {
+                return res.status(403).json({
+                    error: true,
+                    status: 403,
+                    message: "Your account is not linked to any club.",
+                    message_desc: "Your account is not linked to any club.",
+                    data: {},
+                });
+            }
             filter.clubId = req.clubId;
+        } else if (req.user.role !== ROLES.SUPER_ADMIN) {
+            return res.status(403).json({
+                error: true,
+                status: 403,
+                message: "Access denied.",
+                message_desc: "Access denied.",
+                data: {},
+            });
         } else if (clubId) {
             if (!isValidId(clubId)) {
                 return res.status(400).json({
@@ -278,6 +298,11 @@ const listTeams = async (req, res) => {
 
         if (teamType && VALID_TEAM_TYPES.includes(teamType)) {
             filter.teamType = teamType;
+        }
+
+        const statusFilter = String(req.query.status || "").trim().toLowerCase();
+        if (statusFilter && VALID_STATUSES.includes(statusFilter)) {
+            filter.status = statusFilter;
         }
 
         if (search) {
@@ -390,7 +415,7 @@ const updateTeam = async (req, res) => {
             });
         }
 
-        const { name, clubId, categoryId, gender, teamType, season, teamCapacity, coachId } = req.body;
+        const { name, clubId, categoryId, gender, teamType, season, teamCapacity, coachId, status } = req.body;
 
         // 1. Club update (superAdmin only)
         let targetClubId = team.clubId;
@@ -475,6 +500,12 @@ const updateTeam = async (req, res) => {
         if (teamCapacity !== undefined) {
             const num = Number(teamCapacity);
             if (!isNaN(num) && num >= 1) team.teamCapacity = num;
+        }
+
+        // Status update (active / inactive)
+        if (status !== undefined) {
+            const st = String(status).toLowerCase();
+            if (VALID_STATUSES.includes(st)) team.status = st;
         }
 
         // 8. Coach update (can be null/empty to unassign)
