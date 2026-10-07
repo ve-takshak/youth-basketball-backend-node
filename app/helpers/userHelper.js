@@ -15,12 +15,21 @@ const validatePersonInput = (body = {}) => {
     const email = String(body.email || "").trim().toLowerCase();
     const countryCode = String(body.countryCode || "+972").trim();
     const mobileNumber = cleanMobile(body.mobileNumber);
+    let birthDate = null;
+
+    if (body.birthDate !== undefined && body.birthDate !== null && String(body.birthDate).trim() !== "") {
+        const parsed = new Date(body.birthDate);
+        if (isNaN(parsed.getTime())) {
+            return { status: 400, message: "Please enter a valid date of birth." };
+        }
+        birthDate = parsed;
+    }
 
     if (!firstname || !lastname) return { status: 400, message: "First name and last name are required." };
     if (!mobileNumber || mobileNumber.length < 7) return { status: 400, message: "Valid mobile number is required." };
     if (email && !validator.isEmail(email)) return { status: 400, message: "Please enter a valid email." };
 
-    return { values: { firstname, lastname, email, countryCode, mobileNumber } };
+    return { values: { firstname, lastname, email, countryCode, mobileNumber, birthDate } };
 };
 
 /**
@@ -48,7 +57,7 @@ const findDuplicateUser = async ({ countryCode, mobileNumber, email, excludeUser
  * Galat ho toh { status, message }, sab theek ho toh null. user.save() caller karega.
  */
 const applyPersonUpdates = async (user, body = {}) => {
-    const { firstname, lastname, email, countryCode, mobileNumber } = body;
+    const { firstname, lastname, email, countryCode, mobileNumber, birthDate } = body;
 
     if (firstname !== undefined) {
         if (!String(firstname).trim()) return { status: 400, message: "First name cannot be empty." };
@@ -83,6 +92,18 @@ const applyPersonUpdates = async (user, body = {}) => {
         user.mobileNumber = newMobile;
     }
 
+    if (birthDate !== undefined) {
+        if (!birthDate || String(birthDate).trim() === "") {
+            user.birthDate = null;
+        } else {
+            const parsed = new Date(birthDate);
+            if (isNaN(parsed.getTime())) {
+                return { status: 400, message: "Please enter a valid date of birth." };
+            }
+            user.birthDate = parsed;
+        }
+    }
+
     return null;
 };
 
@@ -95,6 +116,7 @@ const publicUser = (user) => ({
     email: user.email || "",
     countryCode: user.countryCode,
     mobileNumber: user.mobileNumber,
+    birthDate: user.birthDate ? new Date(user.birthDate).toISOString().split("T")[0] : null,
     role: user.role,
     is_verify: user.is_verify,
 });

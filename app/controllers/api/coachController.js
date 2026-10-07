@@ -1,12 +1,13 @@
 const User = require("../../models/User");
 const Club = require("../../models/Club");
 const Coach = require("../../models/Coach");
+const Team = require("../../models/Team");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, escapeRegex, getPagination } = require("../../helpers/common");
 const { validatePersonInput, findDuplicateUser, applyPersonUpdates } = require("../../helpers/userHelper");
 
 // Coach + uska User + Club ek flat object mein (frontend ke liye aasaan)
-const formatCoach = (record) => ({
+const formatCoach = (record, assignedTeams = null) => ({
     _id: record._id,
     userId: record.userId?._id || record.userId,
     firstname: record.userId?.firstname || "",
@@ -14,14 +15,16 @@ const formatCoach = (record) => ({
     email: record.userId?.email || "",
     countryCode: record.userId?.countryCode || "",
     mobileNumber: record.userId?.mobileNumber || "",
+    birthDate: record.userId?.birthDate ? new Date(record.userId.birthDate).toISOString().split("T")[0] : null,
     is_verify: record.userId?.is_verify || false,
     club: record.clubId ? { _id: record.clubId._id, name: record.clubId.name } : null,
+    teams: assignedTeams || record.teams || [],
     createdAt: record.createdAt,
 });
 
 const populateCoach = (query) =>
     query
-        .populate("userId", "firstname lastname email countryCode mobileNumber is_verify")
+        .populate("userId", "firstname lastname email countryCode mobileNumber birthDate is_verify")
         .populate("clubId", "name");
 
 // clubAdmin sirf apne club ke coach ko chhu sakta hai. SuperAdmin sab ko.
@@ -46,7 +49,7 @@ const createCoach = async (req, res) => {
                 data: {},
             });
         }
-        const { firstname, lastname, email, countryCode, mobileNumber } = checked.values;
+        const { firstname, lastname, email, countryCode, mobileNumber, birthDate } = checked.values;
 
         // clubAdmin apne hi club mein coach banayega, superAdmin body se club chunega
         const clubId = req.user.role === ROLES.CLUB_ADMIN ? String(req.clubId) : String(req.body.clubId || "").trim();
@@ -88,6 +91,7 @@ const createCoach = async (req, res) => {
             firstname,
             lastname,
             email: email || undefined,
+            birthDate: birthDate || undefined,
             countryCode,
             mobileNumber,
             role: ROLES.COACH,
@@ -216,12 +220,15 @@ const getCoach = async (req, res) => {
             });
         }
 
+        // Fetch any teams assigned to this coach
+        const assignedTeams = await Team.find({ coachId: record._id }).select("name ageCategory season status");
+
         return res.status(200).json({
             error: false,
             status: 200,
             message: "Coach fetched successfully.",
             message_desc: "Coach fetched successfully.",
-            data: formatCoach(record),
+            data: formatCoach(record, assignedTeams),
         });
     } catch (e) {
         console.error("Get coach error:", e);
@@ -355,6 +362,8 @@ const deleteCoach = async (req, res) => {
 
         await Coach.findByIdAndDelete(record._id);
         await User.findByIdAndDelete(record.userId);
+        // Nullify coach assignment on any teams assigned to this coach
+        await Team.updateMany({ coachId: record._id }, { $set: { coachId: null } });
 
         return res.status(200).json({
             error: false,
