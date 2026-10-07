@@ -51,12 +51,12 @@ router.get("/user/getClubAdmin/:id", superAdminAuthentication, getClubAdmin);
 router.put("/user/updateClubAdmin/:id", superAdminAuthentication, updateClubAdmin);
 router.delete("/user/deleteClubAdmin/:id", superAdminAuthentication, deleteClubAdmin);
 
-// ---------- Coach (superAdmin ya clubAdmin; clubAdmin sirf apne club mein) ----------
-router.post("/user/createCoach", superAdminOrClubAdminAuthentication, createCoach);
-router.get("/user/listCoaches", superAdminOrClubAdminAuthentication, listCoaches);
-router.get("/user/getCoach/:id", superAdminOrClubAdminAuthentication, getCoach);
-router.put("/user/updateCoach/:id", superAdminOrClubAdminAuthentication, updateCoach);
-router.delete("/user/deleteCoach/:id", superAdminOrClubAdminAuthentication, deleteCoach);
+// Coaches
+router.post("/user/coaches/create", superAdminOrClubAdminAuthentication, createCoach);
+router.get("/user/coaches", superAdminOrClubAdminAuthentication, listCoaches);
+router.get("/user/coaches/:id", superAdminOrClubAdminAuthentication, getCoach);
+router.put("/user/coaches/:id/update", superAdminOrClubAdminAuthentication, updateCoach);
+router.delete("/user/coaches/:id/delete", superAdminOrClubAdminAuthentication, deleteCoach);
 
 // Teams categories
 router.post("/user/teams/categories/create", superAdminOrClubAdminAuthentication, createTeamCategory);
