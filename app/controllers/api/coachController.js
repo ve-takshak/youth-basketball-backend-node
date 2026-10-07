@@ -221,7 +221,9 @@ const getCoach = async (req, res) => {
         }
 
         // Fetch any teams assigned to this coach
-        const assignedTeams = await Team.find({ coachId: record._id }).select("name ageCategory season status");
+        const assignedTeams = await Team.find({ coachId: record._id })
+            .populate("categoryId", "name")
+            .select("name season gender teamType categoryId");
 
         return res.status(200).json({
             error: false,

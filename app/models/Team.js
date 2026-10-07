@@ -12,21 +12,20 @@ const TeamSchema = new mongoose.Schema(
             ref: "Club",
             required: [true, "Club is required"],
         },
-        // Coach assignment is optional
-        coachId: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: "Coach",
-            default: null,
-        },
         categoryId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "TeamCategory",
-            default: null,
+            required: [true, "Category is required"],
         },
-        ageCategory: {
+        gender: {
             type: String,
-            trim: true,
-            default: "",
+            enum: ["boys", "girls", "mixed"],
+            default: "mixed",
+        },
+        teamType: {
+            type: String,
+            enum: ["league", "non-league"],
+            default: "league",
         },
         season: {
             type: String,
@@ -37,10 +36,11 @@ const TeamSchema = new mongoose.Schema(
             type: Number,
             default: 20,
         },
-        status: {
-            type: String,
-            enum: ["active", "inactive"],
-            default: "active",
+        // Coach assignment is optional
+        coachId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Coach",
+            default: null,
         },
         createdBy: {
             type: mongoose.Schema.Types.ObjectId,
@@ -53,6 +53,7 @@ const TeamSchema = new mongoose.Schema(
 
 TeamSchema.index({ clubId: 1, name: 1 });
 TeamSchema.index({ coachId: 1 });
+TeamSchema.index({ categoryId: 1 });
 
 const Team = mongoose.model("Team", TeamSchema);
 module.exports = Team;

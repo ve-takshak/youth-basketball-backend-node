@@ -4,6 +4,7 @@ const User = require("../../models/User");
 const Club = require("../../models/Club");
 const Coach = require("../../models/Coach");
 const ClubAdmin = require("../../models/ClubAdmin");
+const Team = require("../../models/Team");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, escapeRegex, getPagination } = require("../../helpers/common");
 const { validatePersonInput, findDuplicateUser } = require("../../helpers/userHelper");
@@ -298,6 +299,14 @@ const getClub = async (req, res) => {
         const [clubAdmins, coaches] = await Promise.all([
             ClubAdmin.find({ clubId: id }).populate("userId", personFields).sort({ createdAt: -1 }),
             Coach.find({ clubId: id }).populate("userId", personFields).sort({ createdAt: -1 }),
+            Team.find({ clubId: id })
+                .populate("categoryId", "name")
+                .populate({
+                    path: "coachId",
+                    select: "userId",
+                    populate: { path: "userId", select: "firstname lastname" },
+                })
+                .sort({ createdAt: -1 }),
         ]);
 
         const flatten = (record) => ({
@@ -312,6 +321,21 @@ const getClub = async (req, res) => {
             createdAt: record.createdAt,
         });
 
+        const flattenTeam = (t) => ({
+            _id: t._id,
+            name: t.name,
+            gender: t.gender,
+            teamType: t.teamType,
+            season: t.season,
+            teamCapacity: t.teamCapacity,
+            category: t.categoryId ? { _id: t.categoryId._id, name: t.categoryId.name } : null,
+            coach: t.coachId && t.coachId.userId ? {
+                _id: t.coachId._id,
+                name: `${t.coachId.userId.firstname || ""} ${t.coachId.userId.lastname || ""}`.trim(),
+            } : null,
+            createdAt: t.createdAt,
+        });
+
         return res.status(200).json({
             error: false,
             status: 200,
@@ -321,6 +345,7 @@ const getClub = async (req, res) => {
                 club: formatClub(club),
                 clubAdmins: clubAdmins.map(flatten),
                 coaches: coaches.map(flatten),
+                teams: teams.map(flattenTeam),
             },
         });
     } catch (e) {
@@ -593,10 +618,11 @@ const deleteClub = async (req, res) => {
             ...coaches.map((record) => record.userId),
         ].filter(Boolean);
 
-        // 2. ClubAdmin & Coach collections se records delete karo
+        // 2. ClubAdmin, Coach & Team collections se records delete karo
         await Promise.all([
             ClubAdmin.deleteMany({ clubId: id }),
             Coach.deleteMany({ clubId: id }),
+            Team.deleteMany({ clubId: id }),
         ]);
 
         // 3. User collection se in sabke accounts delete karo

@@ -24,6 +24,13 @@ const {
     updateTeamCategory,
     deleteTeamCategory,
 } = require("../app/controllers/api/teamCategoryController");
+const {
+    createTeam,
+    listTeams,
+    getTeam,
+    updateTeam,
+    deleteTeam,
+} = require("../app/controllers/api/teamController");
 
 router.get("/test", (req, res) => res.send("API working"));
 
@@ -64,5 +71,12 @@ router.get("/user/teams/categories", authentication, listTeamCategories);
 router.get("/user/teams/categories/:id", authentication, getTeamCategory);
 router.put("/user/teams/categories/:id/update", superAdminOrClubAdminAuthentication, updateTeamCategory);
 router.delete("/user/teams/categories/:id/delete", superAdminOrClubAdminAuthentication, deleteTeamCategory);
+
+// Teams
+router.post("/user/teams/create", superAdminOrClubAdminAuthentication, createTeam);
+router.get("/user/teams", authentication, listTeams);
+router.get("/user/teams/:id", authentication, getTeam);
+router.put("/user/teams/:id/update", superAdminOrClubAdminAuthentication, updateTeam);
+router.delete("/user/teams/:id/delete", superAdminOrClubAdminAuthentication, deleteTeam);
 
 module.exports = router;
