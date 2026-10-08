@@ -8,8 +8,48 @@ const Team = require("../../models/Team");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, escapeRegex, getPagination } = require("../../helpers/common");
 const { validatePersonInput, findDuplicateUser } = require("../../helpers/userHelper");
+const { upload_files, deleteFiles } = require("../../../utils/s3");
 
 const isHexColor = (color) => /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/.test(color);
+
+const ALLOWED_LOGO_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
+
+// Hamare bucket ka base URL, taaki sirf apni S3 files hi delete hon
+const getS3BaseUrl = () =>
+    `https://${process.env.S3_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
+
+// req.files.logo check karna (express-fileupload)
+const getLogoFile = (req) => {
+    const file = req.files?.logo;
+    if (!file) return { file: null };
+    if (Array.isArray(file)) return { error: "Only one logo file is allowed." };
+    if (!ALLOWED_LOGO_TYPES.includes(file.mimetype)) {
+        return { error: "Logo must be a PNG, JPG or WEBP image." };
+    }
+    // File ka naam simple kar do (Hebrew / special characters URL na todein)
+    const ext = path.extname(file.name || "").toLowerCase() || ".png";
+    file.name = `logo${ext}`;
+    return { file };
+};
+
+// Purana logo hatana: S3 wala ho toh S3 se, purana local upload ho toh disk se
+const removeLogo = async (logo) => {
+    if (!logo) return;
+    try {
+        const baseUrl = getS3BaseUrl();
+        if (logo.startsWith(baseUrl)) {
+            const key = logo.replace(baseUrl, "");
+            const slash = key.lastIndexOf("/");
+            const result = await deleteFiles(key.slice(0, slash), key.slice(slash + 1));
+            if (result !== 1) console.warn("Failed to delete club logo from S3:", result);
+        } else if (!logo.startsWith("http")) {
+            const logoPath = path.resolve(__dirname, "../../../", logo);
+            if (fs.existsSync(logoPath)) fs.unlinkSync(logoPath);
+        }
+    } catch (err) {
+        console.warn("Failed to delete club logo:", err.message);
+    }
+};
 
 const formatClub = (club) => {
     if (!club) return null;
@@ -45,8 +85,8 @@ const findClubByName = (name, excludeId = null) =>
 /**
  * POST /api/user/createClub   (sirf superAdmin)
  * Ek hi call mein 3 cheezein banti hain: Club + User (role: clubAdmin) + ClubAdmin record.
- * body: {
- *   name, logo?, theme?: { primary, secondary, background },
+ * multipart/form-data: {
+ *   name, logo? (file), theme?: { primary, secondary, background },
  *   clubAdmin: { firstname, lastname, countryCode, mobileNumber, email? }
  * }
  */
@@ -54,6 +94,7 @@ const createClub = async (req, res) => {
     // Beech mein fail ho toh jo bana hai use hatane ke liye
     let club = null;
     let user = null;
+    let uploadedLogo = "";
 
     try {
         let { name = "", logo = "", theme = {}, clubAdmin = {} } = req.body;
@@ -66,11 +107,6 @@ const createClub = async (req, res) => {
             try { clubAdmin = JSON.parse(clubAdmin); } catch (e) { clubAdmin = {}; }
         }
 
-        // If a file was uploaded via multer
-        if (req.file) {
-            logo = `uploads/clubs/${req.file.filename}`;
-        }
-
         name = String(name).trim();
 
         // ---- 1. Pehle saari checking, kuch bhi banne se pehle ----
@@ -80,6 +116,17 @@ const createClub = async (req, res) => {
                 status: 400,
                 message: "Club name is required.",
                 message_desc: "Club name is required.",
+                data: {},
+            });
+        }
+
+        const logoCheck = getLogoFile(req);
+        if (logoCheck.error) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: logoCheck.error,
+                message_desc: logoCheck.error,
                 data: {},
             });
         }
@@ -134,7 +181,22 @@ const createClub = async (req, res) => {
             });
         }
 
-        // ---- 2. Club ----
+        // ---- 2. Logo S3 par upload (saari checking pass hone ke baad hi) ----
+        if (logoCheck.file) {
+            uploadedLogo = await upload_files("clubs", logoCheck.file);
+            if (!uploadedLogo) {
+                return res.status(500).json({
+                    error: true,
+                    status: 500,
+                    message: "Logo upload failed. Please try again.",
+                    message_desc: "Logo upload failed. Please try again.",
+                    data: {},
+                });
+            }
+            logo = uploadedLogo;
+        }
+
+        // ---- 3. Club ----
         club = await Club.create({
             name,
             logo: String(logo).trim(),
@@ -142,7 +204,7 @@ const createClub = async (req, res) => {
             createdBy: req.user._id,
         });
 
-        // ---- 3. Club admin ka login account (role backend set karta hai) ----
+        // ---- 4. Club admin ka login account (role backend set karta hai) ----
         user = await User.create({
             firstname: admin.firstname,
             lastname: admin.lastname,
@@ -152,7 +214,7 @@ const createClub = async (req, res) => {
             role: ROLES.CLUB_ADMIN,
         });
 
-        // ---- 4. Club aur admin ko jodna ----
+        // ---- 5. Club aur admin ko jodna ----
         const clubAdminRecord = await ClubAdmin.create({
             userId: user._id,
             clubId: club._id,
@@ -179,9 +241,10 @@ const createClub = async (req, res) => {
             },
         });
     } catch (e) {
-        // Adhoora data na bache: jo bana tha wo hata do
+        // Adhoora data na bache: jo bana tha wo hata do (S3 logo bhi)
         if (user) await User.findByIdAndDelete(user._id).catch(() => {});
         if (club) await Club.findByIdAndDelete(club._id).catch(() => {});
+        if (uploadedLogo) await removeLogo(uploadedLogo);
 
         console.error("Create club error:", e);
         return res.status(500).json({
@@ -363,7 +426,8 @@ const getClub = async (req, res) => {
 
 /**
  * PUT /api/user/updateClub/:id   (sirf superAdmin)
- * body: jo badalna hai wahi { name?, logo?, theme? }
+ * multipart/form-data: jo badalna hai wahi { name?, logo? (file), theme?, clubAdmin? }
+ * logo ko "" bhejo toh logo hat jayega
  */
 const updateClub = async (req, res) => {
     try {
@@ -386,6 +450,17 @@ const updateClub = async (req, res) => {
                 status: 404,
                 message: "Club not found.",
                 message_desc: "Club not found.",
+                data: {},
+            });
+        }
+
+        const logoCheck = getLogoFile(req);
+        if (logoCheck.error) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: logoCheck.error,
+                message_desc: logoCheck.error,
                 data: {},
             });
         }
@@ -416,17 +491,6 @@ const updateClub = async (req, res) => {
             }
 
             club.name = newName;
-        }
-
-        let oldLogoToDelete = null;
-        if (req.file) {
-            oldLogoToDelete = club.logo;
-            club.logo = `uploads/clubs/${req.file.filename}`;
-        } else if (logo !== undefined) {
-            if (!logo && club.logo) {
-                oldLogoToDelete = club.logo;
-            }
-            club.logo = String(logo).trim();
         }
 
         if (theme !== undefined) {
@@ -527,17 +591,33 @@ const updateClub = async (req, res) => {
             }
         }
 
+        // Logo: saari checking ke baad hi S3 par upload, taaki bekar files na bachein
+        let oldLogoToDelete = null;
+        if (logoCheck.file) {
+            const uploadedLogo = await upload_files("clubs", logoCheck.file);
+            if (!uploadedLogo) {
+                return res.status(500).json({
+                    error: true,
+                    status: 500,
+                    message: "Logo upload failed. Please try again.",
+                    message_desc: "Logo upload failed. Please try again.",
+                    data: {},
+                });
+            }
+            oldLogoToDelete = club.logo;
+            club.logo = uploadedLogo;
+        } else if (logo !== undefined) {
+            if (!logo && club.logo) {
+                oldLogoToDelete = club.logo;
+            }
+            club.logo = String(logo).trim();
+        }
+
         await club.save();
 
-        if (oldLogoToDelete && !oldLogoToDelete.startsWith("http") && oldLogoToDelete !== club.logo) {
-            try {
-                const oldLogoPath = path.resolve(__dirname, "../../../", oldLogoToDelete);
-                if (fs.existsSync(oldLogoPath)) {
-                    fs.unlinkSync(oldLogoPath);
-                }
-            } catch (fileErr) {
-                console.warn("Failed to delete old club logo file:", fileErr.message);
-            }
+        // Naya logo save hone ke baad hi purana hatao
+        if (oldLogoToDelete && oldLogoToDelete !== club.logo) {
+            await removeLogo(oldLogoToDelete);
         }
 
         const admins = await ClubAdmin.find({ clubId: club._id })
@@ -579,8 +659,8 @@ const updateClub = async (req, res) => {
  * DELETE /api/user/deleteClub/:id   (sirf superAdmin)
  * Club ke saath:
  * 1. Club admins aur Coaches ke User accounts delete hote hain (user table)
- * 2. ClubAdmin aur Coach records delete hote hain
- * 3. Club ka uploaded logo file filesystem se delete hoti hai (with try/catch)
+ * 2. ClubAdmin, Coach aur Team records delete hote hain
+ * 3. Club ka logo S3 se delete hota hai (purana local file ho toh disk se)
  * 4. Club document delete hota hai (club table)
  */
 const deleteClub = async (req, res) => {
@@ -631,20 +711,11 @@ const deleteClub = async (req, res) => {
             await User.deleteMany({ _id: { $in: userIdsToDelete } });
         }
 
-        // 4. Logo file agar uploaded hai toh filesystem se safely delete karo (try/catch ke sath)
-        if (club.logo && !club.logo.startsWith("http")) {
-            try {
-                const logoPath = path.resolve(__dirname, "../../../", club.logo);
-                if (fs.existsSync(logoPath)) {
-                    fs.unlinkSync(logoPath);
-                }
-            } catch (fileErr) {
-                console.warn("Failed to delete club logo file on disk:", fileErr.message);
-            }
-        }
-
-        // 5. Club table se record delete karo
+        // 4. Club table se record delete karo
         await Club.findByIdAndDelete(id);
+
+        // 5. Logo S3 (ya purani local file) se hatao, fail ho toh bhi club delete ho chuka hai
+        await removeLogo(club.logo);
 
         return res.status(200).json({
             error: false,

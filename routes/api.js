@@ -42,14 +42,12 @@ router.post("/user/resend-otp", resendOtp);
 router.get("/user/profile", authentication, getProfile);
 
 
-const { uploadClubLogo } = require("../app/middleware/upload");
-
 
 // ---------- Club ----------
-router.post("/user/createClub", superAdminAuthentication, uploadClubLogo.single("logo"), createClub);
+router.post("/user/createClub", superAdminAuthentication, createClub);
 router.get("/user/listClubs", superAdminOrClubAdminAuthentication, listClubs);   // clubAdmin ko sirf apna club
 router.get("/user/getClub/:id", superAdminOrClubAdminAuthentication, getClub);
-router.put("/user/updateClub/:id", superAdminAuthentication, uploadClubLogo.single("logo"), updateClub);
+router.put("/user/updateClub/:id", superAdminAuthentication, updateClub);
 router.delete("/user/deleteClub/:id", superAdminAuthentication, deleteClub);
 
 // ---------- Club Admin (sirf superAdmin banata hai) ----------

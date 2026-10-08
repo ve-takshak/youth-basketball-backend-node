@@ -3,11 +3,12 @@ require("dotenv").config(); // sabse upar, taaki database.js ko MONGODB_URI mil 
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
+const fileUpload = require("express-fileupload");
 const router = require("./routes/api.js");
 
 const app = express();
 
-// Serve static uploads
+// Purane local logos ke liye (jo S3 se pehle upload hue the)
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Kaun se frontend is API ko call kar sakte hain
@@ -34,6 +35,12 @@ app.use(cors({
 
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
+
+// form-data (files + text fields) padhne ke liye: req.files aur req.body yahi bharta hai
+app.use(fileUpload({
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+    abortOnLimit: true,
+}));
 
 app.get("/", (req, res) => res.send("Hello from Node.js!"));
 
