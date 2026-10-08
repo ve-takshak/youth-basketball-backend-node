@@ -12,20 +12,17 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Kaun se frontend is API ko call kar sakte hain
 const allowedOrigins = [
-    "http://localhost:3000",
-    "https://youth-basketball-backend-bfjf37gfh-ve-4d94.vercel.app",
-    "http://13.63.166.225"
+    "http://13.63.166.225", "http://51.17.184.245"
 ];
 
-
-const vercelProjectPattern = /^https:\/\/youth-basketball-backend[a-z0-9-]*\.vercel\.app$/;
+// Local development: koi bhi localhost port (3000, 3001...)
 const localhostPattern = /^http:\/\/localhost:[0-9]+$/;
 
 app.use(cors({
     origin: (origin, callback) => {
         // Postman / server-to-server calls mein origin nahi hota, unhe allow karo
         if (!origin) return callback(null, true);
-        if (allowedOrigins.includes(origin) || vercelProjectPattern.test(origin) || localhostPattern.test(origin)) {
+        if (allowedOrigins.includes(origin) || localhostPattern.test(origin)) {
             return callback(null, true);
         }
         console.warn(`CORS blocked: ${origin}`);

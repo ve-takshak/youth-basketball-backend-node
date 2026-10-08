@@ -17,7 +17,7 @@ const UserSchema = new mongoose.Schema(
         countryCode: { type: String, default: "+972" },
         mobileNumber: { type: String, required: true, trim: true },
 
-        // superAdmin | clubAdmin | coach | staff | seniorPlayer | youthPlayer | parent
+        // superAdmin | clubAdmin | coach | staff | player | seniorPlayer | youthPlayer | parent
         role: { type: String, enum: Object.values(ROLES), default: ROLES.PARENT },
 
         // OTP

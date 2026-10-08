@@ -44,6 +44,7 @@ router.get("/user/profile", authentication, getProfile);
 
 const { uploadClubLogo } = require("../app/middleware/upload");
 
+
 // ---------- Club ----------
 router.post("/user/createClub", superAdminAuthentication, uploadClubLogo.single("logo"), createClub);
 router.get("/user/listClubs", superAdminOrClubAdminAuthentication, listClubs);   // clubAdmin ko sirf apna club
@@ -78,5 +79,6 @@ router.get("/user/teams", authentication, listTeams);
 router.get("/user/teams/:id", authentication, getTeam);
 router.put("/user/teams/:id/update", superAdminOrClubAdminAuthentication, updateTeam);
 router.delete("/user/teams/:id/delete", superAdminOrClubAdminAuthentication, deleteTeam);
+
 
 module.exports = router;

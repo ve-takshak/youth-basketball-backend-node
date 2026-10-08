@@ -5,6 +5,7 @@ const ROLES = {
     CLUB_ADMIN: "clubAdmin",       // Ek club ka manager: apne club ke coaches/teams/players
     COACH: "coach",                // Mobile app: apni team
     STAFF: "staff",                // Club staff (permissions abhi decide hone hain)
+    PLAYER: "player",              // Player ka login (abhi ke liye senior/youth ka farak nahi)
     SENIOR_PLAYER: "seniorPlayer", // Adult player, khud login (aage)
     YOUTH_PLAYER: "youthPlayer",   // Youth player, parent ke under (aage)
     PARENT: "parent",              // Mobile app: apne bachche
