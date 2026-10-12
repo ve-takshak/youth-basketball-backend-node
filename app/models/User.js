@@ -10,12 +10,17 @@ const UserSchema = new mongoose.Schema(
         // Optional. sparse = jinke paas email nahi unpe unique check nahi lagega
         email: { type: String, trim: true, lowercase: true, unique: true, sparse: true },
 
-        // Optional date of birth
+        // Optional date of birth (player ke liye controller mein required hai)
         birthDate: { type: Date, default: null },
 
-        // Login isi se hota hai
+        // Player ke liye (baaki roles ke liye khaali)
+        gender: { type: String, enum: ["", "boys", "girls"], default: "" },
+        idNumber: { type: String, trim: true, default: "" }, // Israeli ID (Teudat Zehut)
+
+        // Login isi se hota hai. Player (bachche) ka mobile nahi hota, isliye optional.
+        // Bina mobile wala user login nahi kar sakta.
         countryCode: { type: String, default: "+972" },
-        mobileNumber: { type: String, required: true, trim: true },
+        mobileNumber: { type: String, trim: true, default: "" },
 
         // superAdmin | clubAdmin | coach | staff | player | seniorPlayer | youthPlayer | parent
         role: { type: String, enum: Object.values(ROLES), default: ROLES.PARENT },
@@ -33,8 +38,17 @@ const UserSchema = new mongoose.Schema(
     { timestamps: true }
 );
 
-// Same country code + mobile number se do account nahi banenge
-UserSchema.index({ countryCode: 1, mobileNumber: 1 }, { unique: true });
+// Same country code + mobile se do account nahi. Khaali mobile (bachche) pe check nahi.
+UserSchema.index(
+    { countryCode: 1, mobileNumber: 1 },
+    { unique: true, partialFilterExpression: { mobileNumber: { $type: "string", $gt: "" } } }
+);
+
+// Ek ID number ek hi insaan ka. Khaali ID pe check nahi.
+UserSchema.index(
+    { idNumber: 1 },
+    { unique: true, partialFilterExpression: { idNumber: { $type: "string", $gt: "" } } }
+);
 
 const User = mongoose.model("User", UserSchema);
 module.exports = User;

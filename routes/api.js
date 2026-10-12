@@ -31,6 +31,7 @@ const {
     updateTeam,
     deleteTeam,
 } = require("../app/controllers/api/teamController");
+const { createPlayer, listPlayers, getPlayer, updatePlayer, deletePlayer, listShirtSizes } = require("../app/controllers/api/Playercontroller");
 
 router.get("/test", (req, res) => res.send("API working"));
 
@@ -78,5 +79,13 @@ router.get("/user/teams/:id", authentication, getTeam);
 router.put("/user/teams/:id/update", superAdminOrClubAdminAuthentication, updateTeam);
 router.delete("/user/teams/:id/delete", superAdminOrClubAdminAuthentication, deleteTeam);
 
+// Player
+router.post("/user/players/create", superAdminOrClubAdminAuthentication, createPlayer);
+router.get("/user/players", superAdminOrClubAdminAuthentication, listPlayers);
+router.get("/user/players/:id", superAdminOrClubAdminAuthentication, getPlayer);
+router.put("/user/players/:id/update", superAdminOrClubAdminAuthentication, updatePlayer);
+router.delete("/user/players/:id/delete", superAdminOrClubAdminAuthentication, deletePlayer);
+
+router.get("/user/players/shirt-sizes", authentication, listShirtSizes);
 
 module.exports = router;
