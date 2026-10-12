@@ -81,11 +81,11 @@ router.delete("/user/teams/:id/delete", superAdminOrClubAdminAuthentication, del
 
 // Player
 router.post("/user/players/create", superAdminOrClubAdminAuthentication, createPlayer);
+router.get("/user/players/shirt-sizes", listShirtSizes);
 router.get("/user/players", superAdminOrClubAdminAuthentication, listPlayers);
 router.get("/user/players/:id", superAdminOrClubAdminAuthentication, getPlayer);
 router.put("/user/players/:id/update", superAdminOrClubAdminAuthentication, updatePlayer);
 router.delete("/user/players/:id/delete", superAdminOrClubAdminAuthentication, deletePlayer);
 
-router.get("/user/players/shirt-sizes", authentication, listShirtSizes);
 
 module.exports = router;
