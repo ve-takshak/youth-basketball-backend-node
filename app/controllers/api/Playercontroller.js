@@ -243,8 +243,8 @@ const resolveParents = async (rawParents, clubId, createdBy, created) => {
 
 // Fail hone pe is request mein bane naye Parent/User hata dena
 const rollbackCreated = async (created) => {
-    if (created.parents.length) await Parent.deleteMany({ _id: { $in: created.parents } }).catch(() => {});
-    if (created.users.length) await User.deleteMany({ _id: { $in: created.users } }).catch(() => {});
+    if (created.parents.length) await Parent.deleteMany({ _id: { $in: created.parents } }).catch(() => { });
+    if (created.users.length) await User.deleteMany({ _id: { $in: created.users } }).catch(() => { });
 };
 
 // Jin parents ka ab koi bachcha nahi bacha, unka Parent + User hata dena
@@ -460,7 +460,7 @@ const createPlayer = async (req, res) => {
         });
     } catch (e) {
         // Adhoora data na bache
-        if (playerUser) await User.findByIdAndDelete(playerUser._id).catch(() => {});
+        if (playerUser) await User.findByIdAndDelete(playerUser._id).catch(() => { });
         await rollbackCreated(created);
         console.error("Create player error:", e);
         return res.status(500).json({
@@ -873,4 +873,82 @@ const listShirtSizes = async (req, res) => {
     });
 };
 
-module.exports = { createPlayer, listPlayers, getPlayer, updatePlayer, deletePlayer, listShirtSizes};
+
+
+const listShirtNumbers = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const excludePlayerId = String(req.query.excludePlayerId || "").trim();
+
+        if (!isValidId(id)) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "Invalid team id.",
+                message_desc: "Invalid team id.",
+                data: {},
+            });
+        }
+
+        const team = await Team.findById(id);
+        if (!team || !canAccess(req, team.clubId)) {
+            return res.status(404).json({
+                error: true,
+                status: 404,
+                message: "Team not found.",
+                message_desc: "Team not found.",
+                data: {},
+            });
+        }
+
+        const filter = {
+            teamId: team._id,
+            status: { $in: ROSTER_STATUSES },
+            shirtNumber: { $ne: null },
+        };
+        if (excludePlayerId && isValidId(excludePlayerId)) filter._id = { $ne: excludePlayerId };
+
+        const players = await Player.find(filter)
+            .populate("userId", "firstname lastname")
+            .sort({ shirtNumber: 1 });
+
+        const taken = players.map((p) => ({
+            shirtNumber: p.shirtNumber,
+            playerId: p._id,
+            firstname: p.userId?.firstname || "",
+            lastname: p.userId?.lastname || "",
+            status: p.status,
+        }));
+
+        const activeCount = await Player.countDocuments({ teamId: team._id, status: "active" });
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Shirt numbers fetched successfully.",
+            message_desc: "Shirt numbers fetched successfully.",
+            data: {
+                team: {
+                    _id: team._id,
+                    name: team.name,
+                    teamCapacity: team.teamCapacity,
+                    activePlayers: activeCount,
+                },
+                taken,
+                takenNumbers: taken.map((t) => t.shirtNumber),
+                takenCount: taken.length,
+            },
+        });
+    } catch (e) {
+        console.error("List shirt numbers error:", e);
+        return res.status(500).json({
+            error: true,
+            status: 500,
+            message: "Something went wrong.",
+            message_desc: e.message,
+            data: {},
+        });
+    }
+};
+
+module.exports = { createPlayer, listPlayers, getPlayer, updatePlayer, deletePlayer, listShirtSizes, listShirtNumbers };
