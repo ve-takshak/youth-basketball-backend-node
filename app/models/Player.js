@@ -34,7 +34,10 @@ const PlayerSchema = new mongoose.Schema(
 
         // ---- Shirt ----
         shirtSize: { type: String, enum: [...SHIRT_SIZES, ""], default: "" },
-        shirtNumber: { type: Number, min: 0, max: 99, default: null },
+        shirtNumber: { type: Number, min: 0, default: null },
+
+         // Upload ki hui file ka path, jaise club ka logo
+        idDocument: { type: String, default: "" },
 
         // ---- Parents / guardians (ek se zyada ho sakte hain) ----
         parents: { type: [PlayerParentSchema], default: [] },

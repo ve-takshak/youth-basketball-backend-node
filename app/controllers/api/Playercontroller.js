@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const validator = require("validator");
 const User = require("../../models/User");
 const Club = require("../../models/Club");
@@ -8,6 +10,7 @@ const { SHIRT_SIZES, PLAYER_STATUSES, PLAYER_TYPES, PARENT_RELATIONS } = require
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, cleanMobile, escapeRegex, getPagination } = require("../../helpers/common");
 const { validatePersonInput } = require("../../helpers/userHelper");
+const { upload_files, deleteFiles } = require("../../../utils/s3");
 
 // Player ka data do jagah:
 //   User   (role: "player") -> firstname, lastname, birthDate, gender, idNumber, mobile, email
@@ -15,6 +18,71 @@ const { validatePersonInput } = require("../../helpers/userHelper");
 
 // Jin statuses wale players team mein jagah lete hain (shirt number + capacity)
 const ROSTER_STATUSES = ["active", "waitlisted"];
+
+// ---------------------------------------------------------------------------
+// Photo / ID / passport attachment (club logo jaisa, S3 par)
+// ---------------------------------------------------------------------------
+const ALLOWED_DOC_TYPES = ["image/png", "image/jpeg", "image/jpg", "application/pdf"];
+const MAX_DOC_SIZE = 5 * 1024 * 1024; // 5MB
+
+// Hamare bucket ka base URL, taaki sirf apni S3 files hi delete hon
+const getS3BaseUrl = () =>
+    `https://${process.env.S3_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
+
+// req.files.idDocument check karna (express-fileupload)
+const getIdDocumentFile = (req) => {
+    const file = req.files?.idDocument;
+    if (!file) return { file: null };
+    if (Array.isArray(file)) return { error: "Only one ID document file is allowed." };
+    if (!ALLOWED_DOC_TYPES.includes(file.mimetype)) {
+        return { error: "ID document must be a JPG, PNG or PDF file." };
+    }
+    if (file.size > MAX_DOC_SIZE) return { error: "ID document must be 5MB or smaller." };
+    // File ka naam simple kar do (Hebrew / special characters URL na todein)
+    const ext = path.extname(file.name || "").toLowerCase() || (file.mimetype === "application/pdf" ? ".pdf" : ".jpg");
+    file.name = `id-document${ext}`;
+    return { file };
+};
+
+// Purani file hatana: S3 wali ho toh S3 se, local upload ho toh disk se
+const removeIdDocument = async (fileUrl) => {
+    if (!fileUrl) return;
+    try {
+        const baseUrl = getS3BaseUrl();
+        if (fileUrl.startsWith(baseUrl)) {
+            const key = fileUrl.replace(baseUrl, "");
+            const slash = key.lastIndexOf("/");
+            const result = await deleteFiles(key.slice(0, slash), key.slice(slash + 1));
+            if (result !== 1) console.warn("Failed to delete player ID document from S3:", result);
+        } else if (!fileUrl.startsWith("http")) {
+            const filePath = path.resolve(__dirname, "../../../", fileUrl);
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        }
+    } catch (err) {
+        console.warn("Failed to delete player ID document:", err.message);
+    }
+};
+
+const fileUrlOf = (value) => {
+    if (!value) return "";
+    if (value.startsWith("http")) return value;
+    const appUrl = process.env.APP_URL || "http://localhost:5000";
+    return `${appUrl}/${value.replace(/\\/g, "/")}`;
+};
+
+// multipart/form-data mein parents JSON string bankar aate hain
+const parseParents = (raw) => {
+    if (raw === undefined) return undefined;
+    if (typeof raw === "string") {
+        if (!raw.trim()) return [];
+        try {
+            return JSON.parse(raw);
+        } catch (e) {
+            return null; // galat JSON
+        }
+    }
+    return raw;
+};
 
 // ---------------------------------------------------------------------------
 // Helpers (galti ho toh { status, message } return karte hain)
@@ -103,7 +171,7 @@ const validatePlayerFields = (body) => {
             values.shirtNumber = null;
         } else {
             const num = Number(body.shirtNumber);
-            if (!Number.isInteger(num) || num < 0 || num > 99) return { status: 400, message: "Shirt number must be between 0 and 99." };
+            if (!Number.isInteger(num) || num < 0) return { status: 400, message: "Shirt number must be a whole number (0 or more)." };
             values.shirtNumber = num;
         }
     }
@@ -243,8 +311,8 @@ const resolveParents = async (rawParents, clubId, createdBy, created) => {
 
 // Fail hone pe is request mein bane naye Parent/User hata dena
 const rollbackCreated = async (created) => {
-    if (created.parents.length) await Parent.deleteMany({ _id: { $in: created.parents } }).catch(() => { });
-    if (created.users.length) await User.deleteMany({ _id: { $in: created.users } }).catch(() => { });
+    if (created.parents.length) await Parent.deleteMany({ _id: { $in: created.parents } }).catch(() => {});
+    if (created.users.length) await User.deleteMany({ _id: { $in: created.users } }).catch(() => {});
 };
 
 // Jin parents ka ab koi bachcha nahi bacha, unka Parent + User hata dena
@@ -287,6 +355,7 @@ const formatPlayer = (player) => {
         playerType: player.playerType,
         shirtSize: player.shirtSize || "",
         shirtNumber: player.shirtNumber ?? null,
+        idDocument: fileUrlOf(player.idDocument),
         status: player.status,
         season: player.season || "",
         club: player.clubId && player.clubId._id ? { _id: player.clubId._id, name: player.clubId.name } : null,
@@ -316,6 +385,8 @@ const formatPlayer = (player) => {
 
 /**
  * POST /api/user/players/create   (superAdmin ya clubAdmin)
+ * JSON ya multipart/form-data (file ke saath). Multipart mein parents JSON string mein bhejo.
+ * idDocument (file, optional): JPG / PNG / PDF, max 5MB
  * body: {
  *   firstname, lastname, birthDate, gender, idNumber?, email?, countryCode?, mobileNumber?,   -> User
  *   clubId (sirf superAdmin), teamId?, season?, playerType?, shirtSize?, shirtNumber?, status?, -> Player
@@ -325,7 +396,31 @@ const formatPlayer = (player) => {
 const createPlayer = async (req, res) => {
     const created = { users: [], parents: [] };
     let playerUser = null;
+    let uploadedDoc = "";
     try {
+        // multipart/form-data mein parents JSON string aata hai
+        const parsedParents = parseParents(req.body.parents);
+        if (parsedParents === null) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "Parents must be valid JSON.",
+                message_desc: "Parents must be valid JSON.",
+                data: {},
+            });
+        }
+
+        const docCheck = getIdDocumentFile(req);
+        if (docCheck.error) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: docCheck.error,
+                message_desc: docCheck.error,
+                data: {},
+            });
+        }
+
         const personCheck = validatePersonFields(req.body);
         if (personCheck.message) {
             return res.status(personCheck.status).json({
@@ -402,7 +497,7 @@ const createPlayer = async (req, res) => {
         }
 
         // Youth player ke liye kam se kam ek parent zaroori
-        const rawParents = req.body.parents || [];
+        const rawParents = parsedParents || [];
         if (values.playerType === "youth" && (!Array.isArray(rawParents) || rawParents.length === 0)) {
             return res.status(400).json({
                 error: true,
@@ -423,6 +518,21 @@ const createPlayer = async (req, res) => {
                 message_desc: parentResult.message,
                 data: {},
             });
+        }
+
+        // ID document S3 par (saari checking pass hone ke baad hi)
+        if (docCheck.file) {
+            uploadedDoc = await upload_files("players", docCheck.file);
+            if (!uploadedDoc) {
+                await rollbackCreated(created);
+                return res.status(500).json({
+                    error: true,
+                    status: 500,
+                    message: "ID document upload failed. Please try again.",
+                    message_desc: "ID document upload failed. Please try again.",
+                    data: {},
+                });
+            }
         }
 
         // 1. Player ka User (role: player)
@@ -446,6 +556,7 @@ const createPlayer = async (req, res) => {
             teamId: teamResult.team ? teamResult.team._id : null,
             season: values.season ?? (teamResult.team ? teamResult.team.season : ""),
             parents: parentResult.links,
+            idDocument: uploadedDoc,
             createdBy: req.user._id,
         });
 
@@ -459,9 +570,10 @@ const createPlayer = async (req, res) => {
             data: formatPlayer(saved),
         });
     } catch (e) {
-        // Adhoora data na bache
-        if (playerUser) await User.findByIdAndDelete(playerUser._id).catch(() => { });
+        // Adhoora data na bache (S3 file bhi)
+        if (playerUser) await User.findByIdAndDelete(playerUser._id).catch(() => {});
         await rollbackCreated(created);
+        if (uploadedDoc) await removeIdDocument(uploadedDoc);
         console.error("Create player error:", e);
         return res.status(500).json({
             error: true,
@@ -606,10 +718,12 @@ const getPlayer = async (req, res) => {
 /**
  * PUT /api/user/players/:id/update   (superAdmin ya clubAdmin, :id = Player ki _id)
  * body: jo badalna hai wahi. teamId: "" = team se hatana.
+ * idDocument (file) = nayi file. removeIdDocument=true = file hatana.
  * parents bheja toh poori list replace (jo parent hat gaya, uska bachcha na bacha toh uska account bhi hatega).
  */
 const updatePlayer = async (req, res) => {
     const created = { users: [], parents: [] };
+    let uploadedDoc = "";
     try {
         const { id } = req.params;
 
@@ -630,6 +744,28 @@ const updatePlayer = async (req, res) => {
                 status: 404,
                 message: "Player not found.",
                 message_desc: "Player not found.",
+                data: {},
+            });
+        }
+
+        const parsedParents = parseParents(req.body.parents);
+        if (parsedParents === null) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "Parents must be valid JSON.",
+                message_desc: "Parents must be valid JSON.",
+                data: {},
+            });
+        }
+
+        const docCheck = getIdDocumentFile(req);
+        if (docCheck.error) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: docCheck.error,
+                message_desc: docCheck.error,
                 data: {},
             });
         }
@@ -720,9 +856,9 @@ const updatePlayer = async (req, res) => {
 
         // Parents replace
         let removedParentIds = [];
-        if (req.body.parents !== undefined) {
+        if (parsedParents !== undefined) {
             const playerType = values.playerType || player.playerType;
-            if (playerType === "youth" && (!Array.isArray(req.body.parents) || req.body.parents.length === 0)) {
+            if (playerType === "youth" && (!Array.isArray(parsedParents) || parsedParents.length === 0)) {
                 return res.status(400).json({
                     error: true,
                     status: 400,
@@ -732,7 +868,7 @@ const updatePlayer = async (req, res) => {
                 });
             }
 
-            const parentResult = await resolveParents(req.body.parents, player.clubId, req.user._id, created);
+            const parentResult = await resolveParents(parsedParents, player.clubId, req.user._id, created);
             if (parentResult.message) {
                 await rollbackCreated(created);
                 return res.status(parentResult.status).json({
@@ -751,6 +887,28 @@ const updatePlayer = async (req, res) => {
             player.parents = parentResult.links;
         }
 
+        // ID document: nayi file aayi toh S3 par, ya removeIdDocument=true se hatana
+        const oldDoc = player.idDocument || "";
+        let docChanged = false;
+        if (docCheck.file) {
+            uploadedDoc = await upload_files("players", docCheck.file);
+            if (!uploadedDoc) {
+                await rollbackCreated(created);
+                return res.status(500).json({
+                    error: true,
+                    status: 500,
+                    message: "ID document upload failed. Please try again.",
+                    message_desc: "ID document upload failed. Please try again.",
+                    data: {},
+                });
+            }
+            player.idDocument = uploadedDoc;
+            docChanged = true;
+        } else if (String(req.body.removeIdDocument) === "true") {
+            player.idDocument = "";
+            docChanged = true;
+        }
+
         // User mein personal details
         if (person.email !== undefined) person.email = person.email || undefined;
         Object.assign(user, person);
@@ -763,6 +921,9 @@ const updatePlayer = async (req, res) => {
         await player.save();
         await cleanupOrphanParents(removedParentIds);
 
+        // Save ho gaya, ab purani file hatao
+        if (docChanged && oldDoc) await removeIdDocument(oldDoc);
+
         const saved = await populatePlayer(Player.findById(player._id));
 
         return res.status(200).json({
@@ -774,6 +935,7 @@ const updatePlayer = async (req, res) => {
         });
     } catch (e) {
         await rollbackCreated(created);
+        if (uploadedDoc) await removeIdDocument(uploadedDoc);
         console.error("Update player error:", e);
         return res.status(500).json({
             error: true,
@@ -818,6 +980,7 @@ const deletePlayer = async (req, res) => {
         await Player.findByIdAndDelete(player._id);
         await User.findByIdAndDelete(player.userId);
         await cleanupOrphanParents(parentIds);
+        await removeIdDocument(player.idDocument);
 
         return res.status(200).json({
             error: false,
@@ -837,7 +1000,6 @@ const deletePlayer = async (req, res) => {
         });
     }
 };
-
 
 
 /**
@@ -873,8 +1035,10 @@ const listShirtSizes = async (req, res) => {
     });
 };
 
-
-
+/**
+ * GET /api/user/teams/:id/shirt-numbers?excludePlayerId=   (superAdmin ya clubAdmin)
+ * Team ke bhare hue (taken) shirt numbers. Sirf active / waitlisted players ke.
+ */
 const listShirtNumbers = async (req, res) => {
     try {
         const { id } = req.params;
