@@ -1,14 +1,17 @@
 const mongoose = require("../../config/database");
 
 // Proposal 2.3: Team & Player Registration
-// Player ki personal details (naam, DOB, gender, ID, mobile) User model mein hain (role: "player").
+// Player do tarah ke:
+//   senior -> User role "seniorPlayer": khud mobile + OTP se login, koi parent nahi
+//   youth  -> User role "youthPlayer":  parent ke under (kam se kam ek parent), mobile optional
+// Personal details (naam, DOB, gender, ID, mobile, email) User model mein hain.
 // Yahan sirf khel se judi cheezein hain. Coach / Parent jaisa hi pattern.
 const SHIRT_SIZES = ["YXS", "YS", "YM", "YL", "XS", "S", "M", "L", "XL", "XXL"]; // Y = youth (bachchon ke size)
 const PLAYER_STATUSES = ["active", "waitlisted", "inactive", "left"];
 const PLAYER_TYPES = ["youth", "senior"];
 const PARENT_RELATIONS = ["father", "mother", "guardian", "other"];
 
-// Player aur Parent ka rishta. Parent ki details Parent model (aur uske User) mein hain.
+// Player aur Parent ka rishta (sirf youth). Parent ki details Parent model (aur uske User) mein hain.
 const PlayerParentSchema = new mongoose.Schema(
     {
         parentId: { type: mongoose.Schema.Types.ObjectId, ref: "Parent", required: true },
@@ -20,7 +23,7 @@ const PlayerParentSchema = new mongoose.Schema(
 
 const PlayerSchema = new mongoose.Schema(
     {
-        // Player ka User (role: "player"): naam, DOB, gender, ID, mobile wahan hain
+        // Player ka User (role: "seniorPlayer" ya "youthPlayer")
         userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, unique: true },
 
         // ---- Club / team ----
@@ -29,17 +32,17 @@ const PlayerSchema = new mongoose.Schema(
         teamId: { type: mongoose.Schema.Types.ObjectId, ref: "Team", default: null },
         season: { type: String, trim: true, default: "" }, // "2026 / 2027"
 
-        // youth = parent ke under (parent zaroori), senior = adult
+        // youth = parent ke under (parent zaroori), senior = khud login, parent nahi
         playerType: { type: String, enum: PLAYER_TYPES, default: "youth" },
 
         // ---- Shirt ----
         shirtSize: { type: String, enum: [...SHIRT_SIZES, ""], default: "" },
-        shirtNumber: { type: Number, min: 0, default: null },
+        shirtNumber: { type: Number, min: 0, default: null }, // 145 jaisa bhi ho sakta hai
 
-         // Upload ki hui file ka path, jaise club ka logo
+        // ---- Photo / ID / passport attachment (IBBA ke liye), S3 URL jaise club logo ----
         idDocument: { type: String, default: "" },
 
-        // ---- Parents / guardians (ek se zyada ho sakte hain) ----
+        // ---- Parents / guardians (sirf youth, ek se zyada ho sakte hain) ----
         parents: { type: [PlayerParentSchema], default: [] },
 
         // ---- Registration status ----

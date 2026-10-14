@@ -17,12 +17,12 @@ const UserSchema = new mongoose.Schema(
         gender: { type: String, enum: ["", "boys", "girls"], default: "" },
         idNumber: { type: String, trim: true, default: "" }, // Israeli ID (Teudat Zehut)
 
-        // Login isi se hota hai. Player (bachche) ka mobile nahi hota, isliye optional.
+        // Login isi se hota hai. Youth player (bachche) ka mobile nahi hota, isliye optional.
         // Bina mobile wala user login nahi kar sakta.
         countryCode: { type: String, default: "+972" },
         mobileNumber: { type: String, trim: true, default: "" },
 
-        // superAdmin | clubAdmin | coach | staff | player | seniorPlayer | youthPlayer | parent
+        // superAdmin | clubAdmin | coach | staff | seniorPlayer | youthPlayer | parent
         role: { type: String, enum: Object.values(ROLES), default: ROLES.PARENT },
 
         // OTP
@@ -38,7 +38,7 @@ const UserSchema = new mongoose.Schema(
     { timestamps: true }
 );
 
-// Same country code + mobile se do account nahi. Khaali mobile (bachche) pe check nahi.
+// Same country code + mobile se do account nahi. Khaali mobile pe check nahi.
 UserSchema.index(
     { countryCode: 1, mobileNumber: 1 },
     { unique: true, partialFilterExpression: { mobileNumber: { $type: "string", $gt: "" } } }

@@ -12,9 +12,14 @@ const { isValidId, cleanMobile, escapeRegex, getPagination } = require("../../he
 const { validatePersonInput } = require("../../helpers/userHelper");
 const { upload_files, deleteFiles } = require("../../../utils/s3");
 
-// Player ka data do jagah:
-//   User   (role: "player") -> firstname, lastname, birthDate, gender, idNumber, mobile, email
-//   Player                  -> club, team, season, playerType, shirt, parents, status
+// Player do tarah ke (playerType):
+//   senior -> User role "seniorPlayer": mobile zaroori (khud login), koi parent nahi
+//   youth  -> User role "youthPlayer":  kam se kam ek parent zaroori, mobile optional
+// Data do jagah:
+//   User   -> firstname, lastname, birthDate, gender, idNumber, mobile, email
+//   Player -> club, team, season, playerType, shirt, idDocument, parents (youth), status
+
+const roleForType = (playerType) => (playerType === "senior" ? ROLES.SENIOR_PLAYER : ROLES.YOUTH_PLAYER);
 
 // Jin statuses wale players team mein jagah lete hain (shirt number + capacity)
 const ROSTER_STATUSES = ["active", "waitlisted"];
@@ -107,7 +112,7 @@ const ageFrom = (birthDate) => {
  * User wali fields (naam, DOB, gender, ID, mobile, email).
  * partial = update: sirf bheje gaye fields check honge.
  */
-const validatePersonFields = (body, partial = false) => {
+const validatePersonFields = (body, partial = false, playerType = "youth") => {
     const values = {};
     const has = (key) => body[key] !== undefined;
 
@@ -139,10 +144,14 @@ const validatePersonFields = (body, partial = false) => {
         values.email = String(body.email || "").trim().toLowerCase();
         if (values.email && !validator.isEmail(values.email)) return { status: 400, message: "Please enter a valid email." };
     }
-    // Mobile optional (bachche ka nahi hota). Diya ho toh sahi hona chahiye.
-    if (has("mobileNumber") || has("countryCode")) {
+    // Senior: mobile zaroori (khud login karta hai). Youth: optional, diya ho toh sahi ho.
+    const mobileRequired = playerType === "senior";
+    if ((mobileRequired && !partial) || has("mobileNumber") || has("countryCode")) {
         values.countryCode = String(body.countryCode || "+972").trim();
         values.mobileNumber = cleanMobile(body.mobileNumber);
+        if (mobileRequired && !values.mobileNumber) {
+            return { status: 400, message: "Mobile number is required for a senior player." };
+        }
         if (values.mobileNumber && values.mobileNumber.length < 7) {
             return { status: 400, message: "Valid mobile number is required." };
         }
@@ -388,9 +397,11 @@ const formatPlayer = (player) => {
  * JSON ya multipart/form-data (file ke saath). Multipart mein parents JSON string mein bhejo.
  * idDocument (file, optional): JPG / PNG / PDF, max 5MB
  * body: {
+ *   playerType: "youth" (default) | "senior"
  *   firstname, lastname, birthDate, gender, idNumber?, email?, countryCode?, mobileNumber?,   -> User
- *   clubId (sirf superAdmin), teamId?, season?, playerType?, shirtSize?, shirtNumber?, status?, -> Player
- *   parents: [{ firstname, lastname, countryCode, mobileNumber, email?, relation?, isPrimary? }]
+ *     (senior ke liye mobileNumber zaroori)
+ *   clubId (sirf superAdmin), teamId?, season?, shirtSize?, shirtNumber?, status?,            -> Player
+ *   parents (sirf youth, zaroori): [{ firstname, lastname, countryCode, mobileNumber, email?, relation?, isPrimary? }]
  * }
  */
 const createPlayer = async (req, res) => {
@@ -421,7 +432,19 @@ const createPlayer = async (req, res) => {
             });
         }
 
-        const personCheck = validatePersonFields(req.body);
+        // playerType pehle, kyunki senior ke liye mobile zaroori hai aur parent nahi
+        const playerType = String(req.body.playerType || "youth").toLowerCase();
+        if (!PLAYER_TYPES.includes(playerType)) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "Player type must be youth or senior.",
+                message_desc: "Player type must be youth or senior.",
+                data: {},
+            });
+        }
+
+        const personCheck = validatePersonFields(req.body, false, playerType);
         if (personCheck.message) {
             return res.status(personCheck.status).json({
                 error: true,
@@ -445,7 +468,7 @@ const createPlayer = async (req, res) => {
         }
         const values = playerCheck.values;
         values.status = values.status || "active";
-        values.playerType = values.playerType || "youth";
+        values.playerType = playerType;
 
         // clubAdmin apne club mein, superAdmin body se club chunega
         const clubId = req.user.role === ROLES.CLUB_ADMIN ? String(req.clubId) : String(req.body.clubId || "").trim();
@@ -496,9 +519,18 @@ const createPlayer = async (req, res) => {
             });
         }
 
-        // Youth player ke liye kam se kam ek parent zaroori
+        // Senior: parent nahi. Youth: kam se kam ek parent zaroori
         const rawParents = parsedParents || [];
-        if (values.playerType === "youth" && (!Array.isArray(rawParents) || rawParents.length === 0)) {
+        if (playerType === "senior" && Array.isArray(rawParents) && rawParents.length > 0) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "A senior player cannot have parents.",
+                message_desc: "A senior player cannot have parents.",
+                data: {},
+            });
+        }
+        if (playerType === "youth" && (!Array.isArray(rawParents) || rawParents.length === 0)) {
             return res.status(400).json({
                 error: true,
                 status: 400,
@@ -535,7 +567,7 @@ const createPlayer = async (req, res) => {
             }
         }
 
-        // 1. Player ka User (role: player)
+        // 1. Player ka User (senior: seniorPlayer, youth: youthPlayer)
         playerUser = await User.create({
             firstname: person.firstname,
             lastname: person.lastname,
@@ -545,7 +577,7 @@ const createPlayer = async (req, res) => {
             email: person.email || undefined,
             countryCode: person.countryCode || "+972",
             mobileNumber: person.mobileNumber || "",
-            role: ROLES.PLAYER,
+            role: roleForType(playerType),
         });
 
         // 2. Player record (khel ki details)
@@ -586,7 +618,7 @@ const createPlayer = async (req, res) => {
 };
 
 /**
- * GET /api/user/players?clubId=&teamId=&status=&gender=&search=&page=1&limit=10   (superAdmin ya clubAdmin)
+ * GET /api/user/players?clubId=&teamId=&status=&gender=&playerType=&search=&page=1&limit=10   (superAdmin ya clubAdmin)
  * search: naam ya ID number.  teamId=none: jin players ki koi team nahi
  */
 const listPlayers = async (req, res) => {
@@ -596,6 +628,7 @@ const listPlayers = async (req, res) => {
         const teamId = String(req.query.teamId || "").trim();
         const status = String(req.query.status || "").trim().toLowerCase();
         const gender = String(req.query.gender || "").trim().toLowerCase();
+        const playerType = String(req.query.playerType || "").trim().toLowerCase();
         const { page, limit, skip } = getPagination(req.query);
 
         const filter = {};
@@ -628,10 +661,11 @@ const listPlayers = async (req, res) => {
         else if (teamId && isValidId(teamId)) filter.teamId = teamId;
 
         if (status && PLAYER_STATUSES.includes(status)) filter.status = status;
+        if (playerType && PLAYER_TYPES.includes(playerType)) filter.playerType = playerType;
 
         // Naam / ID / gender User mein hain, isliye pehle matching player users
         if (search || ["boys", "girls"].includes(gender)) {
-            const userFilter = { role: ROLES.PLAYER };
+            const userFilter = { role: { $in: [ROLES.SENIOR_PLAYER, ROLES.YOUTH_PLAYER] } };
             if (["boys", "girls"].includes(gender)) userFilter.gender = gender;
             if (search) {
                 const rx = new RegExp(escapeRegex(search), "i");
@@ -719,6 +753,7 @@ const getPlayer = async (req, res) => {
  * PUT /api/user/players/:id/update   (superAdmin ya clubAdmin, :id = Player ki _id)
  * body: jo badalna hai wahi. teamId: "" = team se hatana.
  * idDocument (file) = nayi file. removeIdDocument=true = file hatana.
+ * playerType badla: senior -> parents hat jaate hain (mobile zaroori), youth -> parents bhejna zaroori.
  * parents bheja toh poori list replace (jo parent hat gaya, uska bachcha na bacha toh uska account bhi hatega).
  */
 const updatePlayer = async (req, res) => {
@@ -781,7 +816,22 @@ const updatePlayer = async (req, res) => {
             });
         }
 
-        const personCheck = validatePersonFields(req.body, true);
+        // Naya playerType (bheja ho toh), warna purana
+        let newType = player.playerType || "youth";
+        if (req.body.playerType !== undefined) {
+            newType = String(req.body.playerType).toLowerCase();
+            if (!PLAYER_TYPES.includes(newType)) {
+                return res.status(400).json({
+                    error: true,
+                    status: 400,
+                    message: "Player type must be youth or senior.",
+                    message_desc: "Player type must be youth or senior.",
+                    data: {},
+                });
+            }
+        }
+
+        const personCheck = validatePersonFields(req.body, true, newType);
         if (personCheck.message) {
             return res.status(personCheck.status).json({
                 error: true,
@@ -804,6 +854,18 @@ const updatePlayer = async (req, res) => {
             });
         }
         const values = playerCheck.values;
+        values.playerType = newType;
+
+        // Senior ban raha hai toh mobile hona chahiye (body mein ya pehle se)
+        if (newType === "senior" && !(person.mobileNumber || user.mobileNumber)) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "Mobile number is required for a senior player.",
+                message_desc: "Mobile number is required for a senior player.",
+                data: {},
+            });
+        }
 
         const duplicate = await findDuplicate({
             countryCode: person.countryCode || user.countryCode,
@@ -854,11 +916,31 @@ const updatePlayer = async (req, res) => {
             });
         }
 
-        // Parents replace
+        // Parents: senior ke liye hamesha khaali, youth ke liye bheje toh replace
         let removedParentIds = [];
-        if (parsedParents !== undefined) {
-            const playerType = values.playerType || player.playerType;
-            if (playerType === "youth" && (!Array.isArray(parsedParents) || parsedParents.length === 0)) {
+        if (newType === "senior") {
+            if (Array.isArray(parsedParents) && parsedParents.length > 0) {
+                return res.status(400).json({
+                    error: true,
+                    status: 400,
+                    message: "A senior player cannot have parents.",
+                    message_desc: "A senior player cannot have parents.",
+                    data: {},
+                });
+            }
+            removedParentIds = player.parents.map((link) => link.parentId);
+            player.parents = [];
+        } else if (parsedParents === undefined && player.playerType === "senior") {
+            // Senior se youth ban raha hai lekin parents nahi bheje
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "At least one parent or guardian is required for a youth player.",
+                message_desc: "At least one parent or guardian is required for a youth player.",
+                data: {},
+            });
+        } else if (parsedParents !== undefined) {
+            if (!Array.isArray(parsedParents) || parsedParents.length === 0) {
                 return res.status(400).json({
                     error: true,
                     status: 400,
@@ -909,9 +991,10 @@ const updatePlayer = async (req, res) => {
             docChanged = true;
         }
 
-        // User mein personal details
+        // User mein personal details + role (playerType ke hisaab se)
         if (person.email !== undefined) person.email = person.email || undefined;
         Object.assign(user, person);
+        user.role = roleForType(newType);
 
         // Player mein khel ki details
         Object.assign(player, values);
