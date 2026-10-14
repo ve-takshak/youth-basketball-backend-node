@@ -31,7 +31,7 @@ const {
     updateTeam,
     deleteTeam,
 } = require("../app/controllers/api/teamController");
-const { createPlayer, listPlayers, getPlayer, updatePlayer, deletePlayer, listShirtSizes, listShirtNumbers, listOtherTeamPlayers } = require("../app/controllers/api/Playercontroller");
+const { createPlayer, listPlayers, getPlayer, updatePlayer, deletePlayer, listShirtSizes, listShirtNumbers, listOtherTeamPlayers, assignPlayerToTeam, removePlayerFromTeam, listUnassignedPlayers } = require("../app/controllers/api/Playercontroller");
 
 router.get("/test", (req, res) => res.send("API working"));
 
@@ -83,11 +83,15 @@ router.delete("/user/teams/:id/delete", superAdminOrClubAdminAuthentication, del
 router.post("/user/players/create", superAdminOrClubAdminAuthentication, createPlayer);
 router.get("/user/players/shirt-sizes", listShirtSizes);
 router.get("/user/players", superAdminOrClubAdminAuthentication, listPlayers);
+router.get("/user/players/unassigned", superAdminOrClubAdminAuthentication, listUnassignedPlayers);
 router.get("/user/players/:id", superAdminOrClubAdminAuthentication, getPlayer);
 router.put("/user/players/:id/update", superAdminOrClubAdminAuthentication, updatePlayer);
 router.delete("/user/players/:id/delete", superAdminOrClubAdminAuthentication, deletePlayer);
 router.get("/user/teams/:id/shirt-numbers", superAdminOrClubAdminAuthentication, listShirtNumbers);
 router.get("/user/teams/:id/other-players", superAdminOrClubAdminAuthentication, listOtherTeamPlayers);
 
+// 2. Routes (baaki team/player routes ke saath):
+router.put("/user/teams/:id/players/assign", superAdminOrClubAdminAuthentication, assignPlayerToTeam);
+router.put("/user/teams/:id/players/:playerId/remove", superAdminOrClubAdminAuthentication, removePlayerFromTeam);
 
 module.exports = router;

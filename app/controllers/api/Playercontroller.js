@@ -320,8 +320,8 @@ const resolveParents = async (rawParents, clubId, createdBy, created) => {
 
 // Fail hone pe is request mein bane naye Parent/User hata dena
 const rollbackCreated = async (created) => {
-    if (created.parents.length) await Parent.deleteMany({ _id: { $in: created.parents } }).catch(() => {});
-    if (created.users.length) await User.deleteMany({ _id: { $in: created.users } }).catch(() => {});
+    if (created.parents.length) await Parent.deleteMany({ _id: { $in: created.parents } }).catch(() => { });
+    if (created.users.length) await User.deleteMany({ _id: { $in: created.users } }).catch(() => { });
 };
 
 // Jin parents ka ab koi bachcha nahi bacha, unka Parent + User hata dena
@@ -603,7 +603,7 @@ const createPlayer = async (req, res) => {
         });
     } catch (e) {
         // Adhoora data na bache (S3 file bhi)
-        if (playerUser) await User.findByIdAndDelete(playerUser._id).catch(() => {});
+        if (playerUser) await User.findByIdAndDelete(playerUser._id).catch(() => { });
         await rollbackCreated(created);
         if (uploadedDoc) await removeIdDocument(uploadedDoc);
         console.error("Create player error:", e);
@@ -701,6 +701,92 @@ const listPlayers = async (req, res) => {
         });
     }
 };
+
+
+/**
+ * GET /api/user/players/unassigned?clubId=&status=&playerType=&gender=&search=&page=1&limit=10   (superAdmin ya clubAdmin)
+ * Wo players jo KISI bhi team mein nahi hain (teamId: null).
+ * clubAdmin: sirf apne club ke. superAdmin: saare clubs ke (ya clubId se ek club).
+ */
+const listUnassignedPlayers = async (req, res) => {
+    try {
+        const search = String(req.query.search || "").trim();
+        const clubId = String(req.query.clubId || "").trim();
+        const status = String(req.query.status || "").trim().toLowerCase();
+        const gender = String(req.query.gender || "").trim().toLowerCase();
+        const playerType = String(req.query.playerType || "").trim().toLowerCase();
+        const { page, limit, skip } = getPagination(req.query);
+
+        // Sirf bina team wale
+        const filter = { teamId: null };
+
+        if (req.user.role === ROLES.CLUB_ADMIN) {
+            if (!req.clubId) {
+                return res.status(403).json({
+                    error: true,
+                    status: 403,
+                    message: "Your account is not linked to any club.",
+                    message_desc: "Your account is not linked to any club.",
+                    data: {},
+                });
+            }
+            filter.clubId = req.clubId;
+        } else if (clubId) {
+            if (!isValidId(clubId)) {
+                return res.status(400).json({
+                    error: true,
+                    status: 400,
+                    message: "Invalid club id.",
+                    message_desc: "Invalid club id.",
+                    data: {},
+                });
+            }
+            filter.clubId = clubId;
+        }
+
+        if (status && PLAYER_STATUSES.includes(status)) filter.status = status;
+        if (playerType && PLAYER_TYPES.includes(playerType)) filter.playerType = playerType;
+
+        // Naam / ID / gender User mein hain
+        if (search || ["boys", "girls"].includes(gender)) {
+            const userFilter = { role: { $in: [ROLES.SENIOR_PLAYER, ROLES.YOUTH_PLAYER] } };
+            if (["boys", "girls"].includes(gender)) userFilter.gender = gender;
+            if (search) {
+                const rx = new RegExp(escapeRegex(search), "i");
+                userFilter.$or = [{ firstname: rx }, { lastname: rx }, { idNumber: rx }];
+            }
+            const users = await User.find(userFilter).select("_id");
+            filter.userId = { $in: users.map((u) => u._id) };
+        }
+
+        const [players, total] = await Promise.all([
+            populatePlayer(Player.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit)),
+            Player.countDocuments(filter),
+        ]);
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Unassigned players fetched successfully.",
+            message_desc: "Unassigned players fetched successfully.",
+            data: {
+                players: players.map(formatPlayer),
+                pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
+            },
+        });
+    } catch (e) {
+        console.error("List unassigned players error:", e);
+        return res.status(500).json({
+            error: true,
+            status: 500,
+            message: "Something went wrong.",
+            message_desc: e.message,
+            data: {},
+        });
+    }
+};
+
+
 
 /**
  * GET /api/user/players/:id   (superAdmin ya clubAdmin, :id = Player ki _id)
@@ -1208,7 +1294,7 @@ const listOtherTeamPlayers = async (req, res) => {
         const status = String(req.query.status || "").trim().toLowerCase();
         const playerType = String(req.query.playerType || "").trim().toLowerCase();
         const { page, limit, skip } = getPagination(req.query);
- 
+
         if (!isValidId(id)) {
             return res.status(400).json({
                 error: true,
@@ -1218,7 +1304,7 @@ const listOtherTeamPlayers = async (req, res) => {
                 data: {},
             });
         }
- 
+
         const team = await Team.findById(id);
         if (!team || !canAccess(req, team.clubId)) {
             return res.status(404).json({
@@ -1229,10 +1315,10 @@ const listOtherTeamPlayers = async (req, res) => {
                 data: {},
             });
         }
- 
+
         // Usi club ke players, is team ke chhod ke
         const filter = { clubId: team.clubId, teamId: { $ne: team._id } };
- 
+
         if (fromTeamId === "none") {
             filter.teamId = null;
         } else if (fromTeamId) {
@@ -1247,10 +1333,10 @@ const listOtherTeamPlayers = async (req, res) => {
             }
             filter.teamId = fromTeamId;
         }
- 
+
         if (status && PLAYER_STATUSES.includes(status)) filter.status = status;
         if (playerType && PLAYER_TYPES.includes(playerType)) filter.playerType = playerType;
- 
+
         // Naam / ID User mein hain
         if (search) {
             const rx = new RegExp(escapeRegex(search), "i");
@@ -1260,12 +1346,12 @@ const listOtherTeamPlayers = async (req, res) => {
             }).select("_id");
             filter.userId = { $in: users.map((u) => u._id) };
         }
- 
+
         const [players, total] = await Promise.all([
             populatePlayer(Player.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit)),
             Player.countDocuments(filter),
         ]);
- 
+
         return res.status(200).json({
             error: false,
             status: 200,
@@ -1289,6 +1375,240 @@ const listOtherTeamPlayers = async (req, res) => {
     }
 };
 
-module.exports = { createPlayer, listPlayers, getPlayer, updatePlayer, deletePlayer, listShirtSizes, listShirtNumbers,
-    listOtherTeamPlayers
- };
+
+
+
+
+
+const assignPlayerToTeam = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const playerId = String(req.body.playerId || "").trim();
+
+        if (!isValidId(id)) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "Invalid team id.",
+                message_desc: "Invalid team id.",
+                data: {},
+            });
+        }
+
+        if (!isValidId(playerId)) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "Please select a valid player.",
+                message_desc: "Please select a valid player.",
+                data: {},
+            });
+        }
+
+        const team = await Team.findById(id);
+        if (!team || !canAccess(req, team.clubId)) {
+            return res.status(404).json({
+                error: true,
+                status: 404,
+                message: "Team not found.",
+                message_desc: "Team not found.",
+                data: {},
+            });
+        }
+
+        const player = await Player.findById(playerId);
+        if (!player || !canAccess(req, player.clubId)) {
+            return res.status(404).json({
+                error: true,
+                status: 404,
+                message: "Player not found.",
+                message_desc: "Player not found.",
+                data: {},
+            });
+        }
+
+        // Doosre club ka player is club ki team mein nahi ja sakta
+        if (String(player.clubId) !== String(team.clubId)) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "This player belongs to another club.",
+                message_desc: "This player belongs to another club.",
+                data: {},
+            });
+        }
+
+        if (player.teamId && String(player.teamId) === String(team._id)) {
+            return res.status(409).json({
+                error: true,
+                status: 409,
+                message: "Player is already in this team.",
+                message_desc: "Player is already in this team.",
+                data: {},
+            });
+        }
+
+        // Shirt number: bheja toh naya, warna purana
+        let shirtNumber = player.shirtNumber;
+        if (req.body.shirtNumber !== undefined) {
+            if (req.body.shirtNumber === null || req.body.shirtNumber === "") {
+                shirtNumber = null;
+            } else {
+                const num = Number(req.body.shirtNumber);
+                if (!Number.isInteger(num) || num < 0) {
+                    return res.status(400).json({
+                        error: true,
+                        status: 400,
+                        message: "Shirt number must be a whole number (0 or more).",
+                        message_desc: "Shirt number must be a whole number (0 or more).",
+                        data: {},
+                    });
+                }
+                shirtNumber = num;
+            }
+        }
+
+        // Status: bheja toh naya, warna purana
+        let status = player.status;
+        if (req.body.status !== undefined) {
+            status = String(req.body.status).toLowerCase();
+            if (!PLAYER_STATUSES.includes(status)) {
+                return res.status(400).json({
+                    error: true,
+                    status: 400,
+                    message: `Status must be one of: ${PLAYER_STATUSES.join(", ")}.`,
+                    message_desc: `Status must be one of: ${PLAYER_STATUSES.join(", ")}.`,
+                    data: {},
+                });
+            }
+        }
+
+        // Is team mein shirt number free hai? Capacity bachi hai?
+        const ruleError = await checkTeamRules({ team, shirtNumber, status, excludePlayerId: player._id });
+        if (ruleError) {
+            return res.status(ruleError.status).json({
+                error: true,
+                status: ruleError.status,
+                message: ruleError.message,
+                message_desc: ruleError.message,
+                data: {},
+            });
+        }
+
+        player.teamId = team._id;
+        player.shirtNumber = shirtNumber;
+        player.status = status;
+        if (!player.season) player.season = team.season || "";
+        await player.save();
+
+        const saved = await populatePlayer(Player.findById(player._id));
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Player added to team successfully.",
+            message_desc: "Player added to team successfully.",
+            data: formatPlayer(saved),
+        });
+    } catch (e) {
+        console.error("Assign player to team error:", e);
+        return res.status(500).json({
+            error: true,
+            status: 500,
+            message: "Something went wrong.",
+            message_desc: e.message,
+            data: {},
+        });
+    }
+};
+
+
+const removePlayerFromTeam = async (req, res) => {
+    try {
+        const { id, playerId } = req.params;
+
+        if (!isValidId(id)) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "Invalid team id.",
+                message_desc: "Invalid team id.",
+                data: {},
+            });
+        }
+
+        if (!isValidId(playerId)) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "Invalid player id.",
+                message_desc: "Invalid player id.",
+                data: {},
+            });
+        }
+
+        const team = await Team.findById(id);
+        if (!team || !canAccess(req, team.clubId)) {
+            return res.status(404).json({
+                error: true,
+                status: 404,
+                message: "Team not found.",
+                message_desc: "Team not found.",
+                data: {},
+            });
+        }
+
+        const player = await Player.findById(playerId);
+        if (!player || !canAccess(req, player.clubId)) {
+            return res.status(404).json({
+                error: true,
+                status: 404,
+                message: "Player not found.",
+                message_desc: "Player not found.",
+                data: {},
+            });
+        }
+
+        if (!player.teamId || String(player.teamId) !== String(team._id)) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "Player is not in this team.",
+                message_desc: "Player is not in this team.",
+                data: {},
+            });
+        }
+
+        player.teamId = null;
+        player.shirtNumber = null; // number is team ka tha, ab free
+        await player.save();
+
+        const saved = await populatePlayer(Player.findById(player._id));
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Player removed from team successfully.",
+            message_desc: "Player removed from team successfully.",
+            data: formatPlayer(saved),
+        });
+    } catch (e) {
+        console.error("Remove player from team error:", e);
+        return res.status(500).json({
+            error: true,
+            status: 500,
+            message: "Something went wrong.",
+            message_desc: e.message,
+            data: {},
+        });
+    }
+};
+
+
+
+
+
+module.exports = {
+    createPlayer, listPlayers, getPlayer, updatePlayer, deletePlayer, listShirtSizes, listShirtNumbers,
+    listOtherTeamPlayers, assignPlayerToTeam, removePlayerFromTeam, listUnassignedPlayers
+};
