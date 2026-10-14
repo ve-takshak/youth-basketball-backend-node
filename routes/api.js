@@ -91,7 +91,7 @@ router.get("/user/teams/:id/shirt-numbers", superAdminOrClubAdminAuthentication,
 router.get("/user/teams/:id/other-players", superAdminOrClubAdminAuthentication, listOtherTeamPlayers);
 
 // 2. Routes (baaki team/player routes ke saath):
-router.put("/user/teams/:id/players/assign", superAdminOrClubAdminAuthentication, assignPlayerToTeam);
+router.post("/user/players/assign", superAdminOrClubAdminAuthentication, assignPlayerToTeam);
 router.put("/user/teams/:id/players/:playerId/remove", superAdminOrClubAdminAuthentication, removePlayerFromTeam);
 
 module.exports = router;

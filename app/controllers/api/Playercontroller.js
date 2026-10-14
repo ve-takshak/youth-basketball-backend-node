@@ -1379,33 +1379,36 @@ const listOtherTeamPlayers = async (req, res) => {
 
 
 
-
 const assignPlayerToTeam = async (req, res) => {
     try {
-        const { id } = req.params;
-        const playerId = String(req.body.playerId || "").trim();
+        const teamId = String(req.body.teamId || "").trim();
 
-        if (!isValidId(id)) {
+        if (!isValidId(teamId)) {
             return res.status(400).json({
                 error: true,
                 status: 400,
-                message: "Invalid team id.",
-                message_desc: "Invalid team id.",
+                message: "Please select a valid team.",
+                message_desc: "Please select a valid team.",
                 data: {},
             });
         }
 
-        if (!isValidId(playerId)) {
+        // Khaali aur same id do baar aayi toh hata do
+        const playerIds = Array.isArray(req.body.playerIds)
+            ? [...new Set(req.body.playerIds.map((id) => String(id || "").trim()).filter(Boolean))]
+            : [];
+
+        if (playerIds.length === 0) {
             return res.status(400).json({
                 error: true,
                 status: 400,
-                message: "Please select a valid player.",
-                message_desc: "Please select a valid player.",
+                message: "Please select at least one player.",
+                message_desc: "Please select at least one player.",
                 data: {},
             });
         }
 
-        const team = await Team.findById(id);
+        const team = await Team.findById(teamId);
         if (!team || !canAccess(req, team.clubId)) {
             return res.status(404).json({
                 error: true,
@@ -1416,99 +1419,80 @@ const assignPlayerToTeam = async (req, res) => {
             });
         }
 
-        const player = await Player.findById(playerId);
-        if (!player || !canAccess(req, player.clubId)) {
-            return res.status(404).json({
-                error: true,
-                status: 404,
-                message: "Player not found.",
-                message_desc: "Player not found.",
-                data: {},
+        const assigned = [];
+        const failed = [];
+
+        // Ek ek karke, taaki pichhle player ka number / capacity agle ke check mein gine
+        for (const playerId of playerIds) {
+            const fail = (message) => failed.push({ playerId, message });
+
+            if (!isValidId(playerId)) {
+                fail("Invalid player id.");
+                continue;
+            }
+
+            const player = await Player.findById(playerId);
+            if (!player || !canAccess(req, player.clubId)) {
+                fail("Player not found.");
+                continue;
+            }
+
+            if (String(player.clubId) !== String(team.clubId)) {
+                fail("This player belongs to another club.");
+                continue;
+            }
+
+            if (player.teamId && String(player.teamId) === String(team._id)) {
+                fail("Player is already in this team.");
+                continue;
+            }
+
+            // Is team mein player ka shirt number free hai? Capacity bachi hai?
+            const ruleError = await checkTeamRules({
+                team,
+                shirtNumber: player.shirtNumber,
+                status: player.status,
+                excludePlayerId: player._id,
             });
+            if (ruleError) {
+                fail(ruleError.message);
+                continue;
+            }
+
+            player.teamId = team._id;
+            if (!player.season) player.season = team.season || "";
+            await player.save();
+
+            const saved = await populatePlayer(Player.findById(player._id));
+            assigned.push(formatPlayer(saved));
         }
 
-        // Doosre club ka player is club ki team mein nahi ja sakta
-        if (String(player.clubId) !== String(team.clubId)) {
+        // Ek bhi assign nahi hua toh error, warna success (failed list ke saath)
+        if (assigned.length === 0) {
+            const message = failed.length === 1 ? failed[0].message : "No players were added to the team.";
             return res.status(400).json({
                 error: true,
                 status: 400,
-                message: "This player belongs to another club.",
-                message_desc: "This player belongs to another club.",
-                data: {},
+                message,
+                message_desc: message,
+                data: { assigned, failed },
             });
         }
 
-        if (player.teamId && String(player.teamId) === String(team._id)) {
-            return res.status(409).json({
-                error: true,
-                status: 409,
-                message: "Player is already in this team.",
-                message_desc: "Player is already in this team.",
-                data: {},
-            });
-        }
-
-        // Shirt number: bheja toh naya, warna purana
-        let shirtNumber = player.shirtNumber;
-        if (req.body.shirtNumber !== undefined) {
-            if (req.body.shirtNumber === null || req.body.shirtNumber === "") {
-                shirtNumber = null;
-            } else {
-                const num = Number(req.body.shirtNumber);
-                if (!Number.isInteger(num) || num < 0) {
-                    return res.status(400).json({
-                        error: true,
-                        status: 400,
-                        message: "Shirt number must be a whole number (0 or more).",
-                        message_desc: "Shirt number must be a whole number (0 or more).",
-                        data: {},
-                    });
-                }
-                shirtNumber = num;
-            }
-        }
-
-        // Status: bheja toh naya, warna purana
-        let status = player.status;
-        if (req.body.status !== undefined) {
-            status = String(req.body.status).toLowerCase();
-            if (!PLAYER_STATUSES.includes(status)) {
-                return res.status(400).json({
-                    error: true,
-                    status: 400,
-                    message: `Status must be one of: ${PLAYER_STATUSES.join(", ")}.`,
-                    message_desc: `Status must be one of: ${PLAYER_STATUSES.join(", ")}.`,
-                    data: {},
-                });
-            }
-        }
-
-        // Is team mein shirt number free hai? Capacity bachi hai?
-        const ruleError = await checkTeamRules({ team, shirtNumber, status, excludePlayerId: player._id });
-        if (ruleError) {
-            return res.status(ruleError.status).json({
-                error: true,
-                status: ruleError.status,
-                message: ruleError.message,
-                message_desc: ruleError.message,
-                data: {},
-            });
-        }
-
-        player.teamId = team._id;
-        player.shirtNumber = shirtNumber;
-        player.status = status;
-        if (!player.season) player.season = team.season || "";
-        await player.save();
-
-        const saved = await populatePlayer(Player.findById(player._id));
+        const message = failed.length
+            ? `${assigned.length} player(s) added to team, ${failed.length} failed.`
+            : `${assigned.length} player(s) added to team successfully.`;
 
         return res.status(200).json({
             error: false,
             status: 200,
-            message: "Player added to team successfully.",
-            message_desc: "Player added to team successfully.",
-            data: formatPlayer(saved),
+            message,
+            message_desc: message,
+            data: {
+                team: { _id: team._id, name: team.name },
+                assigned,
+                failed,
+            },
         });
     } catch (e) {
         console.error("Assign player to team error:", e);
@@ -1521,7 +1505,6 @@ const assignPlayerToTeam = async (req, res) => {
         });
     }
 };
-
 
 const removePlayerFromTeam = async (req, res) => {
     try {
