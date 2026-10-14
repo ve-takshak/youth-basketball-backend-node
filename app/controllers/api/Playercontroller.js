@@ -1198,4 +1198,97 @@ const listShirtNumbers = async (req, res) => {
     }
 };
 
-module.exports = { createPlayer, listPlayers, getPlayer, updatePlayer, deletePlayer, listShirtSizes, listShirtNumbers };
+
+
+const listOtherTeamPlayers = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const search = String(req.query.search || "").trim();
+        const fromTeamId = String(req.query.fromTeamId || "").trim();
+        const status = String(req.query.status || "").trim().toLowerCase();
+        const playerType = String(req.query.playerType || "").trim().toLowerCase();
+        const { page, limit, skip } = getPagination(req.query);
+ 
+        if (!isValidId(id)) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "Invalid team id.",
+                message_desc: "Invalid team id.",
+                data: {},
+            });
+        }
+ 
+        const team = await Team.findById(id);
+        if (!team || !canAccess(req, team.clubId)) {
+            return res.status(404).json({
+                error: true,
+                status: 404,
+                message: "Team not found.",
+                message_desc: "Team not found.",
+                data: {},
+            });
+        }
+ 
+        // Usi club ke players, is team ke chhod ke
+        const filter = { clubId: team.clubId, teamId: { $ne: team._id } };
+ 
+        if (fromTeamId === "none") {
+            filter.teamId = null;
+        } else if (fromTeamId) {
+            if (!isValidId(fromTeamId) || String(fromTeamId) === String(team._id)) {
+                return res.status(400).json({
+                    error: true,
+                    status: 400,
+                    message: "Invalid fromTeamId.",
+                    message_desc: "Invalid fromTeamId.",
+                    data: {},
+                });
+            }
+            filter.teamId = fromTeamId;
+        }
+ 
+        if (status && PLAYER_STATUSES.includes(status)) filter.status = status;
+        if (playerType && PLAYER_TYPES.includes(playerType)) filter.playerType = playerType;
+ 
+        // Naam / ID User mein hain
+        if (search) {
+            const rx = new RegExp(escapeRegex(search), "i");
+            const users = await User.find({
+                role: { $in: [ROLES.SENIOR_PLAYER, ROLES.YOUTH_PLAYER] },
+                $or: [{ firstname: rx }, { lastname: rx }, { idNumber: rx }],
+            }).select("_id");
+            filter.userId = { $in: users.map((u) => u._id) };
+        }
+ 
+        const [players, total] = await Promise.all([
+            populatePlayer(Player.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit)),
+            Player.countDocuments(filter),
+        ]);
+ 
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Players fetched successfully.",
+            message_desc: "Players fetched successfully.",
+            data: {
+                team: { _id: team._id, name: team.name },
+                players: players.map(formatPlayer),
+                pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
+            },
+        });
+    } catch (e) {
+        console.error("List other team players error:", e);
+        return res.status(500).json({
+            error: true,
+            status: 500,
+            message: "Something went wrong.",
+            message_desc: e.message,
+            data: {},
+        });
+    }
+};
+
+module.exports = { createPlayer, listPlayers, getPlayer, updatePlayer, deletePlayer, listShirtSizes, listShirtNumbers,
+    listOtherTeamPlayers
+ };
