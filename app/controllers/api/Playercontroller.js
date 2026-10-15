@@ -320,8 +320,8 @@ const resolveParents = async (rawParents, clubId, createdBy, created) => {
 
 // Fail hone pe is request mein bane naye Parent/User hata dena
 const rollbackCreated = async (created) => {
-    if (created.parents.length) await Parent.deleteMany({ _id: { $in: created.parents } }).catch(() => { });
-    if (created.users.length) await User.deleteMany({ _id: { $in: created.users } }).catch(() => { });
+    if (created.parents.length) await Parent.deleteMany({ _id: { $in: created.parents } }).catch(() => {});
+    if (created.users.length) await User.deleteMany({ _id: { $in: created.users } }).catch(() => {});
 };
 
 // Jin parents ka ab koi bachcha nahi bacha, unka Parent + User hata dena
@@ -338,7 +338,16 @@ const populatePlayer = (query) =>
     query
         .populate("userId", "firstname lastname birthDate gender idNumber email countryCode mobileNumber is_verify")
         .populate("clubId", "name")
-        .populate("teamId", "name season")
+        // Team ke saath uska coach (Coach -> User) bhi
+        .populate({
+            path: "teamId",
+            select: "name season coachId",
+            populate: {
+                path: "coachId",
+                select: "userId",
+                populate: { path: "userId", select: "firstname lastname email countryCode mobileNumber" },
+            },
+        })
         .populate({
             path: "parents.parentId",
             select: "userId",
@@ -369,6 +378,19 @@ const formatPlayer = (player) => {
         season: player.season || "",
         club: player.clubId && player.clubId._id ? { _id: player.clubId._id, name: player.clubId.name } : null,
         team: player.teamId && player.teamId._id ? { _id: player.teamId._id, name: player.teamId.name } : null,
+        // Team ka coach (team nahi ya coach assign nahi toh null)
+        coach:
+            player.teamId && player.teamId.coachId && player.teamId.coachId._id
+                ? {
+                      _id: player.teamId.coachId._id,
+                      userId: player.teamId.coachId.userId?._id || null,
+                      firstname: player.teamId.coachId.userId?.firstname || "",
+                      lastname: player.teamId.coachId.userId?.lastname || "",
+                      email: player.teamId.coachId.userId?.email || "",
+                      countryCode: player.teamId.coachId.userId?.countryCode || "",
+                      mobileNumber: player.teamId.coachId.userId?.mobileNumber || "",
+                  }
+                : null,
         parents: (player.parents || [])
             .filter((link) => link.parentId)
             .map((link) => ({
@@ -603,7 +625,7 @@ const createPlayer = async (req, res) => {
         });
     } catch (e) {
         // Adhoora data na bache (S3 file bhi)
-        if (playerUser) await User.findByIdAndDelete(playerUser._id).catch(() => { });
+        if (playerUser) await User.findByIdAndDelete(playerUser._id).catch(() => {});
         await rollbackCreated(created);
         if (uploadedDoc) await removeIdDocument(uploadedDoc);
         console.error("Create player error:", e);
@@ -702,7 +724,6 @@ const listPlayers = async (req, res) => {
     }
 };
 
-
 /**
  * GET /api/user/players/unassigned?clubId=&status=&playerType=&gender=&search=&page=1&limit=10   (superAdmin ya clubAdmin)
  * Wo players jo KISI bhi team mein nahi hain (teamId: null).
@@ -785,8 +806,6 @@ const listUnassignedPlayers = async (req, res) => {
         });
     }
 };
-
-
 
 /**
  * GET /api/user/players/:id   (superAdmin ya clubAdmin, :id = Player ki _id)
@@ -1284,8 +1303,17 @@ const listShirtNumbers = async (req, res) => {
     }
 };
 
-
-
+/**
+ * GET /api/user/teams/:id/other-players?search=&fromTeamId=&status=&playerType=&page=1&limit=10
+ * (superAdmin ya clubAdmin)
+ *
+ * Isi team ke CLUB ke woh players jo IS team mein NAHI hain:
+ *   - doosri teams ke players
+ *   - bina team wale players (waitlist)
+ * Team page pe "doosri team se player add / move karo" ke liye.
+ *
+ * fromTeamId: sirf ek khaas team ke players (ya "none" = bina team wale)
+ */
 const listOtherTeamPlayers = async (req, res) => {
     try {
         const { id } = req.params;
@@ -1375,10 +1403,14 @@ const listOtherTeamPlayers = async (req, res) => {
     }
 };
 
-
-
-
-
+/**
+ * PUT /api/user/players/assign   (superAdmin ya clubAdmin)
+ * Pehle se bane EK YA ZYADA players ko ek team mein daalna. Naya player NAHI banta.
+ * Player bina team ka ho ya kisi doosri team mein ho, dono chalega (doosri team se move ho jayega).
+ * Har player ka purana shirt number aur status rehta hai.
+ * body: { teamId, playerIds: ["id1", "id2", "id3"] }
+ * Har player alag se check hota hai. Jo sahi hain wo assign, jinme problem hai wo "failed" mein wajah ke saath.
+ */
 const assignPlayerToTeam = async (req, res) => {
     try {
         const teamId = String(req.body.teamId || "").trim();
@@ -1506,6 +1538,11 @@ const assignPlayerToTeam = async (req, res) => {
     }
 };
 
+/**
+ * PUT /api/user/teams/:id/players/:playerId/remove   (superAdmin ya clubAdmin)
+ * Player ko team se HATANA. Player aur uska User delete NAHI hote,
+ * bas teamId null ho jaata hai (aur shirt number free). Baad mein kisi bhi team mein assign kar sakte ho.
+ */
 const removePlayerFromTeam = async (req, res) => {
     try {
         const { id, playerId } = req.params;
@@ -1587,11 +1624,16 @@ const removePlayerFromTeam = async (req, res) => {
     }
 };
 
-
-
-
-
 module.exports = {
-    createPlayer, listPlayers, getPlayer, updatePlayer, deletePlayer, listShirtSizes, listShirtNumbers,
-    listOtherTeamPlayers, assignPlayerToTeam, removePlayerFromTeam, listUnassignedPlayers
+    createPlayer,
+    listPlayers,
+    listUnassignedPlayers,
+    getPlayer,
+    updatePlayer,
+    deletePlayer,
+    listShirtSizes,
+    listShirtNumbers,
+    listOtherTeamPlayers,
+    assignPlayerToTeam,
+    removePlayerFromTeam,
 };
