@@ -32,6 +32,7 @@ const {
     deleteTeam,
 } = require("../app/controllers/api/teamController");
 const { createPlayer, listPlayers, getPlayer, updatePlayer, deletePlayer, listShirtSizes, listShirtNumbers, listOtherTeamPlayers, assignPlayerToTeam, removePlayerFromTeam, listUnassignedPlayers } = require("../app/controllers/api/Playercontroller");
+const { updateMyProfileImage, updateUserProfileImage, removeProfileImage } = require("../app/controllers/api/Profileimagecontroller");
 
 router.get("/test", (req, res) => res.send("API working"));
 
@@ -42,7 +43,11 @@ router.post("/user/verify-otp", verifyOtp);         // sab roles, token yahin mi
 router.post("/user/resend-otp", resendOtp);
 router.get("/user/profile", authentication, getProfile);
 
-
+// Apni khud ki image (koi bhi logged-in user)
+router.put("/user/profile/image", authentication, updateMyProfileImage);
+// Admin kisi player / coach ki image badle
+router.put("/user/:userId/profile-image", superAdminOrClubAdminAuthentication, updateUserProfileImage);
+router.delete("/user/:userId/profile-image", authentication, removeProfileImage);
 
 // ---------- Club ----------
 router.post("/user/createClub", superAdminAuthentication, createClub);

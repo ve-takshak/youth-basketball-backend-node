@@ -5,6 +5,26 @@ const Team = require("../../models/Team");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, escapeRegex, getPagination } = require("../../helpers/common");
 const { validatePersonInput, findDuplicateUser, applyPersonUpdates } = require("../../helpers/userHelper");
+const { deleteFiles } = require("../../../utils/s3");
+
+// Hamare bucket ka base URL, taaki sirf apni S3 files hi delete hon
+const getS3BaseUrl = () =>
+    `https://${process.env.S3_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
+
+// Coach delete pe uski profile image S3 se hatana
+const removeS3File = async (url) => {
+    if (!url) return;
+    try {
+        const baseUrl = getS3BaseUrl();
+        if (!url.startsWith(baseUrl)) return;
+        const key = url.replace(baseUrl, "");
+        const slash = key.lastIndexOf("/");
+        const result = await deleteFiles(key.slice(0, slash), key.slice(slash + 1));
+        if (result !== 1) console.warn("Failed to delete coach profile image from S3:", result);
+    } catch (err) {
+        console.warn("Failed to delete coach profile image:", err.message);
+    }
+};
 
 // Coach + uska User + Club ek flat object mein (frontend ke liye aasaan)
 const formatCoach = (record, assignedTeams = null) => ({
@@ -12,6 +32,7 @@ const formatCoach = (record, assignedTeams = null) => ({
     userId: record.userId?._id || record.userId,
     firstname: record.userId?.firstname || "",
     lastname: record.userId?.lastname || "",
+    profile_image: record.userId?.profile_image || "",
     email: record.userId?.email || "",
     countryCode: record.userId?.countryCode || "",
     mobileNumber: record.userId?.mobileNumber || "",
@@ -24,7 +45,7 @@ const formatCoach = (record, assignedTeams = null) => ({
 
 const populateCoach = (query) =>
     query
-        .populate("userId", "firstname lastname email countryCode mobileNumber birthDate is_verify")
+        .populate("userId", "firstname lastname email countryCode mobileNumber birthDate is_verify profile_image")
         .populate("clubId", "name");
 
 // clubAdmin sirf apne club ke coach ko chhu sakta hai. SuperAdmin sab ko.
@@ -176,7 +197,7 @@ const listCoaches = async (req, res) => {
             message: "Coaches fetched successfully.",
             message_desc: "Coaches fetched successfully.",
             data: {
-                coaches: records.map(formatCoach),
+                coaches: records.map((record) => formatCoach(record)),
                 pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
             },
         });
@@ -335,7 +356,7 @@ const updateCoach = async (req, res) => {
 
 /**
  * DELETE /api/user/deleteCoach/:id   (superAdmin ya clubAdmin, :id = Coach ki _id)
- * Coach record aur uska User dono hatata hai.
+ * Coach record, uska User aur uski profile image (S3) hatata hai.
  */
 const deleteCoach = async (req, res) => {
     try {
@@ -362,10 +383,14 @@ const deleteCoach = async (req, res) => {
             });
         }
 
+        const coachUser = await User.findById(record.userId).select("profile_image");
+
         await Coach.findByIdAndDelete(record._id);
         await User.findByIdAndDelete(record.userId);
         // Nullify coach assignment on any teams assigned to this coach
         await Team.updateMany({ coachId: record._id }, { $set: { coachId: null } });
+        // Profile image bhi S3 se
+        if (coachUser?.profile_image) await removeS3File(coachUser.profile_image);
 
         return res.status(200).json({
             error: false,

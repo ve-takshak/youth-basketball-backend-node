@@ -336,7 +336,7 @@ const cleanupOrphanParents = async (parentIds) => {
 
 const populatePlayer = (query) =>
     query
-        .populate("userId", "firstname lastname birthDate gender idNumber email countryCode mobileNumber is_verify")
+        .populate("userId", "firstname lastname birthDate gender idNumber email countryCode mobileNumber is_verify profile_image")
         .populate("clubId", "name")
         // Team ke saath uska coach (Coach -> User) bhi
         .populate({
@@ -345,13 +345,13 @@ const populatePlayer = (query) =>
             populate: {
                 path: "coachId",
                 select: "userId",
-                populate: { path: "userId", select: "firstname lastname email countryCode mobileNumber" },
+                populate: { path: "userId", select: "firstname lastname email countryCode mobileNumber profile_image" },
             },
         })
         .populate({
             path: "parents.parentId",
             select: "userId",
-            populate: { path: "userId", select: "firstname lastname email countryCode mobileNumber is_verify" },
+            populate: { path: "userId", select: "firstname lastname email countryCode mobileNumber is_verify profile_image" },
         });
 
 // User + Player ek flat object mein (frontend ke liye aasaan)
@@ -362,6 +362,7 @@ const formatPlayer = (player) => {
         userId: user._id || null,
         firstname: user.firstname || "",
         lastname: user.lastname || "",
+        profile_image: user.profile_image || "",
         birthDate: toDateString(user.birthDate),
         age: ageFrom(user.birthDate),
         gender: user.gender || "",
@@ -386,6 +387,7 @@ const formatPlayer = (player) => {
                       userId: player.teamId.coachId.userId?._id || null,
                       firstname: player.teamId.coachId.userId?.firstname || "",
                       lastname: player.teamId.coachId.userId?.lastname || "",
+                      profile_image: player.teamId.coachId.userId?.profile_image || "",
                       email: player.teamId.coachId.userId?.email || "",
                       countryCode: player.teamId.coachId.userId?.countryCode || "",
                       mobileNumber: player.teamId.coachId.userId?.mobileNumber || "",
@@ -398,6 +400,7 @@ const formatPlayer = (player) => {
                 userId: link.parentId.userId?._id || null,
                 firstname: link.parentId.userId?.firstname || "",
                 lastname: link.parentId.userId?.lastname || "",
+                profile_image: link.parentId.userId?.profile_image || "",
                 email: link.parentId.userId?.email || "",
                 countryCode: link.parentId.userId?.countryCode || "",
                 mobileNumber: link.parentId.userId?.mobileNumber || "",
@@ -1165,10 +1168,13 @@ const deletePlayer = async (req, res) => {
         }
 
         const parentIds = player.parents.map((link) => link.parentId);
+        const playerUser = await User.findById(player.userId).select("profile_image");
         await Player.findByIdAndDelete(player._id);
         await User.findByIdAndDelete(player.userId);
         await cleanupOrphanParents(parentIds);
         await removeIdDocument(player.idDocument);
+        // Profile image bhi S3 se (wahi S3 delete helper)
+        if (playerUser?.profile_image) await removeIdDocument(playerUser.profile_image);
 
         return res.status(200).json({
             error: false,
@@ -1261,7 +1267,7 @@ const listShirtNumbers = async (req, res) => {
         if (excludePlayerId && isValidId(excludePlayerId)) filter._id = { $ne: excludePlayerId };
 
         const players = await Player.find(filter)
-            .populate("userId", "firstname lastname")
+            .populate("userId", "firstname lastname profile_image")
             .sort({ shirtNumber: 1 });
 
         const taken = players.map((p) => ({
@@ -1269,6 +1275,7 @@ const listShirtNumbers = async (req, res) => {
             playerId: p._id,
             firstname: p.userId?.firstname || "",
             lastname: p.userId?.lastname || "",
+            profile_image: p.userId?.profile_image || "",
             status: p.status,
         }));
 
