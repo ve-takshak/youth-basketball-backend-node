@@ -46,7 +46,7 @@ router.get("/user/profile", authentication, getProfile);
 // Apni khud ki image (koi bhi logged-in user)
 router.put("/user/profile/image", authentication, updateMyProfileImage);
 // Admin kisi player / coach ki image badle
-router.put("/user/:userId/profile-image", superAdminOrClubAdminAuthentication, updateUserProfileImage);
+router.put("/user/:userId/profile-image", authentication, updateUserProfileImage);
 router.delete("/user/:userId/profile-image", authentication, removeProfileImage);
 
 // ---------- Club ----------
