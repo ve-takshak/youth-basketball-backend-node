@@ -6,6 +6,8 @@ const Club = require("../../models/Club");
 const Team = require("../../models/Team");
 const Parent = require("../../models/Parent");
 const Player = require("../../models/Player");
+const ClubAdmin = require("../../models/ClubAdmin");
+require("../../models/TeamCategory"); // getPlayer mein team.categoryId populate ke liye model register ho
 const { SHIRT_SIZES, PLAYER_STATUSES, PLAYER_TYPES, PARENT_RELATIONS } = require("../../models/Player");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, cleanMobile, escapeRegex, getPagination } = require("../../helpers/common");
@@ -334,6 +336,7 @@ const cleanupOrphanParents = async (parentIds) => {
     }
 };
 
+// List / create / update ke liye (halka populate)
 const populatePlayer = (query) =>
     query
         .populate("userId", "firstname lastname birthDate gender idNumber email countryCode mobileNumber is_verify profile_image")
@@ -410,6 +413,96 @@ const formatPlayer = (player) => {
             })),
         createdAt: player.createdAt,
         updatedAt: player.updatedAt,
+    };
+};
+
+// Sirf detail page (getPlayer) ke liye: club, team, coach ki poori details
+const populatePlayerDetail = (query) =>
+    query
+        .populate("userId", "firstname lastname birthDate gender idNumber email countryCode mobileNumber is_verify profile_image")
+        .populate("clubId", "name logo theme")
+        .populate({
+            path: "teamId",
+            select: "name season gender teamType teamCapacity status categoryId coachId",
+            populate: [
+                { path: "categoryId", select: "name" },
+                {
+                    path: "coachId",
+                    select: "userId",
+                    populate: { path: "userId", select: "firstname lastname email countryCode mobileNumber profile_image" },
+                },
+            ],
+        })
+        .populate({
+            path: "parents.parentId",
+            select: "userId",
+            populate: { path: "userId", select: "firstname lastname email countryCode mobileNumber is_verify profile_image" },
+        });
+
+// formatPlayer + club (logo, theme, primary admin) + team (category, capacity, player count)
+const formatPlayerDetail = async (player) => {
+    const base = formatPlayer(player);
+    const club = player.clubId && player.clubId._id ? player.clubId : null;
+    const team = player.teamId && player.teamId._id ? player.teamId : null;
+
+    // Club ka primary admin (sabse pehla bana hua)
+    let clubAdmin = null;
+    if (club) {
+        const admin = await ClubAdmin.findOne({ clubId: club._id })
+            .sort({ createdAt: 1 })
+            .populate("userId", "firstname lastname email countryCode mobileNumber profile_image");
+        if (admin?.userId) {
+            clubAdmin = {
+                _id: admin._id,
+                userId: admin.userId._id,
+                firstname: admin.userId.firstname || "",
+                lastname: admin.userId.lastname || "",
+                profile_image: admin.userId.profile_image || "",
+                email: admin.userId.email || "",
+                countryCode: admin.userId.countryCode || "",
+                mobileNumber: admin.userId.mobileNumber || "",
+            };
+        }
+    }
+
+    // Team mein kitne players (active + total)
+    let activePlayers = 0;
+    let totalPlayers = 0;
+    if (team) {
+        [activePlayers, totalPlayers] = await Promise.all([
+            Player.countDocuments({ teamId: team._id, status: "active" }),
+            Player.countDocuments({ teamId: team._id }),
+        ]);
+    }
+
+    return {
+        ...base,
+        club: club
+            ? {
+                  _id: club._id,
+                  name: club.name,
+                  logoUrl: fileUrlOf(club.logo),
+                  theme: club.theme || {},
+                  admin: clubAdmin,
+              }
+            : null,
+        team: team
+            ? {
+                  _id: team._id,
+                  name: team.name,
+                  season: team.season || "",
+                  gender: team.gender || "mixed",
+                  teamType: team.teamType || "league",
+                  teamCapacity: team.teamCapacity ?? 20,
+                  status: team.status || "active",
+                  category:
+                      team.categoryId && team.categoryId._id
+                          ? { _id: team.categoryId._id, name: team.categoryId.name }
+                          : null,
+                  activePlayers,
+                  totalPlayers,
+              }
+            : null,
     };
 };
 
@@ -812,6 +905,7 @@ const listUnassignedPlayers = async (req, res) => {
 
 /**
  * GET /api/user/players/:id   (superAdmin ya clubAdmin, :id = Player ki _id)
+ * Detail page ke liye: player + club (logo, theme, primary admin) + team (category, capacity, counts) + coach + parents
  */
 const getPlayer = async (req, res) => {
     try {
@@ -827,7 +921,7 @@ const getPlayer = async (req, res) => {
             });
         }
 
-        const player = await populatePlayer(Player.findById(id));
+        const player = await populatePlayerDetail(Player.findById(id));
         if (!player || !canAccess(req, player.clubId)) {
             return res.status(404).json({
                 error: true,
@@ -843,7 +937,7 @@ const getPlayer = async (req, res) => {
             status: 200,
             message: "Player fetched successfully.",
             message_desc: "Player fetched successfully.",
-            data: formatPlayer(player),
+            data: await formatPlayerDetail(player),
         });
     } catch (e) {
         console.error("Get player error:", e);
@@ -856,288 +950,6 @@ const getPlayer = async (req, res) => {
         });
     }
 };
-
-/**
- * PUT /api/user/players/:id/update   (superAdmin ya clubAdmin, :id = Player ki _id)
- * body: jo badalna hai wahi. teamId: "" = team se hatana.
- * idDocument (file) = nayi file. removeIdDocument=true = file hatana.
- * playerType badla: senior -> parents hat jaate hain (mobile zaroori), youth -> parents bhejna zaroori.
- * parents bheja toh poori list replace (jo parent hat gaya, uska bachcha na bacha toh uska account bhi hatega).
- */
-// const updatePlayer = async (req, res) => {
-//     const created = { users: [], parents: [] };
-//     let uploadedDoc = "";
-//     try {
-//         const { id } = req.params;
-
-//         if (!isValidId(id)) {
-//             return res.status(400).json({
-//                 error: true,
-//                 status: 400,
-//                 message: "Invalid player id.",
-//                 message_desc: "Invalid player id.",
-//                 data: {},
-//             });
-//         }
-
-//         const player = await Player.findById(id);
-//         if (!player || !canAccess(req, player.clubId)) {
-//             return res.status(404).json({
-//                 error: true,
-//                 status: 404,
-//                 message: "Player not found.",
-//                 message_desc: "Player not found.",
-//                 data: {},
-//             });
-//         }
-
-//         const parsedParents = parseParents(req.body.parents);
-//         if (parsedParents === null) {
-//             return res.status(400).json({
-//                 error: true,
-//                 status: 400,
-//                 message: "Parents must be valid JSON.",
-//                 message_desc: "Parents must be valid JSON.",
-//                 data: {},
-//             });
-//         }
-
-//         const docCheck = getIdDocumentFile(req);
-//         if (docCheck.error) {
-//             return res.status(400).json({
-//                 error: true,
-//                 status: 400,
-//                 message: docCheck.error,
-//                 message_desc: docCheck.error,
-//                 data: {},
-//             });
-//         }
-
-//         const user = await User.findById(player.userId);
-//         if (!user) {
-//             return res.status(404).json({
-//                 error: true,
-//                 status: 404,
-//                 message: "Player user not found.",
-//                 message_desc: "Player user not found.",
-//                 data: {},
-//             });
-//         }
-
-//         // Naya playerType (bheja ho toh), warna purana
-//         let newType = player.playerType || "youth";
-//         if (req.body.playerType !== undefined) {
-//             newType = String(req.body.playerType).toLowerCase();
-//             if (!PLAYER_TYPES.includes(newType)) {
-//                 return res.status(400).json({
-//                     error: true,
-//                     status: 400,
-//                     message: "Player type must be youth or senior.",
-//                     message_desc: "Player type must be youth or senior.",
-//                     data: {},
-//                 });
-//             }
-//         }
-
-//         const personCheck = validatePersonFields(req.body, true, newType);
-//         if (personCheck.message) {
-//             return res.status(personCheck.status).json({
-//                 error: true,
-//                 status: personCheck.status,
-//                 message: personCheck.message,
-//                 message_desc: personCheck.message,
-//                 data: {},
-//             });
-//         }
-//         const person = personCheck.values;
-
-//         const playerCheck = validatePlayerFields(req.body);
-//         if (playerCheck.message) {
-//             return res.status(playerCheck.status).json({
-//                 error: true,
-//                 status: playerCheck.status,
-//                 message: playerCheck.message,
-//                 message_desc: playerCheck.message,
-//                 data: {},
-//             });
-//         }
-//         const values = playerCheck.values;
-//         values.playerType = newType;
-
-//         // Senior ban raha hai toh mobile hona chahiye (body mein ya pehle se)
-//         if (newType === "senior" && !(person.mobileNumber || user.mobileNumber)) {
-//             return res.status(400).json({
-//                 error: true,
-//                 status: 400,
-//                 message: "Mobile number is required for a senior player.",
-//                 message_desc: "Mobile number is required for a senior player.",
-//                 data: {},
-//             });
-//         }
-
-//         const duplicate = await findDuplicate({
-//             countryCode: person.countryCode || user.countryCode,
-//             mobileNumber: person.mobileNumber,
-//             email: person.email,
-//             idNumber: person.idNumber,
-//             excludeUserId: user._id,
-//         });
-//         if (duplicate) {
-//             return res.status(duplicate.status).json({
-//                 error: true,
-//                 status: duplicate.status,
-//                 message: duplicate.message,
-//                 message_desc: duplicate.message,
-//                 data: {},
-//             });
-//         }
-
-//         // Team (club wahi rehta hai)
-//         let team = player.teamId ? await Team.findById(player.teamId) : null;
-//         if (req.body.teamId !== undefined) {
-//             const teamResult = await resolveTeam(req.body.teamId, player.clubId);
-//             if (teamResult.message) {
-//                 return res.status(teamResult.status).json({
-//                     error: true,
-//                     status: teamResult.status,
-//                     message: teamResult.message,
-//                     message_desc: teamResult.message,
-//                     data: {},
-//                 });
-//             }
-//             team = teamResult.team;
-//         }
-
-//         const ruleError = await checkTeamRules({
-//             team,
-//             shirtNumber: values.shirtNumber !== undefined ? values.shirtNumber : player.shirtNumber,
-//             status: values.status || player.status,
-//             excludePlayerId: player._id,
-//         });
-//         if (ruleError) {
-//             return res.status(ruleError.status).json({
-//                 error: true,
-//                 status: ruleError.status,
-//                 message: ruleError.message,
-//                 message_desc: ruleError.message,
-//                 data: {},
-//             });
-//         }
-
-//         // Parents: senior ke liye hamesha khaali, youth ke liye bheje toh replace
-//         let removedParentIds = [];
-//         if (newType === "senior") {
-//             if (Array.isArray(parsedParents) && parsedParents.length > 0) {
-//                 return res.status(400).json({
-//                     error: true,
-//                     status: 400,
-//                     message: "A senior player cannot have parents.",
-//                     message_desc: "A senior player cannot have parents.",
-//                     data: {},
-//                 });
-//             }
-//             removedParentIds = player.parents.map((link) => link.parentId);
-//             player.parents = [];
-//         } else if (parsedParents === undefined && player.playerType === "senior") {
-//             // Senior se youth ban raha hai lekin parents nahi bheje
-//             return res.status(400).json({
-//                 error: true,
-//                 status: 400,
-//                 message: "At least one parent or guardian is required for a youth player.",
-//                 message_desc: "At least one parent or guardian is required for a youth player.",
-//                 data: {},
-//             });
-//         } else if (parsedParents !== undefined) {
-//             if (!Array.isArray(parsedParents) || parsedParents.length === 0) {
-//                 return res.status(400).json({
-//                     error: true,
-//                     status: 400,
-//                     message: "At least one parent or guardian is required for a youth player.",
-//                     message_desc: "At least one parent or guardian is required for a youth player.",
-//                     data: {},
-//                 });
-//             }
-
-//             const parentResult = await resolveParents(parsedParents, player.clubId, req.user._id, created);
-//             if (parentResult.message) {
-//                 await rollbackCreated(created);
-//                 return res.status(parentResult.status).json({
-//                     error: true,
-//                     status: parentResult.status,
-//                     message: parentResult.message,
-//                     message_desc: parentResult.message,
-//                     data: {},
-//                 });
-//             }
-
-//             const newIds = parentResult.links.map((link) => String(link.parentId));
-//             removedParentIds = player.parents
-//                 .map((link) => link.parentId)
-//                 .filter((parentId) => !newIds.includes(String(parentId)));
-//             player.parents = parentResult.links;
-//         }
-
-//         // ID document: nayi file aayi toh S3 par, ya removeIdDocument=true se hatana
-//         const oldDoc = player.idDocument || "";
-//         let docChanged = false;
-//         if (docCheck.file) {
-//             uploadedDoc = await upload_files("players", docCheck.file);
-//             if (!uploadedDoc) {
-//                 await rollbackCreated(created);
-//                 return res.status(500).json({
-//                     error: true,
-//                     status: 500,
-//                     message: "ID document upload failed. Please try again.",
-//                     message_desc: "ID document upload failed. Please try again.",
-//                     data: {},
-//                 });
-//             }
-//             player.idDocument = uploadedDoc;
-//             docChanged = true;
-//         } else if (String(req.body.removeIdDocument) === "true") {
-//             player.idDocument = "";
-//             docChanged = true;
-//         }
-
-//         // User mein personal details + role (playerType ke hisaab se)
-//         if (person.email !== undefined) person.email = person.email || undefined;
-//         Object.assign(user, person);
-//         user.role = roleForType(newType);
-
-//         // Player mein khel ki details
-//         Object.assign(player, values);
-//         if (req.body.teamId !== undefined) player.teamId = team ? team._id : null;
-
-//         await user.save();
-//         await player.save();
-//         await cleanupOrphanParents(removedParentIds);
-
-//         // Save ho gaya, ab purani file hatao
-//         if (docChanged && oldDoc) await removeIdDocument(oldDoc);
-
-//         const saved = await populatePlayer(Player.findById(player._id));
-
-//         return res.status(200).json({
-//             error: false,
-//             status: 200,
-//             message: "Player updated successfully.",
-//             message_desc: "Player updated successfully.",
-//             data: formatPlayer(saved),
-//         });
-//     } catch (e) {
-//         await rollbackCreated(created);
-//         if (uploadedDoc) await removeIdDocument(uploadedDoc);
-//         console.error("Update player error:", e);
-//         return res.status(500).json({
-//             error: true,
-//             status: 500,
-//             message: "Something went wrong.",
-//             message_desc: e.message,
-//             data: {},
-//         });
-//     }
-// };
-
 
 /**
  * PUT /api/user/players/:id/update   (superAdmin ya clubAdmin, :id = Player ki _id)
@@ -1359,7 +1171,6 @@ const updatePlayer = async (req, res) => {
     } catch (e) {
         if (uploadedDoc) await removeIdDocument(uploadedDoc);
         console.error("Update player error:", e);
-        console.error("STACK:", e.stack);
         return res.status(500).json({
             error: true,
             status: 500,
@@ -1426,7 +1237,6 @@ const deletePlayer = async (req, res) => {
         });
     }
 };
-
 
 /**
  * GET /api/user/players/shirt-sizes   (koi bhi logged-in user)
@@ -1643,7 +1453,7 @@ const listOtherTeamPlayers = async (req, res) => {
 };
 
 /**
- * PUT /api/user/players/assign   (superAdmin ya clubAdmin)
+ * POST /api/user/players/assign   (superAdmin ya clubAdmin)
  * Pehle se bane EK YA ZYADA players ko ek team mein daalna. Naya player NAHI banta.
  * Player bina team ka ho ya kisi doosri team mein ho, dono chalega (doosri team se move ho jayega).
  * Har player ka purana shirt number aur status rehta hai.
