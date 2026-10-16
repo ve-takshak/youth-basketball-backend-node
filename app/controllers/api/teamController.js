@@ -11,6 +11,7 @@ const VALID_STATUSES = ["active", "inactive"];
 
 /**
  * Format team object for API response
+ * (create, list, get, update sab isi se response banate hain)
  */
 const formatTeam = (record) => {
     if (!record) return null;
@@ -27,8 +28,11 @@ const formatTeam = (record) => {
         } : (record.categoryId ? { _id: record.categoryId } : null),
         coach: record.coachId && typeof record.coachId === "object" ? {
             _id: record.coachId._id,
-            name: record.coachId.userId ? `${record.coachId.userId.firstname || ""} ${record.coachId.userId.lastname || ""}`.trim() : "",
+            firstname: record.coachId.userId?.firstname || "",
+            lastname: record.coachId.userId?.lastname || "",
             userId: record.coachId.userId?._id,
+            // Coach ki profile photo (User se)
+            profile_image: record.coachId.userId?.profile_image || "",
             mobileNumber: record.coachId.userId?.mobileNumber || "",
             email: record.coachId.userId?.email || "",
         } : (record.coachId ? { _id: record.coachId } : null),
@@ -52,7 +56,8 @@ const populateTeam = (query) =>
             select: "userId clubId",
             populate: {
                 path: "userId",
-                select: "firstname lastname email countryCode mobileNumber",
+                // profile_image bhi chahiye (formatTeam mein coach ke saath bhejte hain)
+                select: "firstname lastname email countryCode mobileNumber profile_image",
             },
         });
 

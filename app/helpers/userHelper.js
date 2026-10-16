@@ -107,12 +107,13 @@ const applyPersonUpdates = async (user, body = {}) => {
     return null;
 };
 
-// Response mein jaane wala user data
+// Response mein jaane wala user data (register, verify-otp, profile)
 const publicUser = (user) => ({
     _id: user._id,
-    firstname: user.firstname,
-    lastname: user.lastname,
+    firstname: user.firstname || "",
+    lastname: user.lastname || "",
     username: user.username || "",
+    profile_image: user.profile_image || "",
     email: user.email || "",
     countryCode: user.countryCode,
     mobileNumber: user.mobileNumber,
@@ -137,16 +138,17 @@ const formatClubData = async (clubDoc) => {
         obj.theme = { primary: "#1E40AF", secondary: "#F59E0B", background: "#FFFFFF" };
     }
 
-    // Attach primary club owner / admin info
+    // Club ka primary owner / admin (photo ke saath)
     const primaryAdmin = await ClubAdmin.findOne({ clubId: obj._id })
-        .populate("userId", "firstname lastname countryCode mobileNumber email")
+        .populate("userId", "firstname lastname countryCode mobileNumber email profile_image")
         .sort({ createdAt: 1 });
 
     if (primaryAdmin && primaryAdmin.userId) {
         obj.owner = {
             _id: primaryAdmin.userId._id,
-            firstname: primaryAdmin.userId.firstname,
-            lastname: primaryAdmin.userId.lastname,
+            firstname: primaryAdmin.userId.firstname || "",
+            lastname: primaryAdmin.userId.lastname || "",
+            profile_image: primaryAdmin.userId.profile_image || "",
             email: primaryAdmin.userId.email || "",
             countryCode: primaryAdmin.userId.countryCode,
             mobileNumber: primaryAdmin.userId.mobileNumber,

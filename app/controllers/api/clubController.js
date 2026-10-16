@@ -64,6 +64,21 @@ const formatClub = (club) => {
     return obj;
 };
 
+// createdBy (User) ke liye populate fields
+const CREATED_BY_FIELDS = "firstname lastname mobileNumber profile_image";
+
+// Club admin (ClubAdmin -> User) ko flat object mein (list / update response ke liye)
+const formatClubAdmin = (admin) => ({
+    _id: admin._id,
+    userId: admin.userId?._id || null,
+    firstname: admin.userId?.firstname || "",
+    lastname: admin.userId?.lastname || "",
+    profile_image: admin.userId?.profile_image || "",
+    email: admin.userId?.email || "",
+    countryCode: admin.userId?.countryCode || "",
+    mobileNumber: admin.userId?.mobileNumber || "",
+});
+
 // theme object se sirf valid colors nikalna, galat ho toh error
 const pickTheme = (theme = {}) => {
     const result = {};
@@ -233,6 +248,7 @@ const createClub = async (req, res) => {
                     userId: user._id,
                     firstname: user.firstname,
                     lastname: user.lastname,
+                    profile_image: user.profile_image || "",
                     email: user.email || "",
                     countryCode: user.countryCode,
                     mobileNumber: user.mobileNumber,
@@ -275,26 +291,20 @@ const listClubs = async (req, res) => {
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limit)
-                .populate("createdBy", "firstname lastname mobileNumber"),
+                .populate("createdBy", CREATED_BY_FIELDS),
             Club.countDocuments(filter),
         ]);
 
-        // Har club ke saath uske club admins (naam + mobile) bhi bhejna, list table ke liye
+        // Har club ke saath uske club admins (naam + mobile + photo) bhi bhejna, list table ke liye
         const admins = await ClubAdmin.find({ clubId: { $in: clubs.map((club) => club._id) } })
-            .populate("userId", "firstname lastname countryCode mobileNumber")
+            .populate("userId", "firstname lastname email countryCode mobileNumber profile_image")
             .sort({ createdAt: 1 });
 
         const clubsWithAdmins = clubs.map((club) => ({
             ...formatClub(club),
             clubAdmins: admins
                 .filter((admin) => String(admin.clubId) === String(club._id))
-                .map((admin) => ({
-                    _id: admin._id,
-                    firstname: admin.userId?.firstname || "",
-                    lastname: admin.userId?.lastname || "",
-                    countryCode: admin.userId?.countryCode || "",
-                    mobileNumber: admin.userId?.mobileNumber || "",
-                })),
+                .map(formatClubAdmin),
         }));
 
         return res.status(200).json({
@@ -321,7 +331,7 @@ const listClubs = async (req, res) => {
 
 /**
  * GET /api/user/getClub/:id   (superAdmin ya clubAdmin)
- * Club + uske club admins aur coaches. clubAdmin sirf apna club dekh sakta hai.
+ * Club + uske club admins, coaches aur teams. clubAdmin sirf apna club dekh sakta hai.
  */
 const getClub = async (req, res) => {
     try {
@@ -347,7 +357,7 @@ const getClub = async (req, res) => {
             });
         }
 
-        const club = await Club.findById(id).populate("createdBy", "firstname lastname mobileNumber");
+        const club = await Club.findById(id).populate("createdBy", CREATED_BY_FIELDS);
         if (!club) {
             return res.status(404).json({
                 error: true,
@@ -358,7 +368,7 @@ const getClub = async (req, res) => {
             });
         }
 
-        const personFields = "firstname lastname email countryCode mobileNumber is_verify";
+        const personFields = "firstname lastname email countryCode mobileNumber is_verify profile_image";
         const [clubAdmins, coaches, teams] = await Promise.all([
             ClubAdmin.find({ clubId: id }).populate("userId", personFields).sort({ createdAt: -1 }),
             Coach.find({ clubId: id }).populate("userId", personFields).sort({ createdAt: -1 }),
@@ -367,7 +377,7 @@ const getClub = async (req, res) => {
                 .populate({
                     path: "coachId",
                     select: "userId",
-                    populate: { path: "userId", select: "firstname lastname" },
+                    populate: { path: "userId", select: "firstname lastname profile_image" },
                 })
                 .sort({ createdAt: -1 }),
         ]);
@@ -377,6 +387,7 @@ const getClub = async (req, res) => {
             userId: record.userId?._id || null,
             firstname: record.userId?.firstname || "",
             lastname: record.userId?.lastname || "",
+            profile_image: record.userId?.profile_image || "",
             email: record.userId?.email || "",
             countryCode: record.userId?.countryCode || "",
             mobileNumber: record.userId?.mobileNumber || "",
@@ -393,9 +404,13 @@ const getClub = async (req, res) => {
             teamCapacity: t.teamCapacity,
             status: t.status || "active",
             category: t.categoryId ? { _id: t.categoryId._id, name: t.categoryId.name } : null,
+            // Team ka coach: firstname / lastname alag, saath mein photo
             coach: t.coachId && t.coachId.userId ? {
                 _id: t.coachId._id,
-                name: `${t.coachId.userId.firstname || ""} ${t.coachId.userId.lastname || ""}`.trim(),
+                userId: t.coachId.userId._id || null,
+                firstname: t.coachId.userId.firstname || "",
+                lastname: t.coachId.userId.lastname || "",
+                profile_image: t.coachId.userId.profile_image || "",
             } : null,
             createdAt: t.createdAt,
         });
@@ -621,19 +636,12 @@ const updateClub = async (req, res) => {
         }
 
         const admins = await ClubAdmin.find({ clubId: club._id })
-            .populate("userId", "firstname lastname countryCode mobileNumber email")
+            .populate("userId", "firstname lastname email countryCode mobileNumber profile_image")
             .sort({ createdAt: 1 });
 
         const formattedClub = {
             ...formatClub(club),
-            clubAdmins: admins.map((admin) => ({
-                _id: admin._id,
-                firstname: admin.userId?.firstname || "",
-                lastname: admin.userId?.lastname || "",
-                email: admin.userId?.email || "",
-                countryCode: admin.userId?.countryCode || "",
-                mobileNumber: admin.userId?.mobileNumber || "",
-            })),
+            clubAdmins: admins.map(formatClubAdmin),
         };
 
         return res.status(200).json({
