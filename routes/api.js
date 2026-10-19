@@ -7,7 +7,7 @@ const {
     superAdminOrClubAdminAuthentication,
 } = require("../app/middleware/authentication");
 
-const { register, login, verifyOtp, getProfile, resendOtp } = require("../app/controllers/api/userController");
+const { register, login, verifyOtp, getProfile, resendOtp, registerParent, updateParentProfile } = require("../app/controllers/api/userController");
 const { createClub, listClubs, getClub, updateClub, deleteClub } = require("../app/controllers/api/clubController");
 const {
     createClubAdmin,
@@ -95,5 +95,9 @@ router.get("/user/teams/:id/other-players", superAdminOrClubAdminAuthentication,
 // 2. Routes (baaki team/player routes ke saath):
 router.post("/user/players/assign", superAdminOrClubAdminAuthentication, assignPlayerToTeam);
 router.put("/user/teams/:id/players/:playerId/remove", superAdminOrClubAdminAuthentication, removePlayerFromTeam);
+
+//Parent
+router.post("/user/parent/register", registerParent);
+router.put("/user/parent/profile", authentication, updateParentProfile);
 
 module.exports = router;

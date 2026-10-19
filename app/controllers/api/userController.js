@@ -115,6 +115,175 @@ const register = async (req, res) => {
     }
 };
 
+
+/**
+ * POST /api/user/parent/register
+ * Parent registration ka pehla step: sirf mobile number.
+ * body: { countryCode, mobileNumber, device_type?, device_token? }
+ */
+const registerParent = async (req, res) => {
+    try {
+        let {
+            countryCode = "+972",
+            mobileNumber = "",
+            device_type = "",
+            device_token = "",
+        } = req.body;
+
+        countryCode = String(countryCode).trim();
+        mobileNumber = cleanMobile(mobileNumber);
+
+        if (!mobileNumber || mobileNumber.length < 7) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "Valid mobile number is required.",
+                message_desc: "Valid mobile number is required.",
+                data: {},
+            });
+        }
+
+        let user = await User.findOne({ countryCode, mobileNumber });
+
+        if (user) {
+            // Verified user ya koi aur role (coach, clubAdmin...) → login karega, register nahi
+            if (user.role !== ROLES.PARENT || user.is_verify) {
+                return res.status(409).json({
+                    error: true,
+                    status: 409,
+                    message: "This mobile number is already registered. Please login.",
+                    message_desc: "This mobile number is already registered. Please login.",
+                    data: {},
+                });
+            }
+            // Unverified parent ne dobara try kiya → wahi record, bas naya OTP
+        } else {
+            user = new User({
+                countryCode,
+                mobileNumber,
+                role: ROLES.PARENT, // body se role nahi lete
+            });
+        }
+
+        user.device_type = device_type;
+        user.device_token = device_token;
+        user.otp = generateOtp();
+        user.otp_generated_at = new Date();
+        await user.save();
+
+        return res.status(201).json({
+            error: false,
+            status: 201,
+            message: "OTP sent to your mobile number.",
+            message_desc: "OTP sent to your mobile number.",
+            data: { countryCode, mobileNumber },
+        });
+    } catch (e) {
+        console.error("Register parent error:", e);
+        return res.status(500).json({
+            error: true,
+            status: 500,
+            message: "Something went wrong.",
+            message_desc: e.message,
+            data: {},
+        });
+    }
+};
+
+
+/**
+ * PUT /api/user/parent/profile   (logged-in parent, token zaroori)
+ * Registration form: firstname, lastname, email (optional).
+ * body: { firstname, lastname, email? }
+ */
+const updateParentProfile = async (req, res) => {
+    try {
+        // req.user mongoose document hona chahiye taaki save() chale
+        const user = await User.findById(req.user._id);
+
+        if (!user) {
+            return res.status(404).json({
+                error: true,
+                status: 404,
+                message: "User not found.",
+                message_desc: "User not found.",
+                data: {},
+            });
+        }
+
+        if (user.role !== ROLES.PARENT) {
+            return res.status(403).json({
+                error: true,
+                status: 403,
+                message: "Only parents can use this.",
+                message_desc: "Only parents can use this.",
+                data: {},
+            });
+        }
+
+        let { firstname = "", lastname = "", email = "" } = req.body;
+        firstname = String(firstname).trim();
+        lastname = String(lastname).trim();
+        email = String(email).trim().toLowerCase();
+
+        if (!firstname || !lastname) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "First name and last name are required.",
+                message_desc: "First name and last name are required.",
+                data: {},
+            });
+        }
+
+        if (email) {
+            if (!validator.isEmail(email)) {
+                return res.status(400).json({
+                    error: true,
+                    status: 400,
+                    message: "Please enter a valid email.",
+                    message_desc: "Please enter a valid email.",
+                    data: {},
+                });
+            }
+
+            // Apna khud ka email dobara bhejne pe error na aaye, isliye $ne
+            const emailExists = await User.findOne({ email, _id: { $ne: user._id } });
+            if (emailExists) {
+                return res.status(409).json({
+                    error: true,
+                    status: 409,
+                    message: "This email is already registered.",
+                    message_desc: "This email is already registered.",
+                    data: {},
+                });
+            }
+        }
+
+        user.firstname = firstname;
+        user.lastname = lastname;
+        user.email = email || undefined; // khaali email save nahi karna
+        await user.save();
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Profile saved successfully.",
+            message_desc: "Profile saved successfully.",
+            data: { ...publicUser(user), isProfileComplete: true },
+        });
+    } catch (e) {
+        console.error("Update parent profile error:", e);
+        return res.status(500).json({
+            error: true,
+            status: 500,
+            message: "Something went wrong.",
+            message_desc: e.message,
+            data: {},
+        });
+    }
+};
+
 /**
  * POST /api/user/login
  * body: { countryCode, mobileNumber }
@@ -342,4 +511,4 @@ const getProfile = async (req, res) => {
     }
 };
 
-module.exports = { register, login, verifyOtp, getProfile, resendOtp };
+module.exports = { register, login, verifyOtp, getProfile, resendOtp, registerParent, updateParentProfile };
