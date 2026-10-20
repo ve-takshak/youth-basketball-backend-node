@@ -322,8 +322,8 @@ const resolveParents = async (rawParents, clubId, createdBy, created) => {
 
 // Fail hone pe is request mein bane naye Parent/User hata dena
 const rollbackCreated = async (created) => {
-    if (created.parents.length) await Parent.deleteMany({ _id: { $in: created.parents } }).catch(() => {});
-    if (created.users.length) await User.deleteMany({ _id: { $in: created.users } }).catch(() => {});
+    if (created.parents.length) await Parent.deleteMany({ _id: { $in: created.parents } }).catch(() => { });
+    if (created.users.length) await User.deleteMany({ _id: { $in: created.users } }).catch(() => { });
 };
 
 // Jin parents ka ab koi bachcha nahi bacha, unka Parent + User hata dena
@@ -379,6 +379,7 @@ const formatPlayer = (player) => {
         shirtNumber: player.shirtNumber ?? null,
         idDocument: fileUrlOf(player.idDocument),
         status: player.status,
+        ageGroup: player.ageGroup || "",
         season: player.season || "",
         club: player.clubId && player.clubId._id ? { _id: player.clubId._id, name: player.clubId.name } : null,
         team: player.teamId && player.teamId._id ? { _id: player.teamId._id, name: player.teamId.name } : null,
@@ -386,15 +387,15 @@ const formatPlayer = (player) => {
         coach:
             player.teamId && player.teamId.coachId && player.teamId.coachId._id
                 ? {
-                      _id: player.teamId.coachId._id,
-                      userId: player.teamId.coachId.userId?._id || null,
-                      firstname: player.teamId.coachId.userId?.firstname || "",
-                      lastname: player.teamId.coachId.userId?.lastname || "",
-                      profile_image: player.teamId.coachId.userId?.profile_image || "",
-                      email: player.teamId.coachId.userId?.email || "",
-                      countryCode: player.teamId.coachId.userId?.countryCode || "",
-                      mobileNumber: player.teamId.coachId.userId?.mobileNumber || "",
-                  }
+                    _id: player.teamId.coachId._id,
+                    userId: player.teamId.coachId.userId?._id || null,
+                    firstname: player.teamId.coachId.userId?.firstname || "",
+                    lastname: player.teamId.coachId.userId?.lastname || "",
+                    profile_image: player.teamId.coachId.userId?.profile_image || "",
+                    email: player.teamId.coachId.userId?.email || "",
+                    countryCode: player.teamId.coachId.userId?.countryCode || "",
+                    mobileNumber: player.teamId.coachId.userId?.mobileNumber || "",
+                }
                 : null,
         parents: (player.parents || [])
             .filter((link) => link.parentId)
@@ -479,29 +480,29 @@ const formatPlayerDetail = async (player) => {
         ...base,
         club: club
             ? {
-                  _id: club._id,
-                  name: club.name,
-                  logoUrl: fileUrlOf(club.logo),
-                  theme: club.theme || {},
-                  admin: clubAdmin,
-              }
+                _id: club._id,
+                name: club.name,
+                logoUrl: fileUrlOf(club.logo),
+                theme: club.theme || {},
+                admin: clubAdmin,
+            }
             : null,
         team: team
             ? {
-                  _id: team._id,
-                  name: team.name,
-                  season: team.season || "",
-                  gender: team.gender || "mixed",
-                  teamType: team.teamType || "league",
-                  teamCapacity: team.teamCapacity ?? 20,
-                  status: team.status || "active",
-                  category:
-                      team.categoryId && team.categoryId._id
-                          ? { _id: team.categoryId._id, name: team.categoryId.name }
-                          : null,
-                  activePlayers,
-                  totalPlayers,
-              }
+                _id: team._id,
+                name: team.name,
+                season: team.season || "",
+                gender: team.gender || "mixed",
+                teamType: team.teamType || "league",
+                teamCapacity: team.teamCapacity ?? 20,
+                status: team.status || "active",
+                category:
+                    team.categoryId && team.categoryId._id
+                        ? { _id: team.categoryId._id, name: team.categoryId.name }
+                        : null,
+                activePlayers,
+                totalPlayers,
+            }
             : null,
     };
 };
@@ -721,7 +722,7 @@ const createPlayer = async (req, res) => {
         });
     } catch (e) {
         // Adhoora data na bache (S3 file bhi)
-        if (playerUser) await User.findByIdAndDelete(playerUser._id).catch(() => {});
+        if (playerUser) await User.findByIdAndDelete(playerUser._id).catch(() => { });
         await rollbackCreated(created);
         if (uploadedDoc) await removeIdDocument(uploadedDoc);
         console.error("Create player error:", e);
@@ -1685,4 +1686,8 @@ module.exports = {
     listOtherTeamPlayers,
     assignPlayerToTeam,
     removePlayerFromTeam,
+
+    removeIdDocument,
+    populatePlayer,
+    formatPlayer,
 };
