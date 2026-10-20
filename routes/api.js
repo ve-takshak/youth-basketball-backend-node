@@ -8,7 +8,7 @@ const {
 } = require("../app/middleware/authentication");
 
 const { register, login, verifyOtp, getProfile, resendOtp, registerParent, updateParentProfile } = require("../app/controllers/api/userController");
-const { createClub, listClubs, getClub, updateClub, deleteClub } = require("../app/controllers/api/clubController");
+const { createClub, listClubs, getClub, updateClub, deleteClub, clubOptions } = require("../app/controllers/api/clubController");
 const {
     createClubAdmin,
     listClubAdmins,
@@ -33,6 +33,7 @@ const {
 } = require("../app/controllers/api/teamController");
 const { createPlayer, listPlayers, getPlayer, updatePlayer, deletePlayer, listShirtSizes, listShirtNumbers, listOtherTeamPlayers, assignPlayerToTeam, removePlayerFromTeam, listUnassignedPlayers } = require("../app/controllers/api/Playercontroller");
 const { updateMyProfileImage, updateUserProfileImage, removeProfileImage, updateProfileImage } = require("../app/controllers/api/Profileimagecontroller");
+const { selectParentClub } = require("../app/controllers/api/parentController");
 
 router.get("/test", (req, res) => res.send("API working"));
 
@@ -52,6 +53,7 @@ router.get("/user/listClubs", superAdminOrClubAdminAuthentication, listClubs);  
 router.get("/user/getClub/:id", superAdminOrClubAdminAuthentication, getClub);
 router.put("/user/updateClub/:id", superAdminAuthentication, updateClub);
 router.delete("/user/deleteClub/:id", superAdminAuthentication, deleteClub);
+router.get("/user/clubOptions", authentication, clubOptions);
 
 // ---------- Club Admin (sirf superAdmin banata hai) ----------
 router.post("/user/createClubAdmin", superAdminAuthentication, createClubAdmin);
@@ -99,5 +101,6 @@ router.put("/user/teams/:id/players/:playerId/remove", superAdminOrClubAdminAuth
 //Parent
 router.post("/user/parent/register", registerParent);
 router.put("/user/parent/profile", authentication, updateParentProfile);
+router.post("/user/parent/selectClub", authentication, selectParentClub);
 
 module.exports = router;

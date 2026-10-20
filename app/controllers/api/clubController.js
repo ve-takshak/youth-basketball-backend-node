@@ -749,4 +749,60 @@ const deleteClub = async (req, res) => {
     }
 };
 
-module.exports = { createClub, listClubs, getClub, updateClub, deleteClub };
+
+
+const clubOptions = async (req, res) => {
+    try {
+        const search = String(req.query.search || "").trim();
+        const filter = {};
+
+        if (req.user.role === ROLES.CLUB_ADMIN) {
+            if (!req.clubId) {
+                return res.status(403).json({
+                    error: true,
+                    status: 403,
+                    message: "No club linked to your account.",
+                    message_desc: "No club linked to your account.",
+                    data: {},
+                });
+            }
+            filter._id = req.clubId;
+        }
+
+        if (search) {
+            const regex = new RegExp(escapeRegex(search), "i");
+            filter.$or = [{ name: regex }, { clubCode: regex }];
+        }
+
+        const clubs = await Club.find(filter)
+            .select("_id clubCode name")
+            .collation({ locale: "en", strength: 2 }) // A-Z sort mein capital/small ek jaisa
+            .sort({ name: 1 })
+            .lean();
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Clubs fetched successfully.",
+            message_desc: "Clubs fetched successfully.",
+            data: clubs.map((club) => ({
+                _id: club._id,
+                clubCode: club.clubCode || "",
+                name: club.name,
+            })),
+        });
+    } catch (e) {
+        console.error("Club options error:", e);
+        return res.status(500).json({
+            error: true,
+            status: 500,
+            message: "Something went wrong.",
+            message_desc: e.message,
+            data: {},
+        });
+    }
+};
+
+
+
+module.exports = { createClub, listClubs, getClub, updateClub, deleteClub, clubOptions };

@@ -4,6 +4,7 @@ const User = require("../../models/User");
 const { ROLES, USE_STATIC_OTP, STATIC_OTP, OTP_VALID_MINUTES } = require("../../helpers/constants");
 const { cleanMobile } = require("../../helpers/common");
 const { publicUser, getRoleData } = require("../../helpers/userHelper");
+const Parent = require("../../models/Parent");
 
 // Abhi OTP hamesha 0000. SMS lagane pe yahan random OTP banake SMS bhejna.
 const generateOtp = () => STATIC_OTP;
@@ -338,10 +339,11 @@ const login = async (req, res) => {
     }
 };
 
+
 /**
  * POST /api/user/verify-otp
  * body: { countryCode, mobileNumber, otp, device_type?, device_token? }
- * Sahi OTP pe token milta hai. coach/clubAdmin ko unka club bhi milta hai.
+ * Sahi OTP pe token milta hai, saath mein club (coach/clubAdmin/parent).
  */
 const verifyOtp = async (req, res) => {
     try {
@@ -355,6 +357,16 @@ const verifyOtp = async (req, res) => {
                 status: 400,
                 message: "Mobile number and OTP are required.",
                 message_desc: "Mobile number and OTP are required.",
+                data: {},
+            });
+        }
+
+        if (device_type !== undefined && !["android", "ios", "web", ""].includes(device_type)) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "Invalid device type.",
+                message_desc: "Invalid device type.",
                 data: {},
             });
         }
@@ -413,14 +425,36 @@ const verifyOtp = async (req, res) => {
         if (device_token !== undefined) user.device_token = device_token;
         await user.save();
 
-        const roleData = await getRoleData(user);
+        let roleData = {};
+
+        if (user.role === ROLES.PARENT) {
+            // Parent ka club Parent model se
+            const parent = await Parent.findOne({ userId: user._id })
+                .populate("clubId", "_id clubCode name theme");
+
+            roleData.club = parent?.clubId
+                ? {
+                      _id: parent.clubId._id,
+                      clubCode: parent.clubId.clubCode || "",
+                      name: parent.clubId.name,
+                      theme: parent.clubId.theme,
+                  }
+                : null;
+        } else {
+            // Coach / clubAdmin ka club pehle jaisa getRoleData se
+            roleData = await getRoleData(user);
+        }
 
         return res.status(200).json({
             error: false,
             status: 200,
             message: "OTP verified successfully.",
             message_desc: "OTP verified successfully.",
-            data: { ...publicUser(user), ...roleData, token: createToken(user) },
+            data: {
+                ...publicUser(user),
+                ...roleData,
+                token: createToken(user),
+            },
         });
     } catch (e) {
         console.error("Verify OTP error:", e);
@@ -433,7 +467,6 @@ const verifyOtp = async (req, res) => {
         });
     }
 };
-
 
 const resendOtp = async (req, res) => {
     try {
@@ -486,18 +519,52 @@ const resendOtp = async (req, res) => {
 
 /**
  * GET /api/user/profile   (koi bhi logged-in user)
- * App/panel refresh pe user ki latest details (aur coach/clubAdmin ka club).
+ * App/panel refresh pe user ki latest details + club (coach/clubAdmin/parent).
  */
 const getProfile = async (req, res) => {
     try {
-        const roleData = await getRoleData(req.user);
+        // DB se fresh user, taaki abhi abhi hua update (naam, club) bhi dikhe
+        const user = await User.findById(req.user._id);
+
+        if (!user) {
+            return res.status(401).json({
+                error: true,
+                status: 401,
+                message: "Account not found. Please login again.",
+                message_desc: "Account not found. Please login again.",
+                data: {},
+            });
+        }
+
+        let roleData = {};
+
+        if (user.role === ROLES.PARENT) {
+            // Parent ka club Parent model se
+            const parent = await Parent.findOne({ userId: user._id })
+                .populate("clubId", "_id clubCode name theme");
+
+            roleData.club = parent?.clubId
+                ? {
+                      _id: parent.clubId._id,
+                      clubCode: parent.clubId.clubCode || "",
+                      name: parent.clubId.name,
+                      theme: parent.clubId.theme,
+                  }
+                : null;
+        } else {
+            // Coach / clubAdmin ka club pehle jaisa getRoleData se
+            roleData = await getRoleData(user);
+        }
 
         return res.status(200).json({
             error: false,
             status: 200,
             message: "Profile fetched successfully.",
             message_desc: "Profile fetched successfully.",
-            data: { ...publicUser(req.user), ...roleData },
+            data: {
+                ...publicUser(user),
+                ...roleData,
+            },
         });
     } catch (e) {
         console.error("Get profile error:", e);
@@ -510,5 +577,4 @@ const getProfile = async (req, res) => {
         });
     }
 };
-
 module.exports = { register, login, verifyOtp, getProfile, resendOtp, registerParent, updateParentProfile };
