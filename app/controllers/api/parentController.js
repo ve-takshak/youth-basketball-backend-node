@@ -1,4 +1,5 @@
 const path = require("path");
+const crypto = require("crypto");
 const Club = require("../../models/Club");
 const User = require("../../models/User");
 const Parent = require("../../models/Parent");
@@ -173,6 +174,21 @@ const getFile = (req, key, allowedTypes, typeLabel, baseName, label) => {
     return { file };
 };
 
+// Player registration number: REG + saal + 6 random (A-Z, 0-9), jaise REG2026HDFH54
+// DB mein pehle se ho toh naya banao (unique index bhi hai)
+const REG_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+const generateRegistrationNumber = async () => {
+    const year = new Date().getFullYear();
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+        const bytes = crypto.randomBytes(6);
+        let suffix = "";
+        for (let i = 0; i < 6; i += 1) suffix += REG_CHARS[bytes[i] % REG_CHARS.length];
+        const code = `REG${year}${suffix}`;
+        if (!(await Player.exists({ registrationNumber: code }))) return code;
+    }
+    throw new Error("Could not generate a unique registration number. Please try again.");
+};
+
 // Bachche ki fields check. Galti ho toh { message }
 const validateChild = (body) => {
     const v = {};
@@ -229,7 +245,7 @@ const validateChild = (body) => {
  *   gender?, shirtSize?, medicalNotes?, relation?     (optional)
  *   photo       (file, optional) JPG / PNG, max 5MB        -> User.profile_image
  *   idDocument  (file, optional) JPG / PNG / PDF, max 5MB  -> Player.idDocument
- * Club parent ke club se aata hai, body se nahi.
+ * Club parent ke club se aata hai, body se nahi. registrationNumber server khud banata hai.
  */
 const createYouthPlayer = async (req, res) => {
     const uploaded = [];
@@ -291,8 +307,12 @@ const createYouthPlayer = async (req, res) => {
             role: ROLES.YOUTH_PLAYER,
         });
 
-        // 8. Player record (parent wala hi club, parent link ke saath)
+        // 8. Player registration number (automatic)
+        const registrationNumber = await generateRegistrationNumber();
+
+        // 9. Player record (parent wala hi club, parent link ke saath)
         const player = await Player.create({
+            registrationNumber,
             userId: childUser._id,
             clubId,
             teamId: null, // team clubAdmin dega
@@ -322,9 +342,22 @@ const createYouthPlayer = async (req, res) => {
         if (childUser) await User.findByIdAndDelete(childUser._id).catch(() => {});
         for (const fileUrl of uploaded) await removeIdDocument(fileUrl);
 
-        // Double tap ya same ID number
+        // Duplicate key: kaunsi field duplicate hai wo batao (sirf ID maan kar mat chalo)
         if (e.code === 11000) {
-            return sendError(res, 409, "A player with this ID number is already registered.");
+            const field = Object.keys(e.keyPattern || e.keyValue || {}).join(", ") || "unknown";
+            console.error("Parent create player duplicate key:", field, e.keyValue);
+            const message = field === "idNumber"
+                ? "A player with this ID number is already registered."
+                : field === "registrationNumber"
+                    ? "Registration number clash. Please try again."
+                    : `Duplicate value for: ${field}.`;
+            return res.status(409).json({
+                error: true,
+                status: 409,
+                message,
+                message_desc: `${e.message}`,
+                data: { field, value: e.keyValue || {} },
+            });
         }
         console.error("Parent create player error:", e);
         return res.status(500).json({

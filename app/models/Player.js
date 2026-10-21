@@ -53,6 +53,8 @@ const PlayerSchema = new mongoose.Schema(
 
         ageGroup: { type: String, enum: [...AGE_GROUPS.map((g) => g.code), ""], default: "" },
 
+        registrationNumber: { type: String, trim: true },
+
         // ---- Registration status ----
         status: { type: String, enum: PLAYER_STATUSES, default: "active" },
 
@@ -67,6 +69,10 @@ const PlayerSchema = new mongoose.Schema(
 PlayerSchema.index({ clubId: 1, status: 1 });
 PlayerSchema.index({ teamId: 1, shirtNumber: 1 });
 PlayerSchema.index({ "parents.parentId": 1 });
+PlayerSchema.index(
+    { registrationNumber: 1 },
+    { unique: true, partialFilterExpression: { registrationNumber: { $type: "string" } } }
+);
 
 const Player = mongoose.model("Player", PlayerSchema);
 module.exports = Player;

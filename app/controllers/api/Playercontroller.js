@@ -379,6 +379,7 @@ const formatPlayer = (player) => {
         shirtNumber: player.shirtNumber ?? null,
         idDocument: fileUrlOf(player.idDocument),
         status: player.status,
+        registrationNumber: player.registrationNumber || "",
         ageGroup: player.ageGroup || "",
         season: player.season || "",
         club: player.clubId && player.clubId._id ? { _id: player.clubId._id, name: player.clubId.name } : null,
