@@ -101,26 +101,70 @@ const findTargetUser = async (req, userId) => {
  * form-data: profile_image (file)   — PNG / JPG / WEBP, max 5MB
  * :userId = User ki _id (apni ya, admin ho toh player / coach ki)
  */
+// const updateProfileImage = async (req, res) => {
+//     let uploaded = "";
+//     try {
+//         const target = await findTargetUser(req, String(req.params.userId || "").trim());
+//         if (target.message) return sendError(res, target.status, target.message);
+//         const user = target.user;
+
+//         const check = getImageFile(req);
+//         if (check.error) return sendError(res, 400, check.error);
+
+//         uploaded = await upload_files("profiles", check.file);
+//         if (!uploaded) return sendError(res, 500, "Image upload failed. Please try again.");
+
+//         const oldImage = user.profile_image || "";
+//         user.profile_image = uploaded;
+//         await user.save();
+
+//         // Save ho gaya, ab purani image hatao
+//         await removeImage(oldImage);
+
+//         return res.status(200).json({
+//             error: false,
+//             status: 200,
+//             message: "Profile image updated successfully.",
+//             message_desc: "Profile image updated successfully.",
+//             data: { _id: user._id, role: user.role, profile_image: uploaded },
+//         });
+//     } catch (e) {
+//         if (uploaded) await removeImage(uploaded); // save fail hua toh nayi image bhi hatao
+//         console.error("Update profile image error:", e);
+//         return res.status(500).json({
+//             error: true,
+//             status: 500,
+//             message: "Something went wrong.",
+//             message_desc: e.message,
+//             data: {},
+//         });
+//     }
+// };
+
 const updateProfileImage = async (req, res) => {
     let uploaded = "";
     try {
+        // 1. Kiski image + access check
         const target = await findTargetUser(req, String(req.params.userId || "").trim());
         if (target.message) return sendError(res, target.status, target.message);
         const user = target.user;
-
+ 
+        // 2. File check
         const check = getImageFile(req);
         if (check.error) return sendError(res, 400, check.error);
-
+ 
+        // 3. S3 par upload
         uploaded = await upload_files("profiles", check.file);
         if (!uploaded) return sendError(res, 500, "Image upload failed. Please try again.");
-
+ 
+        // 4. Save
         const oldImage = user.profile_image || "";
         user.profile_image = uploaded;
         await user.save();
-
-        // Save ho gaya, ab purani image hatao
+ 
+        // 5. Save ho gaya, ab purani image hatao
         await removeImage(oldImage);
-
+ 
         return res.status(200).json({
             error: false,
             status: 200,
@@ -140,6 +184,7 @@ const updateProfileImage = async (req, res) => {
         });
     }
 };
+
 
 /**
  * DELETE /api/user/:userId/profile-image   (authentication: koi bhi logged-in user)
