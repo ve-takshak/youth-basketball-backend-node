@@ -2,6 +2,7 @@ const path = require("path");
 const User = require("../../models/User");
 const Player = require("../../models/Player");
 const Coach = require("../../models/Coach");
+const Parent = require("../../models/Parent");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId } = require("../../helpers/common");
 const { upload_files, deleteFiles } = require("../../../utils/s3");
@@ -57,21 +58,33 @@ const removeImage = async (url) => {
 /**
  * Kaun kiski image badal sakta hai:
  *   apni id          -> koi bhi logged-in user (player, coach, parent, admin)
- *   kisi aur ki id   -> sirf superAdmin / clubAdmin, aur wo player ya coach ho
- *                       (clubAdmin sirf apne club ka)
+ *   kisi aur ki id   -> superAdmin / clubAdmin: player ya coach (clubAdmin sirf apne club ka)
+ *                       parent: sirf apna bachcha (youth player jiske parents mein ye parent hai)
  * Mile toh { user }, warna { status, message }
  */
 const findTargetUser = async (req, userId) => {
     if (!isValidId(userId)) return { status: 400, message: "Invalid user id." };
 
-    // Apni image
+    // 1. Apni image
     if (String(userId) === String(req.user._id)) {
         const me = await User.findById(req.user._id);
         if (!me) return { status: 404, message: "User not found." };
         return { user: me };
     }
 
-    // Kisi aur ki image: sirf admin
+    // 2. Parent: sirf apne bachche ki image
+    if (req.user.role === ROLES.PARENT) {
+        const parent = await Parent.findOne({ userId: req.user._id }).select("_id");
+        const isMyChild =
+            parent && (await Player.exists({ userId, playerType: "youth", "parents.parentId": parent._id }));
+        if (!isMyChild) return { status: 403, message: "You can only change your own child's profile image." };
+
+        const child = await User.findById(userId);
+        if (!child) return { status: 404, message: "Player not found." };
+        return { user: child };
+    }
+
+    // 3. Kisi aur ki image: baaki roles mein sirf admin
     if (![ROLES.SUPER_ADMIN, ROLES.CLUB_ADMIN].includes(req.user.role)) {
         return { status: 403, message: "You can only change your own profile image." };
     }
@@ -99,48 +112,8 @@ const findTargetUser = async (req, userId) => {
 /**
  * PUT /api/user/:userId/profile-image   (authentication: koi bhi logged-in user)
  * form-data: profile_image (file)   — PNG / JPG / WEBP, max 5MB
- * :userId = User ki _id (apni ya, admin ho toh player / coach ki)
+ * :userId = User ki _id (apni, parent ho toh bachche ki, admin ho toh player / coach ki)
  */
-// const updateProfileImage = async (req, res) => {
-//     let uploaded = "";
-//     try {
-//         const target = await findTargetUser(req, String(req.params.userId || "").trim());
-//         if (target.message) return sendError(res, target.status, target.message);
-//         const user = target.user;
-
-//         const check = getImageFile(req);
-//         if (check.error) return sendError(res, 400, check.error);
-
-//         uploaded = await upload_files("profiles", check.file);
-//         if (!uploaded) return sendError(res, 500, "Image upload failed. Please try again.");
-
-//         const oldImage = user.profile_image || "";
-//         user.profile_image = uploaded;
-//         await user.save();
-
-//         // Save ho gaya, ab purani image hatao
-//         await removeImage(oldImage);
-
-//         return res.status(200).json({
-//             error: false,
-//             status: 200,
-//             message: "Profile image updated successfully.",
-//             message_desc: "Profile image updated successfully.",
-//             data: { _id: user._id, role: user.role, profile_image: uploaded },
-//         });
-//     } catch (e) {
-//         if (uploaded) await removeImage(uploaded); // save fail hua toh nayi image bhi hatao
-//         console.error("Update profile image error:", e);
-//         return res.status(500).json({
-//             error: true,
-//             status: 500,
-//             message: "Something went wrong.",
-//             message_desc: e.message,
-//             data: {},
-//         });
-//     }
-// };
-
 const updateProfileImage = async (req, res) => {
     let uploaded = "";
     try {
@@ -148,23 +121,23 @@ const updateProfileImage = async (req, res) => {
         const target = await findTargetUser(req, String(req.params.userId || "").trim());
         if (target.message) return sendError(res, target.status, target.message);
         const user = target.user;
- 
+
         // 2. File check
         const check = getImageFile(req);
         if (check.error) return sendError(res, 400, check.error);
- 
+
         // 3. S3 par upload
         uploaded = await upload_files("profiles", check.file);
         if (!uploaded) return sendError(res, 500, "Image upload failed. Please try again.");
- 
+
         // 4. Save
         const oldImage = user.profile_image || "";
         user.profile_image = uploaded;
         await user.save();
- 
+
         // 5. Save ho gaya, ab purani image hatao
         await removeImage(oldImage);
- 
+
         return res.status(200).json({
             error: false,
             status: 200,
@@ -185,10 +158,9 @@ const updateProfileImage = async (req, res) => {
     }
 };
 
-
 /**
  * DELETE /api/user/:userId/profile-image   (authentication: koi bhi logged-in user)
- * :userId = User ki _id (apni ya, admin ho toh player / coach ki)
+ * :userId = User ki _id (apni, parent ho toh bachche ki, admin ho toh player / coach ki)
  */
 const removeProfileImage = async (req, res) => {
     try {
