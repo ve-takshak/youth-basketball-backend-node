@@ -15,6 +15,18 @@ const createToken = (user) =>
         expiresIn: "180d",
     });
 
+const getParentClub = async (userId) => {
+    const parent = await Parent.findOne({ userId }).populate("clubId", "_id clubCode name theme");
+    return parent?.clubId
+        ? {
+              _id: parent.clubId._id,
+              clubCode: parent.clubId.clubCode || "",
+              name: parent.clubId.name,
+              theme: parent.clubId.theme,
+          }
+        : null;
+};
+
 /**
  * POST /api/user/register
  * Sirf SUPER ADMIN ka signup. ClubAdmin aur Coach yahan se nahi bante, unhe superAdmin/clubAdmin banata hai.
@@ -266,12 +278,14 @@ const updateParentProfile = async (req, res) => {
         user.email = email || undefined; // khaali email save nahi karna
         await user.save();
 
-        return res.status(200).json({
+         const club = await getParentClub(user._id);
+
+         return res.status(200).json({
             error: false,
             status: 200,
             message: "Profile saved successfully.",
             message_desc: "Profile saved successfully.",
-            data: { ...publicUser(user), isProfileComplete: true },
+            data: { ...publicUser(user), isProfileComplete: true, club },
         });
     } catch (e) {
         console.error("Update parent profile error:", e);
@@ -434,11 +448,11 @@ const verifyOtp = async (req, res) => {
 
             roleData.club = parent?.clubId
                 ? {
-                      _id: parent.clubId._id,
-                      clubCode: parent.clubId.clubCode || "",
-                      name: parent.clubId.name,
-                      theme: parent.clubId.theme,
-                  }
+                    _id: parent.clubId._id,
+                    clubCode: parent.clubId.clubCode || "",
+                    name: parent.clubId.name,
+                    theme: parent.clubId.theme,
+                }
                 : null;
         } else {
             // Coach / clubAdmin ka club pehle jaisa getRoleData se
@@ -472,7 +486,7 @@ const resendOtp = async (req, res) => {
     try {
         let { countryCode = "+972", mobileNumber = "" } = req.body;
         mobileNumber = cleanMobile(mobileNumber);
- 
+
         if (!mobileNumber) {
             return res.status(400).json({
                 error: true,
@@ -482,7 +496,7 @@ const resendOtp = async (req, res) => {
                 data: {},
             });
         }
- 
+
         const user = await User.findOne({ countryCode, mobileNumber });
         if (!user) {
             return res.status(404).json({
@@ -493,11 +507,11 @@ const resendOtp = async (req, res) => {
                 data: {},
             });
         }
- 
+
         user.otp = generateOtp();
         user.otp_generated_at = new Date();
         await user.save();
- 
+
         return res.status(200).json({
             error: false,
             status: 200,
@@ -545,11 +559,11 @@ const getProfile = async (req, res) => {
 
             roleData.club = parent?.clubId
                 ? {
-                      _id: parent.clubId._id,
-                      clubCode: parent.clubId.clubCode || "",
-                      name: parent.clubId.name,
-                      theme: parent.clubId.theme,
-                  }
+                    _id: parent.clubId._id,
+                    clubCode: parent.clubId.clubCode || "",
+                    name: parent.clubId.name,
+                    theme: parent.clubId.theme,
+                }
                 : null;
         } else {
             // Coach / clubAdmin ka club pehle jaisa getRoleData se
