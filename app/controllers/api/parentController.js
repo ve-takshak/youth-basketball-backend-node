@@ -18,6 +18,9 @@ const { removeIdDocument, populatePlayer, formatPlayer } = require("./Playercont
 //      Bachcha hamesha parent wale club mein hi banta hai, isliye pehle selectClub zaroori hai.
 //   3. listAgeGroups     -> form ke "Age Group" dropdown ke liye list
 //   4. listMyYouthPlayers -> parent ke apne bachchon ki list
+//   5. getMyYouthPlayer    -> apne ek bachche ki details
+//   6. updateMyYouthPlayer -> apne bachche ki details edit
+//   7. deleteMyYouthPlayer -> apna bachcha delete (sirf pending)
 
 // ===========================================================================
 // 1. Club select (parent ko club se jodna)
@@ -53,8 +56,8 @@ const selectParentClub = async (req, res) => {
             });
         }
 
-        const clubId = String(req.body.clubId || "").trim();
-        const clubCode = String(req.body.clubCode || "").trim().toUpperCase();
+        const clubId = String(req.body?.clubId || "").trim();
+        const clubCode = String(req.body?.clubCode || "").trim().toUpperCase();
 
         // ---- 1. Club dhundo (id ya code se) ----
         let club = null;
@@ -190,49 +193,70 @@ const generateRegistrationNumber = async () => {
 };
 
 // Bachche ki fields check. Galti ho toh { message }
-const validateChild = (body) => {
+// partial = true (edit): sirf bheje gaye fields check aur return honge
+const validateChild = (body, partial = false) => {
+    body = body || {}; // sirf file bheji ho toh req.body undefined aata hai
     const v = {};
+    const has = (key) => body[key] !== undefined;
 
-    v.firstname = String(body.firstname || "").trim();
-    if (!v.firstname) return { message: "Player first name is required." };
+    if (!partial || has("firstname")) {
+        v.firstname = String(body.firstname || "").trim();
+        if (!v.firstname) return { message: "Player first name is required." };
+    }
 
-    v.lastname = String(body.lastname || "").trim();
-    if (!v.lastname) return { message: "Player last name is required." };
+    if (!partial || has("lastname")) {
+        v.lastname = String(body.lastname || "").trim();
+        if (!v.lastname) return { message: "Player last name is required." };
+    }
 
-    const dob = new Date(body.birthDate);
-    if (!body.birthDate || isNaN(dob.getTime())) return { message: "Valid date of birth is required." };
-    if (dob > new Date()) return { message: "Date of birth cannot be in the future." };
-    v.birthDate = dob;
+    if (!partial || has("birthDate")) {
+        const dob = new Date(body.birthDate);
+        if (!body.birthDate || isNaN(dob.getTime())) return { message: "Valid date of birth is required." };
+        if (dob > new Date()) return { message: "Date of birth cannot be in the future." };
+        v.birthDate = dob;
+    }
 
     // Age group zaroori (parent dropdown se chunta hai, wahi save hota hai)
-    v.ageGroup = String(body.ageGroup || "").trim().toLowerCase();
-    if (!v.ageGroup) return { message: "Age group is required." };
-    if (!AGE_GROUPS.some((g) => g.code === v.ageGroup)) {
-        return { message: `Age group must be one of: ${AGE_GROUPS.map((g) => g.code).join(", ")}.` };
+    if (!partial || has("ageGroup")) {
+        v.ageGroup = String(body.ageGroup || "").trim().toLowerCase();
+        if (!v.ageGroup) return { message: "Age group is required." };
+        if (!AGE_GROUPS.some((g) => g.code === v.ageGroup)) {
+            return { message: `Age group must be one of: ${AGE_GROUPS.map((g) => g.code).join(", ")}.` };
+        }
     }
 
     // Form mein gender nahi hai toh optional, admin baad mein bhar sakta hai
-    v.gender = String(body.gender || "").toLowerCase();
-    if (v.gender && !["boys", "girls"].includes(v.gender)) return { message: "Gender must be boys or girls." };
+    if (!partial || has("gender")) {
+        v.gender = String(body.gender || "").toLowerCase();
+        if (v.gender && !["boys", "girls"].includes(v.gender)) return { message: "Gender must be boys or girls." };
+    }
 
     // ID / Passport number (ek hi field). Passport mein letters bhi ho sakte hain
-    v.idNumber = String(body.idNumber || "").replace(/\s/g, "").toUpperCase();
-    if (!v.idNumber) return { message: "ID / passport number is required." };
-    if (!/^[A-Z0-9]{5,20}$/.test(v.idNumber)) {
-        return { message: "ID / passport number must be 5 to 20 letters or digits." };
+    if (!partial || has("idNumber")) {
+        v.idNumber = String(body.idNumber || "").replace(/\s/g, "").toUpperCase();
+        if (!v.idNumber) return { message: "ID / passport number is required." };
+        if (!/^[A-Z0-9]{5,20}$/.test(v.idNumber)) {
+            return { message: "ID / passport number must be 5 to 20 letters or digits." };
+        }
     }
 
-    v.shirtSize = String(body.shirtSize || "").toUpperCase();
-    if (v.shirtSize && !SHIRT_SIZES.includes(v.shirtSize)) {
-        return { message: `Shirt size must be one of: ${SHIRT_SIZES.join(", ")}.` };
+    if (!partial || has("shirtSize")) {
+        v.shirtSize = String(body.shirtSize || "").toUpperCase();
+        if (v.shirtSize && !SHIRT_SIZES.includes(v.shirtSize)) {
+            return { message: `Shirt size must be one of: ${SHIRT_SIZES.join(", ")}.` };
+        }
     }
 
-    v.medicalNotes = String(body.medicalNotes || "").trim();
-    if (v.medicalNotes.length > 500) return { message: "Medical notes must be 500 characters or less." };
+    if (!partial || has("medicalNotes")) {
+        v.medicalNotes = String(body.medicalNotes || "").trim();
+        if (v.medicalNotes.length > 500) return { message: "Medical notes must be 500 characters or less." };
+    }
 
-    v.relation = String(body.relation || "guardian").toLowerCase();
-    if (!PARENT_RELATIONS.includes(v.relation)) {
-        return { message: `Relation must be one of ${PARENT_RELATIONS.join(", ")}.` };
+    if (!partial || has("relation")) {
+        v.relation = String(body.relation || "guardian").toLowerCase();
+        if (!PARENT_RELATIONS.includes(v.relation)) {
+            return { message: `Relation must be one of ${PARENT_RELATIONS.join(", ")}.` };
+        }
     }
 
     return { values: v };
@@ -243,7 +267,7 @@ const validateChild = (body) => {
  * multipart/form-data (file ho toh) ya JSON:
  *   firstname, lastname, birthDate, idNumber, ageGroup (zaroori)
  *   gender?, shirtSize?, medicalNotes?, relation?     (optional)
- *   photo       (file, optional) JPG / PNG, max 5MB        -> User.profile_image
+ *   profile_image (file, optional) JPG / PNG, max 5MB      -> User.profile_image
  *   idDocument  (file, optional) JPG / PNG / PDF, max 5MB  -> Player.idDocument
  * Club parent ke club se aata hai, body se nahi. registrationNumber server khud banata hai.
  */
@@ -271,7 +295,7 @@ const createYouthPlayer = async (req, res) => {
         const child = checked.values;
 
         // 4. Files check
-        const photo = getFile(req, "photo", PHOTO_TYPES, "a JPG or PNG file", "photo", "Player photo");
+        const photo = getFile(req, "profile_image", PHOTO_TYPES, "a JPG or PNG file", "photo", "Profile image");
         if (photo.error) return sendError(res, 400, photo.error);
         const doc = getFile(req, "idDocument", DOC_TYPES, "a JPG, PNG or PDF file", "id-document", "ID document");
         if (doc.error) return sendError(res, 400, doc.error);
@@ -476,4 +500,231 @@ const listMyYouthPlayers = async (req, res) => {
     }
 };
 
-module.exports = { selectParentClub, createYouthPlayer, listAgeGroups, listMyYouthPlayers };
+// ===========================================================================
+// 5-7. Parent ka apna youth player: details / edit / delete
+// ===========================================================================
+
+// Player id valid, aur ye player isi parent ka hai? Galti ho toh { status, message }
+const findMyPlayer = async (req, id) => {
+    if (req.user.role !== ROLES.PARENT) return { status: 403, message: "Only parents can manage their players." };
+    if (!isValidId(id)) return { status: 400, message: "Invalid player id." };
+
+    const parent = await Parent.findOne({ userId: req.user._id });
+    if (!parent) return { status: 404, message: "Player not found." };
+
+    // Sirf wahi player jiske "parents" mein ye parent hai (doosre ka bachcha 404)
+    const player = await Player.findOne({ _id: id, "parents.parentId": parent._id });
+    if (!player) return { status: 404, message: "Player not found." };
+
+    return { parent, player };
+};
+
+/**
+ * GET /api/user/parent/players/:id   (logged-in parent, :id = Player ki _id)
+ * Apne ek bachche ki details.
+ */
+const getMyYouthPlayer = async (req, res) => {
+    try {
+        const found = await findMyPlayer(req, req.params.id);
+        if (found.message) return sendError(res, found.status, found.message);
+
+        const saved = await populatePlayer(Player.findById(found.player._id));
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Player fetched successfully.",
+            message_desc: "Player fetched successfully.",
+            data: formatPlayer(saved),
+        });
+    } catch (e) {
+        console.error("Get my youth player error:", e);
+        return res.status(500).json({
+            error: true,
+            status: 500,
+            message: "Something went wrong.",
+            message_desc: e.message,
+            data: {},
+        });
+    }
+};
+
+/**
+ * PUT /api/user/parent/players/:id/update   (logged-in parent, :id = Player ki _id)
+ * multipart/form-data ya JSON. Jo badalna hai sirf wahi bhejo:
+ *   firstname?, lastname?, birthDate?, idNumber?, ageGroup?, gender?, shirtSize?, medicalNotes?, relation?
+ *   profile_image (file) = nayi photo.       removeProfileImage=true = photo hatana
+ *   idDocument (file)  = naya ID document.   removeIdDocument=true  = document hatana
+ * Parent team, shirt number, status, playerType, registrationNumber NAHI badal sakta (wo clubAdmin ka kaam).
+ */
+const updateMyYouthPlayer = async (req, res) => {
+    const uploaded = [];
+    try {
+        // 1. Player isi parent ka hai?
+        const found = await findMyPlayer(req, req.params.id);
+        if (found.message) return sendError(res, found.status, found.message);
+        const { parent, player } = found;
+
+        // 2. Bachche ka User
+        const user = await User.findById(player.userId);
+        if (!user) return sendError(res, 404, "Player user not found.");
+
+        // 3. Fields check (sirf bheje gaye)
+        const checked = validateChild(req.body, true);
+        if (checked.message) return sendError(res, 400, checked.message);
+        const child = checked.values;
+
+        // 4. Files check
+        const photo = getFile(req, "profile_image", PHOTO_TYPES, "a JPG or PNG file", "photo", "Profile image");
+        if (photo.error) return sendError(res, 400, photo.error);
+        const doc = getFile(req, "idDocument", DOC_TYPES, "a JPG, PNG or PDF file", "id-document", "ID document");
+        if (doc.error) return sendError(res, 400, doc.error);
+
+        // 5. ID number badla hai toh kisi aur ke paas toh nahi
+        if (child.idNumber && child.idNumber !== user.idNumber) {
+            if (await User.exists({ idNumber: child.idNumber, _id: { $ne: user._id } })) {
+                return sendError(res, 409, "A player with this ID number is already registered. Please contact the club admin.");
+            }
+        }
+
+        // 6. Nayi files upload (saari checking ke baad)
+        const oldPhoto = user.profile_image || "";
+        const oldDoc = player.idDocument || "";
+        let photoChanged = false;
+        let docChanged = false;
+
+        if (photo.file) {
+            const url = await upload_files("players", photo.file);
+            if (!url) throw new Error("Player photo upload failed.");
+            uploaded.push(url);
+            user.profile_image = url;
+            photoChanged = true;
+        } else if (String(req.body?.removeProfileImage) === "true") {
+            user.profile_image = "";
+            photoChanged = true;
+        }
+
+        if (doc.file) {
+            const url = await upload_files("players", doc.file);
+            if (!url) throw new Error("ID document upload failed.");
+            uploaded.push(url);
+            player.idDocument = url;
+            docChanged = true;
+        } else if (String(req.body?.removeIdDocument) === "true") {
+            player.idDocument = "";
+            docChanged = true;
+        }
+
+        // 7. User update (naam, DOB, gender, ID)
+        ["firstname", "lastname", "birthDate", "gender", "idNumber"].forEach((key) => {
+            if (child[key] !== undefined) user[key] = child[key];
+        });
+        await user.save();
+
+        // 8. Player update (age group, shirt size, medical notes)
+        ["ageGroup", "shirtSize", "medicalNotes"].forEach((key) => {
+            if (child[key] !== undefined) player[key] = child[key];
+        });
+        // Relation sirf is parent ke link mein badlega
+        if (child.relation !== undefined) {
+            const link = player.parents.find((l) => String(l.parentId) === String(parent._id));
+            if (link) link.relation = child.relation;
+        }
+        await player.save();
+
+        // 9. Purani files S3 se hatao (save hone ke baad)
+        if (photoChanged && oldPhoto) await removeIdDocument(oldPhoto);
+        if (docChanged && oldDoc) await removeIdDocument(oldDoc);
+
+        const saved = await populatePlayer(Player.findById(player._id));
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Player updated successfully.",
+            message_desc: "Player updated successfully.",
+            data: formatPlayer(saved),
+        });
+    } catch (e) {
+        // Nayi upload hui files hata do (DB mein purani hi rahengi)
+        for (const fileUrl of uploaded) await removeIdDocument(fileUrl);
+
+        if (e.code === 11000) {
+            const field = Object.keys(e.keyPattern || e.keyValue || {}).join(", ") || "unknown";
+            const message = field === "idNumber" ? "A player with this ID number is already registered." : `Duplicate value for: ${field}.`;
+            return res.status(409).json({
+                error: true,
+                status: 409,
+                message,
+                message_desc: e.message,
+                data: { field, value: e.keyValue || {} },
+            });
+        }
+        console.error("Update my youth player error:", e);
+        return res.status(500).json({
+            error: true,
+            status: 500,
+            message: "Something went wrong.",
+            message_desc: e.message,
+            data: {},
+        });
+    }
+};
+
+/**
+ * DELETE /api/user/parent/players/:id/delete   (logged-in parent, :id = Player ki _id)
+ * Sirf "pending" player delete ho sakta hai (club ne abhi approve nahi kiya).
+ * Approve ho chuke player ke liye clubAdmin se baat karni hogi.
+ * Player + bachche ka User + uski files (photo, ID document) hat jaati hain. Parent ka apna account rehta hai.
+ */
+const deleteMyYouthPlayer = async (req, res) => {
+    try {
+        const found = await findMyPlayer(req, req.params.id);
+        if (found.message) return sendError(res, found.status, found.message);
+        const { player } = found;
+
+        if (player.status !== "pending") {
+            return sendError(
+                res,
+                400,
+                "This player is already approved by the club. Please contact the club admin to remove the player."
+            );
+        }
+
+        const user = await User.findById(player.userId).select("profile_image");
+
+        await Player.findByIdAndDelete(player._id);
+        await User.findByIdAndDelete(player.userId);
+
+        // Files S3 se (fail ho toh bhi delete ho chuka, sirf warning)
+        await removeIdDocument(player.idDocument);
+        if (user?.profile_image) await removeIdDocument(user.profile_image);
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Player deleted successfully.",
+            message_desc: "Player deleted successfully.",
+            data: { _id: player._id },
+        });
+    } catch (e) {
+        console.error("Delete my youth player error:", e);
+        return res.status(500).json({
+            error: true,
+            status: 500,
+            message: "Something went wrong.",
+            message_desc: e.message,
+            data: {},
+        });
+    }
+};
+
+module.exports = {
+    selectParentClub,
+    createYouthPlayer,
+    listAgeGroups,
+    listMyYouthPlayers,
+    getMyYouthPlayer,
+    updateMyYouthPlayer,
+    deleteMyYouthPlayer,
+};
