@@ -751,12 +751,18 @@ const deleteClub = async (req, res) => {
 
 
 
+/**
+ * GET /api/user/clubOptions?search=   (token optional)
+ * Dropdown ke liye clubs: { _id, clubCode, name }
+ * Bina token: saare clubs (parent registration screen ke liye)
+ */
 const clubOptions = async (req, res) => {
     try {
         const search = String(req.query.search || "").trim();
         const filter = {};
 
-        if (req.user.role === ROLES.CLUB_ADMIN) {
+        // Token ke saath clubAdmin aaya toh sirf uska club. Bina token req.user nahi hota.
+        if (req.user?.role === ROLES.CLUB_ADMIN) {
             if (!req.clubId) {
                 return res.status(403).json({
                     error: true,
@@ -802,7 +808,6 @@ const clubOptions = async (req, res) => {
         });
     }
 };
-
 
 
 module.exports = { createClub, listClubs, getClub, updateClub, deleteClub, clubOptions };

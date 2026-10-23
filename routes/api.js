@@ -54,7 +54,7 @@ router.get("/user/listClubs", superAdminOrClubAdminAuthentication, listClubs);  
 router.get("/user/getClub/:id", superAdminOrClubAdminAuthentication, getClub);
 router.put("/user/updateClub/:id", superAdminAuthentication, updateClub);
 router.delete("/user/deleteClub/:id", superAdminAuthentication, deleteClub);
-router.get("/user/clubOptions", authentication, clubOptions);
+router.get("/user/clubOptions", clubOptions);
 
 // ---------- Club Admin (sirf superAdmin banata hai) ----------
 router.post("/user/createClubAdmin", superAdminAuthentication, createClubAdmin);
