@@ -34,6 +34,7 @@ const {
 const { createPlayer, listPlayers, getPlayer, updatePlayer, deletePlayer, listShirtSizes, listShirtNumbers, listOtherTeamPlayers, assignPlayerToTeam, removePlayerFromTeam, listUnassignedPlayers } = require("../app/controllers/api/Playercontroller");
 const { removeProfileImage, updateProfileImage } = require("../app/controllers/api/Profileimagecontroller");
 const { selectParentClub, listAgeGroups, createYouthPlayer, listMyYouthPlayers, deleteMyYouthPlayer, updateMyYouthPlayer, getMyYouthPlayer } = require("../app/controllers/api/parentController");
+const { listParents, updateParent, deleteParent, linkParentToPlayer, unlinkParentFromPlayer } = require("../app/controllers/api/admin/Adminparentcontroller");
 
 router.get("/test", (req, res) => res.send("API working"));
 
@@ -109,5 +110,11 @@ router.get("/user/parent/players/:id", authentication, getMyYouthPlayer);
 router.put("/user/parent/players/:id/update", authentication, updateMyYouthPlayer);
 router.delete("/user/parent/players/:id/delete", authentication, deleteMyYouthPlayer)
 
+//admin parents
+router.get("/user/parents", authentication, listParents);
+router.put("/user/parents/:id/update", authentication, updateParent);
+router.delete("/user/parents/:id/delete", authentication, deleteParent);
+router.post("/user/players/:id/parents/link", authentication, linkParentToPlayer);
+router.delete("/user/players/:id/parents/:parentId/unlink", authentication, unlinkParentFromPlayer);
 
 module.exports = router;
