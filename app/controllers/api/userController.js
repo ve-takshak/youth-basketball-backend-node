@@ -5,6 +5,11 @@ const { ROLES, USE_STATIC_OTP, STATIC_OTP, OTP_VALID_MINUTES } = require("../../
 const { cleanMobile } = require("../../helpers/common");
 const { publicUser, getRoleData } = require("../../helpers/userHelper");
 const Parent = require("../../models/Parent");
+const Club = require("../../models/Club");
+const ClubAdmin = require("../../models/ClubAdmin");
+const Coach = require("../../models/Coach");
+const Player = require("../../models/Player");
+
 
 // Abhi OTP hamesha 0000. SMS lagane pe yahan random OTP banake SMS bhejna.
 const generateOtp = () => STATIC_OTP;
@@ -15,16 +20,57 @@ const createToken = (user) =>
         expiresIn: "180d",
     });
 
-const getParentClub = async (userId) => {
-    const parent = await Parent.findOne({ userId }).populate("clubId", "_id clubCode name theme");
-    return parent?.clubId
+// Club ka ek hi format, har API mein same: { _id, clubCode, name, theme }
+const formatClub = (club) =>
+    club && club._id
         ? {
-              _id: parent.clubId._id,
-              clubCode: parent.clubId.clubCode || "",
-              name: parent.clubId.name,
-              theme: parent.clubId.theme,
+              _id: club._id,
+              clubCode: club.clubCode || "",
+              name: club.name || "",
+              theme: club.theme || {},
           }
         : null;
+
+const CLUB_FIELDS = "_id clubCode name theme";
+
+const getParentClub = async (userId) => {
+    const parent = await Parent.findOne({ userId }).populate("clubId", CLUB_FIELDS);
+    return formatClub(parent?.clubId);
+};
+
+/**
+ * User kis club ka hai (role ke hisaab se sahi model se). superAdmin ya club na mile toh null.
+ *   parent              -> Parent
+ *   clubAdmin           -> ClubAdmin
+ *   coach               -> Coach
+ *   seniorPlayer / youthPlayer -> Player
+ */
+const getUserClub = async (user) => {
+    let record = null;
+    switch (user.role) {
+        case ROLES.PARENT:
+            return getParentClub(user._id);
+        case ROLES.CLUB_ADMIN:
+            record = await ClubAdmin.findOne({ userId: user._id }).populate("clubId", CLUB_FIELDS);
+            break;
+        case ROLES.COACH:
+            record = await Coach.findOne({ userId: user._id }).populate("clubId", CLUB_FIELDS);
+            break;
+        case ROLES.SENIOR_PLAYER:
+        case ROLES.YOUTH_PLAYER:
+            record = await Player.findOne({ userId: user._id }).populate("clubId", CLUB_FIELDS);
+            break;
+        default:
+            return null; // superAdmin ka koi ek club nahi
+    }
+    return formatClub(record?.clubId);
+};
+
+// Login response ke liye: getRoleData ka baaki data + club hamesha same format mein
+const buildRoleData = async (user) => {
+    const roleData = user.role === ROLES.PARENT ? {} : (await getRoleData(user)) || {};
+    roleData.club = await getUserClub(user);
+    return roleData;
 };
 
 /**
@@ -128,13 +174,14 @@ const register = async (req, res) => {
     }
 };
 
-
 /**
  * POST /api/user/parent/register
- * Parent registration: naam + mobile (+ email optional). Mobile par OTP jaata hai.
- * body: { firstname, lastname, countryCode, mobileNumber, email?, device_type?, device_token? }
+ * Parent registration: naam + mobile + club code (+ email optional). Mobile par OTP jaata hai.
+ * Club isi step mein jud jaata hai, alag se selectClub ki zaroorat nahi.
+ * body: { firstname, lastname, countryCode, mobileNumber, clubCode, email?, device_type?, device_token? }
  */
 const registerParent = async (req, res) => {
+    let createdUserId = null;
     try {
         let {
             firstname = "",
@@ -142,6 +189,7 @@ const registerParent = async (req, res) => {
             email = "",
             countryCode = "+972",
             mobileNumber = "",
+            clubCode = "",
             device_type = "",
             device_token = "",
         } = req.body || {};
@@ -151,6 +199,7 @@ const registerParent = async (req, res) => {
         email = String(email).trim().toLowerCase();
         countryCode = String(countryCode).trim();
         mobileNumber = cleanMobile(mobileNumber);
+        clubCode = String(clubCode).trim().toUpperCase();
 
         // ---- 1. Fields check ----
         if (!firstname || !lastname) {
@@ -183,7 +232,29 @@ const registerParent = async (req, res) => {
             });
         }
 
-        // ---- 2. Mobile pehle se registered? ----
+        if (!clubCode) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "Club code is required.",
+                message_desc: "Club code is required.",
+                data: {},
+            });
+        }
+
+        // ---- 2. Club code sahi hai? (User banane se pehle) ----
+        const club = await Club.findOne({ clubCode }).select(CLUB_FIELDS);
+        if (!club) {
+            return res.status(404).json({
+                error: true,
+                status: 404,
+                message: "Invalid club code.",
+                message_desc: "Invalid club code.",
+                data: {},
+            });
+        }
+
+        // ---- 3. Mobile pehle se registered? ----
         let user = await User.findOne({ countryCode, mobileNumber });
 
         if (user) {
@@ -197,10 +268,10 @@ const registerParent = async (req, res) => {
                     data: {},
                 });
             }
-            // Unverified parent ne dobara try kiya → wahi record, naye naam/email + naya OTP
+            // Unverified parent ne dobara try kiya → wahi record, naye naam/email/club + naya OTP
         }
 
-        // ---- 3. Email kisi aur ka toh nahi (apne unverified record ko chhod ke) ----
+        // ---- 4. Email kisi aur ka toh nahi (apne unverified record ko chhod ke) ----
         if (email) {
             const emailExists = await User.findOne({
                 email,
@@ -217,13 +288,14 @@ const registerParent = async (req, res) => {
             }
         }
 
-        // ---- 4. Naya parent ya purana unverified record update ----
+        // ---- 5. User save (naya ya purana unverified) ----
         if (!user) {
             user = new User({
                 countryCode,
                 mobileNumber,
                 role: ROLES.PARENT, // body se role nahi lete
             });
+            createdUserId = user._id;
         }
 
         user.firstname = firstname;
@@ -235,15 +307,38 @@ const registerParent = async (req, res) => {
         user.otp_generated_at = new Date();
         await user.save();
 
+        // ---- 6. Parent ko club se jodo ----
+        // Unverified parent ne dobara register kiya aur club badla → naya club (abhi verify nahi hua, safe)
+        const parent = await Parent.findOne({ userId: user._id });
+        if (parent) {
+            if (String(parent.clubId) !== String(club._id)) {
+                parent.clubId = club._id;
+                await parent.save();
+            }
+        } else {
+            await Parent.create({ userId: user._id, clubId: club._id, createdBy: user._id }); // self-join
+        }
+
         return res.status(201).json({
             error: false,
             status: 201,
             message: "OTP sent to your mobile number.",
             message_desc: "OTP sent to your mobile number.",
-            data: { firstname, lastname, email, countryCode, mobileNumber },
+            data: {
+                firstname,
+                lastname,
+                email,
+                countryCode,
+                mobileNumber,
+                club: formatClub(club),
+            },
         });
     } catch (e) {
-        // Do request ek saath (double tap) ya same email / mobile
+        // Naya User bana tha aur aage fail hua toh hata do (adhoora account na bache)
+        if (createdUserId) {
+            await Parent.deleteOne({ userId: createdUserId }).catch(() => {});
+            await User.findByIdAndDelete(createdUserId).catch(() => {});
+        }
         if (e.code === 11000) {
             return res.status(409).json({
                 error: true,
@@ -264,10 +359,9 @@ const registerParent = async (req, res) => {
     }
 };
 
-
 /**
  * PUT /api/user/parent/profile   (logged-in parent, token zaroori)
- * Registration form: firstname, lastname, email (optional).
+ * Profile edit: firstname, lastname, email (optional).
  * body: { firstname, lastname, email? }
  */
 const updateParentProfile = async (req, res) => {
@@ -295,7 +389,7 @@ const updateParentProfile = async (req, res) => {
             });
         }
 
-        let { firstname = "", lastname = "", email = "" } = req.body;
+        let { firstname = "", lastname = "", email = "" } = req.body || {};
         firstname = String(firstname).trim();
         lastname = String(lastname).trim();
         email = String(email).trim().toLowerCase();
@@ -339,9 +433,9 @@ const updateParentProfile = async (req, res) => {
         user.email = email || undefined; // khaali email save nahi karna
         await user.save();
 
-         const club = await getParentClub(user._id);
+        const club = await getParentClub(user._id);
 
-         return res.status(200).json({
+        return res.status(200).json({
             error: false,
             status: 200,
             message: "Profile saved successfully.",
@@ -414,11 +508,10 @@ const login = async (req, res) => {
     }
 };
 
-
 /**
  * POST /api/user/verify-otp
  * body: { countryCode, mobileNumber, otp, device_type?, device_token? }
- * Sahi OTP pe token milta hai, saath mein club (coach/clubAdmin/parent).
+ * Sahi OTP pe token milta hai, saath mein club { _id, clubCode, name, theme } (har role ke liye, superAdmin ko null).
  */
 const verifyOtp = async (req, res) => {
     try {
@@ -500,25 +593,8 @@ const verifyOtp = async (req, res) => {
         if (device_token !== undefined) user.device_token = device_token;
         await user.save();
 
-        let roleData = {};
-
-        if (user.role === ROLES.PARENT) {
-            // Parent ka club Parent model se
-            const parent = await Parent.findOne({ userId: user._id })
-                .populate("clubId", "_id clubCode name theme");
-
-            roleData.club = parent?.clubId
-                ? {
-                    _id: parent.clubId._id,
-                    clubCode: parent.clubId.clubCode || "",
-                    name: parent.clubId.name,
-                    theme: parent.clubId.theme,
-                }
-                : null;
-        } else {
-            // Coach / clubAdmin ka club pehle jaisa getRoleData se
-            roleData = await getRoleData(user);
-        }
+        // Club details (id, code, name, theme) har role ke liye same format mein
+        const roleData = await buildRoleData(user);
 
         return res.status(200).json({
             error: false,
@@ -594,7 +670,7 @@ const resendOtp = async (req, res) => {
 
 /**
  * GET /api/user/profile   (koi bhi logged-in user)
- * App/panel refresh pe user ki latest details + club (coach/clubAdmin/parent).
+ * App/panel refresh pe user ki latest details + club { _id, clubCode, name, theme }.
  */
 const getProfile = async (req, res) => {
     try {
@@ -611,25 +687,7 @@ const getProfile = async (req, res) => {
             });
         }
 
-        let roleData = {};
-
-        if (user.role === ROLES.PARENT) {
-            // Parent ka club Parent model se
-            const parent = await Parent.findOne({ userId: user._id })
-                .populate("clubId", "_id clubCode name theme");
-
-            roleData.club = parent?.clubId
-                ? {
-                    _id: parent.clubId._id,
-                    clubCode: parent.clubId.clubCode || "",
-                    name: parent.clubId.name,
-                    theme: parent.clubId.theme,
-                }
-                : null;
-        } else {
-            // Coach / clubAdmin ka club pehle jaisa getRoleData se
-            roleData = await getRoleData(user);
-        }
+        const roleData = await buildRoleData(user);
 
         return res.status(200).json({
             error: false,
@@ -652,4 +710,5 @@ const getProfile = async (req, res) => {
         });
     }
 };
+
 module.exports = { register, login, verifyOtp, getProfile, resendOtp, registerParent, updateParentProfile };
