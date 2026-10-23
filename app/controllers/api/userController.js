@@ -131,20 +131,37 @@ const register = async (req, res) => {
 
 /**
  * POST /api/user/parent/register
- * Parent registration ka pehla step: sirf mobile number.
- * body: { countryCode, mobileNumber, device_type?, device_token? }
+ * Parent registration: naam + mobile (+ email optional). Mobile par OTP jaata hai.
+ * body: { firstname, lastname, countryCode, mobileNumber, email?, device_type?, device_token? }
  */
 const registerParent = async (req, res) => {
     try {
         let {
+            firstname = "",
+            lastname = "",
+            email = "",
             countryCode = "+972",
             mobileNumber = "",
             device_type = "",
             device_token = "",
-        } = req.body;
+        } = req.body || {};
 
+        firstname = String(firstname).trim();
+        lastname = String(lastname).trim();
+        email = String(email).trim().toLowerCase();
         countryCode = String(countryCode).trim();
         mobileNumber = cleanMobile(mobileNumber);
+
+        // ---- 1. Fields check ----
+        if (!firstname || !lastname) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "First name and last name are required.",
+                message_desc: "First name and last name are required.",
+                data: {},
+            });
+        }
 
         if (!mobileNumber || mobileNumber.length < 7) {
             return res.status(400).json({
@@ -156,6 +173,17 @@ const registerParent = async (req, res) => {
             });
         }
 
+        if (email && !validator.isEmail(email)) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: "Please enter a valid email.",
+                message_desc: "Please enter a valid email.",
+                data: {},
+            });
+        }
+
+        // ---- 2. Mobile pehle se registered? ----
         let user = await User.findOne({ countryCode, mobileNumber });
 
         if (user) {
@@ -169,8 +197,28 @@ const registerParent = async (req, res) => {
                     data: {},
                 });
             }
-            // Unverified parent ne dobara try kiya → wahi record, bas naya OTP
-        } else {
+            // Unverified parent ne dobara try kiya → wahi record, naye naam/email + naya OTP
+        }
+
+        // ---- 3. Email kisi aur ka toh nahi (apne unverified record ko chhod ke) ----
+        if (email) {
+            const emailExists = await User.findOne({
+                email,
+                ...(user ? { _id: { $ne: user._id } } : {}),
+            });
+            if (emailExists) {
+                return res.status(409).json({
+                    error: true,
+                    status: 409,
+                    message: "This email is already registered.",
+                    message_desc: "This email is already registered.",
+                    data: {},
+                });
+            }
+        }
+
+        // ---- 4. Naya parent ya purana unverified record update ----
+        if (!user) {
             user = new User({
                 countryCode,
                 mobileNumber,
@@ -178,6 +226,9 @@ const registerParent = async (req, res) => {
             });
         }
 
+        user.firstname = firstname;
+        user.lastname = lastname;
+        user.email = email || undefined; // khaali email save nahi karna
         user.device_type = device_type;
         user.device_token = device_token;
         user.otp = generateOtp();
@@ -189,9 +240,19 @@ const registerParent = async (req, res) => {
             status: 201,
             message: "OTP sent to your mobile number.",
             message_desc: "OTP sent to your mobile number.",
-            data: { countryCode, mobileNumber },
+            data: { firstname, lastname, email, countryCode, mobileNumber },
         });
     } catch (e) {
+        // Do request ek saath (double tap) ya same email / mobile
+        if (e.code === 11000) {
+            return res.status(409).json({
+                error: true,
+                status: 409,
+                message: "This mobile number or email is already registered.",
+                message_desc: "This mobile number or email is already registered.",
+                data: {},
+            });
+        }
         console.error("Register parent error:", e);
         return res.status(500).json({
             error: true,
