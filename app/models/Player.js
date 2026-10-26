@@ -6,7 +6,7 @@ const mongoose = require("../../config/database");
 //   youth  -> User role "youthPlayer":  parent ke under (kam se kam ek parent), mobile optional
 // Personal details (naam, DOB, gender, ID, mobile, email) User model mein hain.
 // Yahan sirf khel se judi cheezein hain. Coach / Parent jaisa hi pattern.
-const SHIRT_SIZES = ["YXS", "YS", "YM", "YL", "XS", "S", "M", "L", "XL", "XXL"]; // Y = youth (bachchon ke size)
+const SHIRT_SIZES = ["8", "10", "12", "14", "16", "S", "M", "L", "XL", "XXL", "XXXL"];
 const PLAYER_STATUSES = ["pending", "active", "waitlisted", "inactive", "left"];
 const PLAYER_TYPES = ["youth", "senior"];
 const PARENT_RELATIONS = ["father", "mother", "guardian", "other"];
