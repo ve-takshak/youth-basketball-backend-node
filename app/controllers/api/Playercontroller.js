@@ -1244,17 +1244,19 @@ const deletePlayer = async (req, res) => {
  * GET /api/user/players/shirt-sizes   (koi bhi logged-in user)
  * Player form ke dropdown ke liye shirt sizes. List Player model se aati hai.
  */
+
 const SHIRT_SIZE_LABELS = {
-    YXS: "Youth XS",
-    YS: "Youth S",
-    YM: "Youth M",
-    YL: "Youth L",
-    XS: "XS",
+    "8": "8",
+    "10": "10",
+    "12": "12",
+    "14": "14",
+    "16": "16",
     S: "S",
     M: "M",
     L: "L",
     XL: "XL",
     XXL: "XXL",
+    XXXL: "XXXL",
 };
 
 const listShirtSizes = async (req, res) => {
@@ -1267,9 +1269,8 @@ const listShirtSizes = async (req, res) => {
             shirtSizes: SHIRT_SIZES.map((code) => ({
                 code,
                 label: SHIRT_SIZE_LABELS[code] || code,
-                group: code.startsWith("Y") ? "youth" : "adult",
             })),
-        },
+        }
     });
 };
 

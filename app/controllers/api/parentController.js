@@ -4,7 +4,7 @@ const Club = require("../../models/Club");
 const User = require("../../models/User");
 const Parent = require("../../models/Parent");
 const Player = require("../../models/Player");
-const { SHIRT_SIZES, PARENT_RELATIONS, PLAYER_STATUSES, AGE_GROUPS } = require("../../models/Player");
+const { SHIRT_SIZES, WEAR_SIZE_FIELDS, PARENT_RELATIONS, PLAYER_STATUSES } = require("../../models/Player");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId } = require("../../helpers/common");
 const { upload_files } = require("../../../utils/s3");
@@ -16,11 +16,10 @@ const { removeIdDocument, populatePlayer, formatPlayer } = require("./Playercont
 //   2. createYouthPlayer -> parent apna EK youth player (bachcha) add karta hai.
 //      Player "pending" banta hai, team nahi hoti. ClubAdmin baad mein team assign karke "active" karega.
 //      Bachcha hamesha parent wale club mein hi banta hai, isliye pehle selectClub zaroori hai.
-//   3. listAgeGroups     -> form ke "Age Group" dropdown ke liye list
-//   4. listMyYouthPlayers -> parent ke apne bachchon ki list
-//   5. getMyYouthPlayer    -> apne ek bachche ki details
-//   6. updateMyYouthPlayer -> apne bachche ki details edit
-//   7. deleteMyYouthPlayer -> apna bachcha delete (sirf pending)
+//   3. listMyYouthPlayers -> parent ke apne bachchon ki list
+//   4. getMyYouthPlayer    -> apne ek bachche ki details
+//   5. updateMyYouthPlayer -> apne bachche ki details edit
+//   6. deleteMyYouthPlayer -> apna bachcha delete (sirf pending)
 
 // ===========================================================================
 // 1. Club select (parent ko club se jodna)
@@ -192,6 +191,13 @@ const generateRegistrationNumber = async () => {
     throw new Error("Could not generate a unique registration number. Please try again.");
 };
 
+// Error messages ke liye sizes ke naam
+const WEAR_SIZE_LABELS = {
+    gameWearSize: "Game-wear size",
+    trainingWearSize: "Training-wear size",
+    winterWearSize: "Winter-wear size",
+};
+
 // Bachche ki fields check. Galti ho toh { message }
 // partial = true (edit): sirf bheje gaye fields check aur return honge
 const validateChild = (body, partial = false) => {
@@ -216,15 +222,6 @@ const validateChild = (body, partial = false) => {
         v.birthDate = dob;
     }
 
-    // Age group zaroori (parent dropdown se chunta hai, wahi save hota hai)
-    if (!partial || has("ageGroup")) {
-        v.ageGroup = String(body.ageGroup || "").trim().toLowerCase();
-        if (!v.ageGroup) return { message: "Age group is required." };
-        if (!AGE_GROUPS.some((g) => g.code === v.ageGroup)) {
-            return { message: `Age group must be one of: ${AGE_GROUPS.map((g) => g.code).join(", ")}.` };
-        }
-    }
-
     // Form mein gender nahi hai toh optional, admin baad mein bhar sakta hai
     if (!partial || has("gender")) {
         v.gender = String(body.gender || "").toLowerCase();
@@ -240,10 +237,13 @@ const validateChild = (body, partial = false) => {
         }
     }
 
-    if (!partial || has("shirtSize")) {
-        v.shirtSize = String(body.shirtSize || "").toUpperCase();
-        if (v.shirtSize && !SHIRT_SIZES.includes(v.shirtSize)) {
-            return { message: `Shirt size must be one of: ${SHIRT_SIZES.join(", ")}.` };
+    // Teen size (game / training / winter), teeno optional, same SHIRT_SIZES list
+    for (const field of WEAR_SIZE_FIELDS) {
+        if (!partial || has(field)) {
+            v[field] = String(body[field] ?? "").trim().toUpperCase();
+            if (v[field] && !SHIRT_SIZES.includes(v[field])) {
+                return { message: `${WEAR_SIZE_LABELS[field]} must be one of: ${SHIRT_SIZES.join(", ")}.` };
+            }
         }
     }
 
@@ -265,8 +265,8 @@ const validateChild = (body, partial = false) => {
 /**
  * POST /api/user/parent/players/create   (logged-in parent)
  * multipart/form-data (file ho toh) ya JSON:
- *   firstname, lastname, birthDate, idNumber, ageGroup (zaroori)
- *   gender?, shirtSize?, medicalNotes?, relation?     (optional)
+ *   firstname, lastname, birthDate, idNumber          (zaroori)
+ *   gender?, gameWearSize?, trainingWearSize?, winterWearSize?, medicalNotes?, relation?   (optional)
  *   profile_image (file, optional) JPG / PNG, max 5MB      -> User.profile_image
  *   idDocument  (file, optional) JPG / PNG / PDF, max 5MB  -> Player.idDocument
  * Club parent ke club se aata hai, body se nahi. registrationNumber server khud banata hai.
@@ -342,11 +342,12 @@ const createYouthPlayer = async (req, res) => {
             teamId: null, // team clubAdmin dega
             season: "",
             playerType: "youth",
-            shirtSize: child.shirtSize,
+            gameWearSize: child.gameWearSize,
+            trainingWearSize: child.trainingWearSize,
+            winterWearSize: child.winterWearSize,
             shirtNumber: null,
             idDocument: docUrl,
             medicalNotes: child.medicalNotes,
-            ageGroup: child.ageGroup,
             status: "pending",
             parents: [{ parentId: parent._id, relation: child.relation, isPrimary: true }],
             createdBy: req.user._id,
@@ -395,50 +396,13 @@ const createYouthPlayer = async (req, res) => {
 };
 
 // ===========================================================================
-// 3. Age groups ki list (form ke dropdown ke liye)
+// 3. Parent ke apne youth players (bachchon) ki list
 // ===========================================================================
 
 /**
- * GET /api/user/parent/age-groups   (koi bhi logged-in user)
- * Saare age groups (form ke dropdown ke liye). List Player model se aati hai.
- */
-const listAgeGroups = async (req, res) => {
-    try {
-        const ageGroups = AGE_GROUPS.map((group) => ({
-            code: group.code,
-            label: group.label,
-            minAge: group.minAge,
-            maxAge: group.maxAge,
-        }));
-
-        return res.status(200).json({
-            error: false,
-            status: 200,
-            message: "Age groups fetched successfully.",
-            message_desc: "Age groups fetched successfully.",
-            data: { ageGroups },
-        });
-    } catch (e) {
-        console.error("List age groups error:", e);
-        return res.status(500).json({
-            error: true,
-            status: 500,
-            message: "Something went wrong.",
-            message_desc: e.message,
-            data: {},
-        });
-    }
-};
-
-// ===========================================================================
-// 4. Parent ke apne youth players (bachchon) ki list
-// ===========================================================================
-
-/**
- * GET /api/user/parent/players?status=&ageGroup=   (logged-in parent)
+ * GET /api/user/parent/players?status=   (logged-in parent)
  * Sirf wahi players jinke "parents" mein ye parent hai.
  * status (optional): pending | active | waitlisted | inactive | left
- * ageGroup (optional): mini | youth | junior
  */
 const listMyYouthPlayers = async (req, res) => {
     try {
@@ -468,14 +432,6 @@ const listMyYouthPlayers = async (req, res) => {
             filter.status = status;
         }
 
-        const ageGroup = String(req.query.ageGroup || "").trim().toLowerCase();
-        if (ageGroup) {
-            if (!AGE_GROUPS.some((g) => g.code === ageGroup)) {
-                return sendError(res, 400, `Age group must be one of: ${AGE_GROUPS.map((g) => g.code).join(", ")}.`);
-            }
-            filter.ageGroup = ageGroup;
-        }
-
         const players = await populatePlayer(Player.find(filter).sort({ createdAt: -1 }));
 
         return res.status(200).json({
@@ -501,7 +457,7 @@ const listMyYouthPlayers = async (req, res) => {
 };
 
 // ===========================================================================
-// 5-7. Parent ka apna youth player: details / edit / delete
+// 4-6. Parent ka apna youth player: details / edit / delete
 // ===========================================================================
 
 // Player id valid, aur ye player isi parent ka hai? Galti ho toh { status, message }
@@ -552,7 +508,8 @@ const getMyYouthPlayer = async (req, res) => {
 /**
  * PUT /api/user/parent/players/:id/update   (logged-in parent, :id = Player ki _id)
  * multipart/form-data ya JSON. Jo badalna hai sirf wahi bhejo:
- *   firstname?, lastname?, birthDate?, idNumber?, ageGroup?, gender?, shirtSize?, medicalNotes?, relation?
+ *   firstname?, lastname?, birthDate?, idNumber?, gender?, gameWearSize?, trainingWearSize?, winterWearSize?,
+ *   medicalNotes?, relation?
  *   profile_image (file) = nayi photo.       removeProfileImage=true = photo hatana
  *   idDocument (file)  = naya ID document.   removeIdDocument=true  = document hatana
  * Parent team, shirt number, status, playerType, registrationNumber NAHI badal sakta (wo clubAdmin ka kaam).
@@ -621,8 +578,8 @@ const updateMyYouthPlayer = async (req, res) => {
         });
         await user.save();
 
-        // 8. Player update (age group, shirt size, medical notes)
-        ["ageGroup", "shirtSize", "medicalNotes"].forEach((key) => {
+        // 8. Player update (teen sizes, medical notes)
+        [...WEAR_SIZE_FIELDS, "medicalNotes"].forEach((key) => {
             if (child[key] !== undefined) player[key] = child[key];
         });
         // Relation sirf is parent ke link mein badlega
@@ -722,7 +679,6 @@ const deleteMyYouthPlayer = async (req, res) => {
 module.exports = {
     selectParentClub,
     createYouthPlayer,
-    listAgeGroups,
     listMyYouthPlayers,
     getMyYouthPlayer,
     updateMyYouthPlayer,

@@ -7,15 +7,11 @@ const mongoose = require("../../config/database");
 // Personal details (naam, DOB, gender, ID, mobile, email) User model mein hain.
 // Yahan sirf khel se judi cheezein hain. Coach / Parent jaisa hi pattern.
 const SHIRT_SIZES = ["8", "10", "12", "14", "16", "S", "M", "L", "XL", "XXL", "XXXL"];
+// Teen alag kapdon ke size, teeno mein same SHIRT_SIZES list
+const WEAR_SIZE_FIELDS = ["gameWearSize", "trainingWearSize", "winterWearSize"];
 const PLAYER_STATUSES = ["pending", "active", "waitlisted", "inactive", "left"];
 const PLAYER_TYPES = ["youth", "senior"];
 const PARENT_RELATIONS = ["father", "mother", "guardian", "other"];
-const AGE_GROUPS = [
-    { code: "mini", label: "Youth (Ages 4-6)", minAge: 4, maxAge: 6 },
-    { code: "youth", label: "Youth (Ages 7-13)", minAge: 7, maxAge: 13 },
-    { code: "junior", label: "Youth (Ages 14-17)", minAge: 14, maxAge: 17 },
-];
-
 
 // Player aur Parent ka rishta (sirf youth). Parent ki details Parent model (aur uske User) mein hain.
 const PlayerParentSchema = new mongoose.Schema(
@@ -26,6 +22,8 @@ const PlayerParentSchema = new mongoose.Schema(
     },
     { _id: false }
 );
+
+const sizeField = { type: String, enum: [...SHIRT_SIZES, ""], default: "" };
 
 const PlayerSchema = new mongoose.Schema(
     {
@@ -41,8 +39,12 @@ const PlayerSchema = new mongoose.Schema(
         // youth = parent ke under (parent zaroori), senior = khud login, parent nahi
         playerType: { type: String, enum: PLAYER_TYPES, default: "youth" },
 
-        // ---- Shirt ----
-        shirtSize: { type: String, enum: [...SHIRT_SIZES, ""], default: "" },
+        // ---- Kapdon ke size (purana "shirtSize" ab gameWearSize hai) ----
+        gameWearSize: sizeField,
+        trainingWearSize: sizeField,
+        winterWearSize: sizeField,
+
+        // ---- Jersey number ----
         shirtNumber: { type: Number, min: 0, default: null }, // 145 jaisa bhi ho sakta hai
 
         // ---- Photo / ID / passport attachment (IBBA ke liye), S3 URL jaise club logo ----
@@ -51,9 +53,8 @@ const PlayerSchema = new mongoose.Schema(
         // ---- Parents / guardians (sirf youth, ek se zyada ho sakte hain) ----
         parents: { type: [PlayerParentSchema], default: [] },
 
-        ageGroup: { type: String, enum: [...AGE_GROUPS.map((g) => g.code), ""], default: "" },
-
-        registrationNumber: { type: String, trim: true },
+        // Player registration number, jaise REG2026HDFH54 (parent create pe automatic)
+        registrationNumber: { type: String, trim: true, uppercase: true },
 
         // ---- Registration status ----
         status: { type: String, enum: PLAYER_STATUSES, default: "active" },
@@ -61,7 +62,7 @@ const PlayerSchema = new mongoose.Schema(
         // ---- Medical / allergies (sirf coach, clubAdmin, parent dekh sakein) ----
         medicalNotes: { type: String, trim: true, maxlength: 500, default: "" },
 
-        createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }, // superAdmin ya clubAdmin
+        createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }, // superAdmin, clubAdmin ya parent
     },
     { timestamps: true }
 );
@@ -77,7 +78,7 @@ PlayerSchema.index(
 const Player = mongoose.model("Player", PlayerSchema);
 module.exports = Player;
 module.exports.SHIRT_SIZES = SHIRT_SIZES;
+module.exports.WEAR_SIZE_FIELDS = WEAR_SIZE_FIELDS;
 module.exports.PLAYER_STATUSES = PLAYER_STATUSES;
 module.exports.PLAYER_TYPES = PLAYER_TYPES;
 module.exports.PARENT_RELATIONS = PARENT_RELATIONS;
-module.exports.AGE_GROUPS = AGE_GROUPS;

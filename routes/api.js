@@ -31,10 +31,35 @@ const {
     updateTeam,
     deleteTeam,
 } = require("../app/controllers/api/teamController");
-const { createPlayer, listPlayers, getPlayer, updatePlayer, deletePlayer, listShirtSizes, listShirtNumbers, listOtherTeamPlayers, assignPlayerToTeam, removePlayerFromTeam, listUnassignedPlayers } = require("../app/controllers/api/Playercontroller");
+const {
+    createPlayer,
+    listPlayers,
+    getPlayer,
+    updatePlayer,
+    deletePlayer,
+    listShirtSizes,
+    listShirtNumbers,
+    listOtherTeamPlayers,
+    assignPlayerToTeam,
+    removePlayerFromTeam,
+    listUnassignedPlayers,
+} = require("../app/controllers/api/Playercontroller");
 const { removeProfileImage, updateProfileImage } = require("../app/controllers/api/Profileimagecontroller");
-const { selectParentClub, listAgeGroups, createYouthPlayer, listMyYouthPlayers, deleteMyYouthPlayer, updateMyYouthPlayer, getMyYouthPlayer } = require("../app/controllers/api/parentController");
-const { listParents, updateParent, deleteParent, linkParentToPlayer, unlinkParentFromPlayer } = require("../app/controllers/api/admin/Adminparentcontroller");
+const {
+    selectParentClub,
+    createYouthPlayer,
+    listMyYouthPlayers,
+    getMyYouthPlayer,
+    updateMyYouthPlayer,
+    deleteMyYouthPlayer,
+} = require("../app/controllers/api/parentController");
+const {
+    listParents,
+    updateParent,
+    deleteParent,
+    linkParentToPlayer,
+    unlinkParentFromPlayer,
+} = require("../app/controllers/api/admin/Adminparentcontroller");
 
 router.get("/test", (req, res) => res.send("API working"));
 
@@ -54,7 +79,7 @@ router.get("/user/listClubs", superAdminOrClubAdminAuthentication, listClubs);  
 router.get("/user/getClub/:id", superAdminOrClubAdminAuthentication, getClub);
 router.put("/user/updateClub/:id", superAdminAuthentication, updateClub);
 router.delete("/user/deleteClub/:id", superAdminAuthentication, deleteClub);
-router.get("/user/clubOptions", clubOptions);
+router.get("/user/clubOptions", clubOptions);                                    // bina token (parent registration)
 
 // ---------- Club Admin (sirf superAdmin banata hai) ----------
 router.post("/user/createClubAdmin", superAdminAuthentication, createClubAdmin);
@@ -63,58 +88,59 @@ router.get("/user/getClubAdmin/:id", superAdminAuthentication, getClubAdmin);
 router.put("/user/updateClubAdmin/:id", superAdminAuthentication, updateClubAdmin);
 router.delete("/user/deleteClubAdmin/:id", superAdminAuthentication, deleteClubAdmin);
 
-// Coaches
+// ---------- Coaches ----------
 router.post("/user/coaches/create", superAdminOrClubAdminAuthentication, createCoach);
 router.get("/user/coaches", superAdminOrClubAdminAuthentication, listCoaches);
 router.get("/user/coaches/:id", superAdminOrClubAdminAuthentication, getCoach);
 router.put("/user/coaches/:id/update", superAdminOrClubAdminAuthentication, updateCoach);
 router.delete("/user/coaches/:id/delete", superAdminOrClubAdminAuthentication, deleteCoach);
 
-// Team categories: banana/badalna sirf superAdmin, dekhna koi bhi logged-in user (team form ke dropdown ke liye)
+// ---------- Team categories ----------
+// Banana/badalna sirf superAdmin, dekhna koi bhi logged-in user (team form ke dropdown ke liye)
 router.post("/user/teams/categories/create", superAdminAuthentication, createTeamCategory);
 router.get("/user/teams/categories", authentication, listTeamCategories);
 router.get("/user/teams/categories/:id", authentication, getTeamCategory);
 router.put("/user/teams/categories/:id/update", superAdminAuthentication, updateTeamCategory);
 router.delete("/user/teams/categories/:id/delete", superAdminAuthentication, deleteTeamCategory);
 
-// Teams
+// ---------- Teams ----------
 router.post("/user/teams/create", superAdminOrClubAdminAuthentication, createTeam);
 router.get("/user/teams", authentication, listTeams);
 router.get("/user/teams/:id", authentication, getTeam);
 router.put("/user/teams/:id/update", superAdminOrClubAdminAuthentication, updateTeam);
 router.delete("/user/teams/:id/delete", superAdminOrClubAdminAuthentication, deleteTeam);
+router.get("/user/teams/:id/shirt-numbers", superAdminOrClubAdminAuthentication, listShirtNumbers);
+router.get("/user/teams/:id/other-players", superAdminOrClubAdminAuthentication, listOtherTeamPlayers);
+router.put("/user/teams/:id/players/:playerId/remove", superAdminOrClubAdminAuthentication, removePlayerFromTeam);
 
-// Player
-router.post("/user/players/create", superAdminOrClubAdminAuthentication, createPlayer);
+// ---------- Players (admin) ----------
+// Fixed paths (shirt-sizes, unassigned, assign) ":id" se PEHLE
 router.get("/user/players/shirt-sizes", listShirtSizes);
-router.get("/user/players", superAdminOrClubAdminAuthentication, listPlayers);
 router.get("/user/players/unassigned", superAdminOrClubAdminAuthentication, listUnassignedPlayers);
+router.post("/user/players/assign", superAdminOrClubAdminAuthentication, assignPlayerToTeam);
+router.post("/user/players/create", superAdminOrClubAdminAuthentication, createPlayer);
+router.get("/user/players", superAdminOrClubAdminAuthentication, listPlayers);
 router.get("/user/players/:id", superAdminOrClubAdminAuthentication, getPlayer);
 router.put("/user/players/:id/update", superAdminOrClubAdminAuthentication, updatePlayer);
 router.delete("/user/players/:id/delete", superAdminOrClubAdminAuthentication, deletePlayer);
-router.get("/user/teams/:id/shirt-numbers", superAdminOrClubAdminAuthentication, listShirtNumbers);
-router.get("/user/teams/:id/other-players", superAdminOrClubAdminAuthentication, listOtherTeamPlayers);
 
-// 2. Routes (baaki team/player routes ke saath):
-router.post("/user/players/assign", superAdminOrClubAdminAuthentication, assignPlayerToTeam);
-router.put("/user/teams/:id/players/:playerId/remove", superAdminOrClubAdminAuthentication, removePlayerFromTeam);
+// Player ke parents (admin: link / unlink)
+router.post("/user/players/:id/parents/link", superAdminOrClubAdminAuthentication, linkParentToPlayer);
+router.delete("/user/players/:id/parents/:parentId/unlink", superAdminOrClubAdminAuthentication, unlinkParentFromPlayer);
 
-//Parent
+// ---------- Parents (admin panel) ----------
+router.get("/user/parents", superAdminOrClubAdminAuthentication, listParents);
+router.put("/user/parents/:id/update", superAdminOrClubAdminAuthentication, updateParent);
+router.delete("/user/parents/:id/delete", superAdminOrClubAdminAuthentication, deleteParent);
+
+// ---------- Parent (mobile app) ----------
 router.post("/user/parent/register", registerParent);
 router.put("/user/parent/profile", authentication, updateParentProfile);
 router.post("/user/parent/selectClub", authentication, selectParentClub);
-router.get("/user/parent/age-groups", authentication, listAgeGroups);
 router.post("/user/parent/players/create", authentication, createYouthPlayer);
 router.get("/user/parent/listMyYouthPlayers", authentication, listMyYouthPlayers);
 router.get("/user/parent/players/:id", authentication, getMyYouthPlayer);
 router.put("/user/parent/players/:id/update", authentication, updateMyYouthPlayer);
-router.delete("/user/parent/players/:id/delete", authentication, deleteMyYouthPlayer)
-
-//admin parents
-router.get("/user/parents", authentication, listParents);
-router.put("/user/parents/:id/update", authentication, updateParent);
-router.delete("/user/parents/:id/delete", authentication, deleteParent);
-router.post("/user/players/:id/parents/link", authentication, linkParentToPlayer);
-router.delete("/user/players/:id/parents/:parentId/unlink", authentication, unlinkParentFromPlayer);
+router.delete("/user/parent/players/:id/delete", authentication, deleteMyYouthPlayer);
 
 module.exports = router;
