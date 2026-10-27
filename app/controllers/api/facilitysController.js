@@ -1,6 +1,7 @@
 const validator = require("validator");
 const Club = require("../../models/Club");
 const Facility = require("../../models/Facility");
+const Team = require("../../models/Team");
 const { FACILITY_TYPES } = require("../../models/Facility");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, cleanMobile, escapeRegex, getPagination } = require("../../helpers/common");
@@ -297,12 +298,25 @@ const updateFacility = async (req, res) => {
 
 /**
  * DELETE /api/user/facilities/:id/delete   (superAdmin ya clubAdmin)
- * NOTE: jab schedule / trainings facility use karne lagen, tab yahan check lagana ki facility kahin use toh nahi ho rahi.
+ * Jo facility kisi team ka home venue hai wo delete nahi hoti (pehle team ka venue badlo).
+ * NOTE: schedule / trainings aane par unka check bhi yahin lagana.
  */
 const deleteFacility = async (req, res) => {
     try {
         const found = await findFacility(req, req.params.id);
         if (found.message) return sendError(res, found.status, found.message);
+
+        // Kisi team ka home venue toh nahi?
+        const teams = await Team.find({ homeVenueId: found.facility._id }).select("name").limit(5);
+        if (teams.length) {
+            const names = teams.map((t) => t.name).join(", ");
+            return sendError(
+                res,
+                400,
+                `This facility is the home venue of: ${names}. Change their home venue first.`,
+                { teams: teams.map((t) => ({ _id: t._id, name: t.name })) }
+            );
+        }
 
         await Facility.findByIdAndDelete(found.facility._id);
 
