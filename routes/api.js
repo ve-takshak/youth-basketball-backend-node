@@ -60,6 +60,7 @@ const {
     linkParentToPlayer,
     unlinkParentFromPlayer,
 } = require("../app/controllers/api/admin/Adminparentcontroller");
+const { createFacility, listFacilities, getFacility, deleteFacility, updateFacility } = require("../app/controllers/api/facilitysController")
 
 router.get("/test", (req, res) => res.send("API working"));
 
@@ -142,5 +143,13 @@ router.get("/user/parent/listMyYouthPlayers", authentication, listMyYouthPlayers
 router.get("/user/parent/players/:id", authentication, getMyYouthPlayer);
 router.put("/user/parent/players/:id/update", authentication, updateMyYouthPlayer);
 router.delete("/user/parent/players/:id/delete", authentication, deleteMyYouthPlayer);
+
+
+// ---------- Facilities ----------
+router.post("/user/facilities/create", superAdminOrClubAdminAuthentication, createFacility);
+router.get("/user/facilities", superAdminOrClubAdminAuthentication, listFacilities);
+router.get("/user/facilities/:id", superAdminOrClubAdminAuthentication, getFacility);
+router.put("/user/facilities/:id/update", superAdminOrClubAdminAuthentication, updateFacility);
+router.delete("/user/facilities/:id/delete", superAdminOrClubAdminAuthentication, deleteFacility);
 
 module.exports = router;
