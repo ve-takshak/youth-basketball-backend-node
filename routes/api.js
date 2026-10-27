@@ -60,7 +60,8 @@ const {
     linkParentToPlayer,
     unlinkParentFromPlayer,
 } = require("../app/controllers/api/admin/Adminparentcontroller");
-const { createFacility, listFacilities, getFacility, deleteFacility, updateFacility } = require("../app/controllers/api/facilitysController")
+const { createFacility, listFacilities, getFacility, deleteFacility, updateFacility } = require("../app/controllers/api/facilitysController");
+const { getCoachDashboard } = require("../app/controllers/api/dashbaordController");
 
 router.get("/test", (req, res) => res.send("API working"));
 
@@ -151,5 +152,7 @@ router.get("/user/facilities", superAdminOrClubAdminAuthentication, listFaciliti
 router.get("/user/facilities/:id", superAdminOrClubAdminAuthentication, getFacility);
 router.put("/user/facilities/:id/update", superAdminOrClubAdminAuthentication, updateFacility);
 router.delete("/user/facilities/:id/delete", superAdminOrClubAdminAuthentication, deleteFacility);
+
+router.get("/user/coach/dashboard", authentication, getCoachDashboard);
 
 module.exports = router;
