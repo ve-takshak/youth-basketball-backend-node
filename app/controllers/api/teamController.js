@@ -58,6 +58,14 @@ const formatTeam = (record) => {
             name: record.homeVenueId.name,
             address: record.homeVenueId.address || "",
             type: record.homeVenueId.type,
+            parallelUnits: record.homeVenueId.parallelUnits ?? 1,
+            // Facility API jaisa hall manager (phone na ho toh countryCode bhi khaali)
+            hallManager: {
+                name: record.homeVenueId.hallManager?.name || "",
+                countryCode: record.homeVenueId.hallManager?.phone ? record.homeVenueId.hallManager.countryCode || "+972" : "",
+                phone: record.homeVenueId.hallManager?.phone || "",
+                email: record.homeVenueId.hallManager?.email || "",
+            },
         } : null,
         preferredTrainingDays: record.preferredTrainingDays || [],
         gender: record.gender || "mixed",
@@ -75,7 +83,7 @@ const populateTeam = (query) =>
     query
         .populate("clubId", "name logo theme")
         .populate("categoryId", "name")
-        .populate("homeVenueId", "name address type")
+        .populate("homeVenueId", "name address type parallelUnits hallManager")
         .populate({
             path: "coachId",
             select: "userId clubId",
