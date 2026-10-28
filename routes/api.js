@@ -92,9 +92,9 @@ router.delete("/user/deleteClubAdmin/:id", superAdminAuthentication, deleteClubA
 
 // ---------- Coaches ----------
 router.post("/user/coaches/create", superAdminOrClubAdminAuthentication, createCoach);
-router.get("/user/coaches", superAdminOrClubAdminAuthentication, listCoaches);
-router.get("/user/coaches/:id", superAdminOrClubAdminAuthentication, getCoach);
-router.put("/user/coaches/:id/update", superAdminOrClubAdminAuthentication, updateCoach);
+router.get("/user/coaches", authentication, listCoaches);
+router.get("/user/coaches/:id", authentication, getCoach);
+router.put("/user/coaches/:id/update", authentication, updateCoach);
 router.delete("/user/coaches/:id/delete", superAdminOrClubAdminAuthentication, deleteCoach);
 
 // ---------- Team categories ----------
