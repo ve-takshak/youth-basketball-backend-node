@@ -5,11 +5,26 @@ const Team = require("../../models/Team");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, escapeRegex, getPagination } = require("../../helpers/common");
 const { validatePersonInput, findDuplicateUser, applyPersonUpdates } = require("../../helpers/userHelper");
+const { parseTrainingDays, parseUnavailableHours } = require("../../helpers/scheduleHelper");
 const { deleteFiles } = require("../../../utils/s3");
 
 // Hamare bucket ka base URL, taaki sirf apni S3 files hi delete hon
 const getS3BaseUrl = () =>
     `https://${process.env.S3_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
+
+const sendError = (res, status, message, data = {}) =>
+    res.status(status).json({ error: true, status, message, message_desc: message, data });
+
+const sendServerError = (res, label, e) => {
+    console.error(`${label} error:`, e);
+    return res.status(500).json({
+        error: true,
+        status: 500,
+        message: "Something went wrong.",
+        message_desc: e.message,
+        data: {},
+    });
+};
 
 // Coach delete pe uski profile image S3 se hatana
 const removeS3File = async (url) => {
@@ -39,6 +54,8 @@ const formatCoach = (record, assignedTeams = null) => ({
     birthDate: record.userId?.birthDate ? new Date(record.userId.birthDate).toISOString().split("T")[0] : null,
     is_verify: record.userId?.is_verify || false,
     club: record.clubId ? { _id: record.clubId._id, name: record.clubId.name } : null,
+    preferredTrainingDays: record.preferredTrainingDays || [],
+    unavailableHours: (record.unavailableHours || []).map((b) => ({ day: b.day, from: b.from, to: b.to })),
     teams: assignedTeams || record.teams || [],
     createdAt: record.createdAt,
 });
@@ -53,59 +70,51 @@ const canAccess = (req, coachClubId) =>
     req.user.role === ROLES.SUPER_ADMIN || String(req.clubId) === String(coachClubId?._id || coachClubId);
 
 /**
- * POST /api/user/createCoach   (superAdmin ya clubAdmin)
- * body: { firstname, lastname, countryCode, mobileNumber, clubId (clubAdmin ke liye ignore), email? }
+ * Days + unavailable hours (sirf jo bheje gaye). Galti ho toh { message }, warna { values }
+ */
+const validateAvailability = (body) => {
+    const values = {};
+    if (body.preferredTrainingDays !== undefined) {
+        const days = parseTrainingDays(body.preferredTrainingDays);
+        if (days.message) return { message: days.message };
+        values.preferredTrainingDays = days.days;
+    }
+    if (body.unavailableHours !== undefined) {
+        const hours = parseUnavailableHours(body.unavailableHours);
+        if (hours.message) return { message: hours.message };
+        values.unavailableHours = hours.blocks;
+    }
+    return { values };
+};
+
+/**
+ * POST /api/user/coaches/create   (superAdmin ya clubAdmin)
+ * body: { firstname, lastname, countryCode, mobileNumber, clubId (clubAdmin ke liye ignore), email?, birthDate?,
+ *         preferredTrainingDays?: ["sun","tue"], unavailableHours?: [{ day, from, to }] }
  * User (role: coach) + Coach record dono banata hai.
  */
 const createCoach = async (req, res) => {
     let user = null;
     try {
-        const checked = validatePersonInput(req.body);
-        if (checked.message) {
-            return res.status(checked.status).json({
-                error: true,
-                status: checked.status,
-                message: checked.message,
-                message_desc: checked.message,
-                data: {},
-            });
-        }
+        const body = req.body || {};
+
+        const checked = validatePersonInput(body);
+        if (checked.message) return sendError(res, checked.status, checked.message);
         const { firstname, lastname, email, countryCode, mobileNumber, birthDate } = checked.values;
 
-        // clubAdmin apne hi club mein coach banayega, superAdmin body se club chunega
-        const clubId = req.user.role === ROLES.CLUB_ADMIN ? String(req.clubId) : String(req.body.clubId || "").trim();
+        // Days / hours bhi pehle hi check (User banane se pehle)
+        const availability = validateAvailability(body);
+        if (availability.message) return sendError(res, 400, availability.message);
 
-        if (!isValidId(clubId)) {
-            return res.status(400).json({
-                error: true,
-                status: 400,
-                message: "Please select a valid club.",
-                message_desc: "Please select a valid club.",
-                data: {},
-            });
-        }
+        // clubAdmin apne hi club mein coach banayega, superAdmin body se club chunega
+        const clubId = req.user.role === ROLES.CLUB_ADMIN ? String(req.clubId) : String(body.clubId || "").trim();
+        if (!isValidId(clubId)) return sendError(res, 400, "Please select a valid club.");
 
         const club = await Club.findById(clubId);
-        if (!club) {
-            return res.status(404).json({
-                error: true,
-                status: 404,
-                message: "Club not found.",
-                message_desc: "Club not found.",
-                data: {},
-            });
-        }
+        if (!club) return sendError(res, 404, "Club not found.");
 
         const duplicate = await findDuplicateUser({ countryCode, mobileNumber, email });
-        if (duplicate) {
-            return res.status(duplicate.status).json({
-                error: true,
-                status: duplicate.status,
-                message: duplicate.message,
-                message_desc: duplicate.message,
-                data: {},
-            });
-        }
+        if (duplicate) return sendError(res, duplicate.status, duplicate.message);
 
         // 1. Login wala user. Ye apne number + OTP 0000 se login karega.
         user = await User.create({
@@ -118,10 +127,11 @@ const createCoach = async (req, res) => {
             role: ROLES.COACH,
         });
 
-        // 2. Coach record jo club se juda hai
+        // 2. Coach record jo club se juda hai (+ days / hours)
         const record = await Coach.create({
             userId: user._id,
             clubId: club._id,
+            ...availability.values,
             createdBy: req.user._id,
         });
 
@@ -137,19 +147,12 @@ const createCoach = async (req, res) => {
     } catch (e) {
         // Coach record fail hua toh adhoora user bhi hata do
         if (user) await User.findByIdAndDelete(user._id).catch(() => {});
-        console.error("Create coach error:", e);
-        return res.status(500).json({
-            error: true,
-            status: 500,
-            message: "Something went wrong.",
-            message_desc: e.message,
-            data: {},
-        });
+        return sendServerError(res, "Create coach", e);
     }
 };
 
 /**
- * GET /api/user/listCoaches?clubId=&search=&page=1&limit=10   (superAdmin ya clubAdmin)
+ * GET /api/user/coaches?clubId=&search=&page=1&limit=10   (superAdmin ya clubAdmin)
  * search: naam ya mobile number se
  */
 const listCoaches = async (req, res) => {
@@ -164,15 +167,7 @@ const listCoaches = async (req, res) => {
             // clubAdmin sirf apne club ke coaches dekhega
             filter.clubId = req.clubId;
         } else if (clubId) {
-            if (!isValidId(clubId)) {
-                return res.status(400).json({
-                    error: true,
-                    status: 400,
-                    message: "Invalid club id.",
-                    message_desc: "Invalid club id.",
-                    data: {},
-                });
-            }
+            if (!isValidId(clubId)) return sendError(res, 400, "Invalid club id.");
             filter.clubId = clubId;
         }
 
@@ -202,46 +197,22 @@ const listCoaches = async (req, res) => {
             },
         });
     } catch (e) {
-        console.error("List coaches error:", e);
-        return res.status(500).json({
-            error: true,
-            status: 500,
-            message: "Something went wrong.",
-            message_desc: e.message,
-            data: {},
-        });
+        return sendServerError(res, "List coaches", e);
     }
 };
 
 /**
- * GET /api/user/getCoach/:id   (superAdmin ya clubAdmin, :id = Coach ki _id)
+ * GET /api/user/coaches/:id   (superAdmin ya clubAdmin, :id = Coach ki _id)
  */
 const getCoach = async (req, res) => {
     try {
         const { id } = req.params;
-
-        if (!isValidId(id)) {
-            return res.status(400).json({
-                error: true,
-                status: 400,
-                message: "Invalid coach id.",
-                message_desc: "Invalid coach id.",
-                data: {},
-            });
-        }
+        if (!isValidId(id)) return sendError(res, 400, "Invalid coach id.");
 
         const record = await populateCoach(Coach.findById(id));
-        if (!record || !canAccess(req, record.clubId)) {
-            return res.status(404).json({
-                error: true,
-                status: 404,
-                message: "Coach not found.",
-                message_desc: "Coach not found.",
-                data: {},
-            });
-        }
+        if (!record || !canAccess(req, record.clubId)) return sendError(res, 404, "Coach not found.");
 
-        // Fetch any teams assigned to this coach
+        // Coach ki teams
         const assignedTeams = await Team.find({ coachId: record._id })
             .populate("categoryId", "name")
             .select("name season gender teamType status categoryId");
@@ -254,81 +225,44 @@ const getCoach = async (req, res) => {
             data: formatCoach(record, assignedTeams),
         });
     } catch (e) {
-        console.error("Get coach error:", e);
-        return res.status(500).json({
-            error: true,
-            status: 500,
-            message: "Something went wrong.",
-            message_desc: e.message,
-            data: {},
-        });
+        return sendServerError(res, "Get coach", e);
     }
 };
 
 /**
- * PUT /api/user/updateCoach/:id   (superAdmin ya clubAdmin, :id = Coach ki _id)
- * body: jo badalna hai wahi { firstname?, lastname?, email?, countryCode?, mobileNumber?, clubId? (clubAdmin ke liye ignore) }
+ * PUT /api/user/coaches/:id/update   (superAdmin ya clubAdmin, :id = Coach ki _id)
+ * body: jo badalna hai wahi { firstname?, lastname?, email?, countryCode?, mobileNumber?, birthDate?,
+ *       clubId? (sirf superAdmin), preferredTrainingDays?, unavailableHours? }
+ * preferredTrainingDays / unavailableHours bheje toh POORI list replace hoti hai ([] = sab hatana).
  */
 const updateCoach = async (req, res) => {
     try {
         const { id } = req.params;
-
-        if (!isValidId(id)) {
-            return res.status(400).json({
-                error: true,
-                status: 400,
-                message: "Invalid coach id.",
-                message_desc: "Invalid coach id.",
-                data: {},
-            });
-        }
+        const body = req.body || {};
+        if (!isValidId(id)) return sendError(res, 400, "Invalid coach id.");
 
         const record = await Coach.findById(id);
-        if (!record || !canAccess(req, record.clubId)) {
-            return res.status(404).json({
-                error: true,
-                status: 404,
-                message: "Coach not found.",
-                message_desc: "Coach not found.",
-                data: {},
-            });
-        }
+        if (!record || !canAccess(req, record.clubId)) return sendError(res, 404, "Coach not found.");
 
         const user = await User.findById(record.userId);
-        if (!user) {
-            return res.status(404).json({
-                error: true,
-                status: 404,
-                message: "Coach user not found.",
-                message_desc: "Coach user not found.",
-                data: {},
-            });
-        }
+        if (!user) return sendError(res, 404, "Coach user not found.");
 
-        const updateError = await applyPersonUpdates(user, req.body);
-        if (updateError) {
-            return res.status(updateError.status).json({
-                error: true,
-                status: updateError.status,
-                message: updateError.message,
-                message_desc: updateError.message,
-                data: {},
-            });
-        }
+        // Days / hours pehle check (taaki galti par kuch bhi save na ho)
+        const availability = validateAvailability(body);
+        if (availability.message) return sendError(res, 400, availability.message);
 
-        const { clubId } = req.body;
+        const updateError = await applyPersonUpdates(user, body);
+        if (updateError) return sendError(res, updateError.status, updateError.message);
+
+        const { clubId } = body;
         if (clubId !== undefined && req.user.role === ROLES.SUPER_ADMIN) {
             if (!isValidId(clubId) || !(await Club.exists({ _id: clubId }))) {
-                return res.status(400).json({
-                    error: true,
-                    status: 400,
-                    message: "Please select a valid club.",
-                    message_desc: "Please select a valid club.",
-                    data: {},
-                });
+                return sendError(res, 400, "Please select a valid club.");
             }
             record.clubId = clubId;
         }
+
+        Object.assign(record, availability.values);
 
         await user.save();
         await record.save();
@@ -343,51 +277,27 @@ const updateCoach = async (req, res) => {
             data: formatCoach(saved),
         });
     } catch (e) {
-        console.error("Update coach error:", e);
-        return res.status(500).json({
-            error: true,
-            status: 500,
-            message: "Something went wrong.",
-            message_desc: e.message,
-            data: {},
-        });
+        return sendServerError(res, "Update coach", e);
     }
 };
 
 /**
- * DELETE /api/user/deleteCoach/:id   (superAdmin ya clubAdmin, :id = Coach ki _id)
+ * DELETE /api/user/coaches/:id/delete   (superAdmin ya clubAdmin, :id = Coach ki _id)
  * Coach record, uska User aur uski profile image (S3) hatata hai.
  */
 const deleteCoach = async (req, res) => {
     try {
         const { id } = req.params;
-
-        if (!isValidId(id)) {
-            return res.status(400).json({
-                error: true,
-                status: 400,
-                message: "Invalid coach id.",
-                message_desc: "Invalid coach id.",
-                data: {},
-            });
-        }
+        if (!isValidId(id)) return sendError(res, 400, "Invalid coach id.");
 
         const record = await Coach.findById(id);
-        if (!record || !canAccess(req, record.clubId)) {
-            return res.status(404).json({
-                error: true,
-                status: 404,
-                message: "Coach not found.",
-                message_desc: "Coach not found.",
-                data: {},
-            });
-        }
+        if (!record || !canAccess(req, record.clubId)) return sendError(res, 404, "Coach not found.");
 
         const coachUser = await User.findById(record.userId).select("profile_image");
 
         await Coach.findByIdAndDelete(record._id);
         await User.findByIdAndDelete(record.userId);
-        // Nullify coach assignment on any teams assigned to this coach
+        // Is coach ki teams se coach hata do
         await Team.updateMany({ coachId: record._id }, { $set: { coachId: null } });
         // Profile image bhi S3 se
         if (coachUser?.profile_image) await removeS3File(coachUser.profile_image);
@@ -400,14 +310,7 @@ const deleteCoach = async (req, res) => {
             data: { _id: record._id },
         });
     } catch (e) {
-        console.error("Delete coach error:", e);
-        return res.status(500).json({
-            error: true,
-            status: 500,
-            message: "Something went wrong.",
-            message_desc: e.message,
-            data: {},
-        });
+        return sendServerError(res, "Delete coach", e);
     }
 };
 

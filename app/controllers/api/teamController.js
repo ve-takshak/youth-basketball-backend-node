@@ -1,11 +1,11 @@
 const Team = require("../../models/Team");
-const { WEEK_DAYS } = require("../../models/Team");
 const Club = require("../../models/Club");
 const Coach = require("../../models/Coach");
 const Facility = require("../../models/Facility");
 const TeamCategory = require("../../models/TeamCategory");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, escapeRegex, getPagination } = require("../../helpers/common");
+const { WEEK_DAYS, parseTrainingDays } = require("../../helpers/scheduleHelper");
 
 const VALID_GENDERS = ["boys", "girls", "mixed"];
 const VALID_TEAM_TYPES = ["league", "non-league"];
@@ -25,12 +25,81 @@ const sendServerError = (res, label, e) => {
     });
 };
 
+// ---------------------------------------------------------------------------
+// Coach ↔ Team days match
+// ---------------------------------------------------------------------------
+
+/**
+ * Team ke training days vs coach ke preferred days + unavailable hours.
+ * Coach assign hone se kabhi rokta nahi, sirf batata hai (faisla club admin ka).
+ *   level: "full"    -> coach team ke saare din aata hai
+ *          "partial" -> kuch din nahi aata
+ *          "low"     -> hafte mein 1 ya usse kam din, ya aadhe se kam (club admin ko dekhna chahiye)
+ *          "unknown" -> team ya coach ke days set hi nahi, isliye compare nahi ho sakta
+ * Unavailable hours abhi sirf batate hain (practice ka time abhi nahi hai, isliye pakka clash nahi bol sakte).
+ */
+const computeCoachMatch = (teamDays = [], coach = null) => {
+    if (!coach) return null;
+
+    const coachDays = coach.preferredTrainingDays || [];
+    const blocks = coach.unavailableHours || [];
+    const unavailableOnTeamDays = blocks
+        .filter((b) => teamDays.includes(b.day))
+        .map((b) => ({ day: b.day, from: b.from, to: b.to }));
+
+    if (teamDays.length === 0 || coachDays.length === 0) {
+        return {
+            level: "unknown",
+            matchPercent: null,
+            teamDays,
+            coachDays,
+            matchingDays: [],
+            missingDays: [],
+            unavailableOnTeamDays,
+            warning: teamDays.length === 0
+                ? "Team has no preferred training days, so the coach's days can't be compared."
+                : "Coach has no preferred training days, so the days can't be compared.",
+        };
+    }
+
+    const matchingDays = teamDays.filter((d) => coachDays.includes(d));
+    const missingDays = teamDays.filter((d) => !coachDays.includes(d));
+    const matchPercent = Math.round((matchingDays.length / teamDays.length) * 100);
+
+    let level = "partial";
+    if (missingDays.length === 0) level = "full";
+    else if (matchingDays.length <= 1 || matchPercent < 50) level = "low";
+
+    let warning = null;
+    if (level === "low") {
+        warning = `Coach can attend only ${matchingDays.length} of the team's ${teamDays.length} training days. Please talk to the coach.`;
+    } else if (level === "partial") {
+        warning = `Coach is not available on ${missingDays.length} of the team's ${teamDays.length} training days (${missingDays.join(", ")}).`;
+    }
+    if (unavailableOnTeamDays.length) {
+        const list = unavailableOnTeamDays.map((b) => `${b.day} ${b.from}-${b.to}`).join(", ");
+        const note = `Coach also has unavailable hours on team days: ${list}.`;
+        warning = warning ? `${warning} ${note}` : note;
+    }
+
+    return { level, matchPercent, teamDays, coachDays, matchingDays, missingDays, unavailableOnTeamDays, warning };
+};
+
+// Suggestions ke sort ke liye: full > partial > low > unknown
+const LEVEL_RANK = { full: 0, partial: 1, low: 2, unknown: 3 };
+
+// ---------------------------------------------------------------------------
+// Format / populate
+// ---------------------------------------------------------------------------
+
 /**
  * Format team object for API response
  * (create, list, get, update sab isi se response banate hain)
  */
 const formatTeam = (record) => {
     if (!record) return null;
+    const coach = record.coachId && typeof record.coachId === "object" && record.coachId._id ? record.coachId : null;
+    const teamDays = record.preferredTrainingDays || [];
     return {
         _id: record._id,
         name: record.name,
@@ -42,16 +111,20 @@ const formatTeam = (record) => {
             _id: record.categoryId._id,
             name: record.categoryId.name,
         } : (record.categoryId ? { _id: record.categoryId } : null),
-        coach: record.coachId && typeof record.coachId === "object" ? {
-            _id: record.coachId._id,
-            firstname: record.coachId.userId?.firstname || "",
-            lastname: record.coachId.userId?.lastname || "",
-            userId: record.coachId.userId?._id,
+        coach: coach ? {
+            _id: coach._id,
+            firstname: coach.userId?.firstname || "",
+            lastname: coach.userId?.lastname || "",
+            userId: coach.userId?._id,
             // Coach ki profile photo (User se)
-            profile_image: record.coachId.userId?.profile_image || "",
-            mobileNumber: record.coachId.userId?.mobileNumber || "",
-            email: record.coachId.userId?.email || "",
+            profile_image: coach.userId?.profile_image || "",
+            mobileNumber: coach.userId?.mobileNumber || "",
+            email: coach.userId?.email || "",
+            preferredTrainingDays: coach.preferredTrainingDays || [],
+            unavailableHours: (coach.unavailableHours || []).map((b) => ({ day: b.day, from: b.from, to: b.to })),
         } : (record.coachId ? { _id: record.coachId } : null),
+        // Coach ke din team ke din se kitne milte hain (coach nahi toh null)
+        coachMatch: coach ? computeCoachMatch(teamDays, coach) : null,
         // Home venue (Facility). Facility delete ho gayi ho toh null
         homeVenue: record.homeVenueId && typeof record.homeVenueId === "object" && record.homeVenueId._id ? {
             _id: record.homeVenueId._id,
@@ -67,7 +140,7 @@ const formatTeam = (record) => {
                 email: record.homeVenueId.hallManager?.email || "",
             },
         } : null,
-        preferredTrainingDays: record.preferredTrainingDays || [],
+        preferredTrainingDays: teamDays,
         gender: record.gender || "mixed",
         teamType: record.teamType || "league",
         season: record.season || "",
@@ -86,7 +159,8 @@ const populateTeam = (query) =>
         .populate("homeVenueId", "name address type parallelUnits hallManager")
         .populate({
             path: "coachId",
-            select: "userId clubId",
+            // Days + hours bhi, coachMatch ke liye
+            select: "userId clubId preferredTrainingDays unavailableHours",
             populate: {
                 path: "userId",
                 // profile_image bhi chahiye (formatTeam mein coach ke saath bhejte hain)
@@ -96,37 +170,6 @@ const populateTeam = (query) =>
 
 const canAccess = (req, teamClubId) =>
     req.user.role === ROLES.SUPER_ADMIN || String(req.clubId) === String(teamClubId?._id || teamClubId);
-
-/**
- * Preferred training days check.
- * Chalega: ["sun","tue"] (JSON) ya '["sun","tue"]' / "sun,tue" (form-data). "" / [] = koi din nahi.
- * Duplicate hat jaate hain, order hamesha Sun → Sat.
- * Galti ho toh { message }, warna { days }
- */
-const parseTrainingDays = (raw) => {
-    let list = raw;
-    if (raw === null || raw === "") list = [];
-    if (typeof raw === "string" && raw.trim()) {
-        const text = raw.trim();
-        if (text.startsWith("[")) {
-            try {
-                list = JSON.parse(text);
-            } catch (e) {
-                return { message: "Preferred training days must be a valid list." };
-            }
-        } else {
-            list = text.split(",");
-        }
-    }
-    if (!Array.isArray(list)) return { message: "Preferred training days must be a list." };
-
-    const days = [...new Set(list.map((d) => String(d || "").trim().toLowerCase()).filter(Boolean))];
-    const invalid = days.find((d) => !WEEK_DAYS.includes(d));
-    if (invalid) return { message: `Invalid training day "${invalid}". Use: ${WEEK_DAYS.join(", ")}.` };
-
-    days.sort((a, b) => WEEK_DAYS.indexOf(a) - WEEK_DAYS.indexOf(b));
-    return { days };
-};
 
 /**
  * Home venue check: sahi id, aur isi club ki facility. "" / null = koi venue nahi.
@@ -144,10 +187,15 @@ const resolveHomeVenue = async (raw, clubId) => {
     return { venueId: facility._id };
 };
 
+// ---------------------------------------------------------------------------
+// APIs
+// ---------------------------------------------------------------------------
+
 /**
  * POST /api/user/teams/create
  * Body: { name, clubId, categoryId, gender?, teamType?, season?, teamCapacity?, coachId?, status?,
  *         homeVenueId?, preferredTrainingDays? }
+ * Response ke "coachMatch" mein coach aur team ke din kitne milte hain (warning ke saath). Assign kabhi rukta nahi.
  */
 const createTeam = async (req, res) => {
     try {
@@ -341,6 +389,7 @@ const getTeam = async (req, res) => {
  * Body: { name?, clubId?, categoryId?, gender?, teamType?, season?, teamCapacity?, coachId?, status?,
  *         homeVenueId?, preferredTrainingDays? }
  * homeVenueId: "" = venue hatana.  preferredTrainingDays: [] = saare din hatana.
+ * Response ke "coachMatch" mein coach aur team ke din kitne milte hain. Assign kabhi rukta nahi.
  */
 const updateTeam = async (req, res) => {
     try {
@@ -492,10 +541,87 @@ const deleteTeam = async (req, res) => {
     }
 };
 
+/**
+ * Coach suggestions (club admin coach chunne se pehle dekhe kaun sabse fit hai)
+ *   GET /api/user/teams/:id/coach-suggestions?days=sun,tue       -> bani hui team (days na do toh team ke saved days)
+ *   GET /api/user/teams/coach-suggestions?clubId=&days=sun,tue   -> nayi team ka form (team abhi bani nahi)
+ * Club ke saare coaches, best match pehle. Sirf batata hai, assign nahi karta.
+ */
+const coachSuggestions = async (req, res) => {
+    try {
+        const { id } = req.params;
+        let clubId;
+        let teamDays;
+        let currentCoachId = null;
+
+        if (id) {
+            if (!isValidId(id)) return sendError(res, 400, "Invalid team id.");
+            const team = await Team.findById(id).select("clubId preferredTrainingDays coachId");
+            if (!team || !canAccess(req, team.clubId)) return sendError(res, 404, "Team not found.");
+            clubId = team.clubId;
+            teamDays = team.preferredTrainingDays || [];
+            currentCoachId = team.coachId ? String(team.coachId) : null;
+        } else {
+            clubId = req.user.role === ROLES.CLUB_ADMIN ? req.clubId : String(req.query.clubId || "").trim();
+            if (!isValidId(String(clubId || ""))) return sendError(res, 400, "Please select a valid club.");
+            teamDays = [];
+        }
+
+        // Edit form mein din badle par abhi save nahi kiye: ?days= se unhi par match
+        if (req.query.days !== undefined) {
+            const parsed = parseTrainingDays(req.query.days);
+            if (parsed.message) return sendError(res, 400, parsed.message);
+            teamDays = parsed.days;
+        }
+
+        const coaches = await Coach.find({ clubId })
+            .select("userId preferredTrainingDays unavailableHours")
+            .populate("userId", "firstname lastname profile_image");
+
+        // Har coach kitni teams pehle se sambhal raha hai
+        const teamCounts = await Team.aggregate([
+            { $match: { coachId: { $in: coaches.map((c) => c._id) }, status: "active" } },
+            { $group: { _id: "$coachId", count: { $sum: 1 } } },
+        ]);
+        const countOf = Object.fromEntries(teamCounts.map((t) => [String(t._id), t.count]));
+
+        const suggestions = coaches
+            .map((coach) => ({
+                coachId: coach._id,
+                userId: coach.userId?._id || null,
+                firstname: coach.userId?.firstname || "",
+                lastname: coach.userId?.lastname || "",
+                profile_image: coach.userId?.profile_image || "",
+                isCurrentCoach: currentCoachId === String(coach._id),
+                activeTeams: countOf[String(coach._id)] || 0,
+                match: computeCoachMatch(teamDays, coach),
+            }))
+            .sort((a, b) =>
+                LEVEL_RANK[a.match.level] - LEVEL_RANK[b.match.level] ||
+                (b.match.matchPercent ?? -1) - (a.match.matchPercent ?? -1) ||
+                a.match.unavailableOnTeamDays.length - b.match.unavailableOnTeamDays.length ||
+                a.activeTeams - b.activeTeams ||
+                `${a.firstname} ${a.lastname}`.localeCompare(`${b.firstname} ${b.lastname}`)
+            );
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Coach suggestions fetched successfully.",
+            message_desc: "Coach suggestions fetched successfully.",
+            data: { teamDays, suggestions },
+        });
+    } catch (e) {
+        return sendServerError(res, "Coach suggestions", e);
+    }
+};
+
 module.exports = {
     createTeam,
     listTeams,
     getTeam,
     updateTeam,
     deleteTeam,
+    coachSuggestions,
+    computeCoachMatch,
 };
