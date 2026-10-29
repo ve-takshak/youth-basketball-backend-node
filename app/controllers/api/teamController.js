@@ -151,6 +151,29 @@ const parseLeagueNumbers = (body) => {
 const LEVEL_RANK = { full: 0, partial: 1, low: 2, unknown: 3 };
 
 // ---------------------------------------------------------------------------
+// Ek coach sirf EK league (senior) team ka. Youth / non-league par koi rok nahi.
+// ---------------------------------------------------------------------------
+
+/**
+ * Ye coach kisi aur league team ka coach hai toh wo team lauta do, warna null.
+ * excludeTeamId: jis team ko abhi edit kar rahe hain (us par pehle se ho toh chalega)
+ */
+const findOtherLeagueTeamOfCoach = (coachId, excludeTeamId = null) =>
+    Team.findOne({
+        coachId,
+        teamType: "league",
+        ...(excludeTeamId ? { _id: { $ne: excludeTeamId } } : {}),
+    }).select("name");
+
+const leagueCoachError = (res, otherTeam) =>
+    sendError(
+        res,
+        409,
+        `This coach is already the coach of the league team "${otherTeam.name}". A coach can have only one league team.`,
+        { team: { _id: otherTeam._id, name: otherTeam.name } }
+    );
+
+// ---------------------------------------------------------------------------
 // Format / populate
 // ---------------------------------------------------------------------------
 
@@ -272,7 +295,8 @@ const resolveHomeVenue = async (raw, clubId) => {
  *         homeVenueId?, preferredTrainingDays?,
  *         unavailableHours?: [{ day, from, to }],
  *         athleticsTraining?: { enabled, locationName, day, from, to } }
- * Response ke "coachMatch" mein coach aur team ke din kitne milte hain (warning ke saath). Assign kabhi rukta nahi.
+ * Response ke "coachMatch" mein coach aur team ke din kitne milte hain (warning ke saath).
+ * Rule: league team par aisa coach nahi lag sakta jo pehle se doosri league team ka coach hai (409).
  */
 const createTeam = async (req, res) => {
     try {
@@ -342,6 +366,12 @@ const createTeam = async (req, res) => {
         const cleanTeamType = teamType && VALID_TEAM_TYPES.includes(String(teamType).toLowerCase())
             ? String(teamType).toLowerCase()
             : "league";
+
+        // 8b. Ek coach sirf ek league team ka (youth par rok nahi)
+        if (resolvedCoachId && cleanTeamType === "league") {
+            const otherTeam = await findOtherLeagueTeamOfCoach(resolvedCoachId);
+            if (otherTeam) return leagueCoachError(res, otherTeam);
+        }
 
         const capacityNum = teamCapacity !== undefined && teamCapacity !== "" ? Number(teamCapacity) : 20;
 
@@ -481,7 +511,9 @@ const getTeam = async (req, res) => {
  *         homeVenueId?, preferredTrainingDays?, unavailableHours?, athleticsTraining? }
  * homeVenueId: "" = venue hatana.  preferredTrainingDays / unavailableHours: [] = sab hatana (poori list replace).
  * athleticsTraining: { enabled: false } = band karna.
- * Response ke "coachMatch" mein coach aur team ke din kitne milte hain. Assign kabhi rukta nahi.
+ * Response ke "coachMatch" mein coach aur team ke din kitne milte hain.
+ * Rule: league team par aisa coach nahi lag sakta jo pehle se doosri league team ka coach hai (409).
+ *       Ye check tab chalta hai jab coach badle ya team league bane. Purane data par baaki edit rukte nahi.
  */
 const updateTeam = async (req, res) => {
     try {
@@ -493,6 +525,10 @@ const updateTeam = async (req, res) => {
 
         const body = req.body || {};
         const { name, clubId, categoryId, gender, teamType, season, teamCapacity, coachId, status } = body;
+
+        // League coach rule ke liye: edit se pehle coach aur type kya the
+        const oldCoachId = team.coachId ? String(team.coachId) : null;
+        const oldTeamType = team.teamType;
 
         // Unavailable hours + athletics + league numbers pehle hi check
         const schedule = validateTeamSchedule(body);
@@ -589,6 +625,16 @@ const updateTeam = async (req, res) => {
             }
         }
 
+        // 8b. Ek coach sirf ek league team ka (youth par rok nahi).
+        //     Sirf tab check: naya coach laga, ya team non-league se league bani.
+        const newCoachId = team.coachId ? String(team.coachId) : null;
+        const coachChanged = newCoachId !== oldCoachId;
+        const becameLeague = oldTeamType !== "league" && team.teamType === "league";
+        if (newCoachId && team.teamType === "league" && (coachChanged || becameLeague)) {
+            const otherTeam = await findOtherLeagueTeamOfCoach(team.coachId, team._id);
+            if (otherTeam) return leagueCoachError(res, otherTeam);
+        }
+
         // 9. Home venue update ("" = hatana). Club badla aur venue nahi bheja toh purana venue hata do
         //    (wo purane club ki facility thi)
         if (body.homeVenueId !== undefined) {
@@ -652,23 +698,27 @@ const deleteTeam = async (req, res) => {
 
 /**
  * Coach suggestions (club admin coach chunne se pehle dekhe kaun sabse fit hai)
- *   GET /api/user/teams/:id/coach-suggestions?days=sun,tue       -> bani hui team (days na do toh team ke saved days)
- *   GET /api/user/teams/coach-suggestions?clubId=&days=sun,tue   -> nayi team ka form (team abhi bani nahi)
- * Club ke saare coaches, best match pehle. Sirf batata hai, assign nahi karta.
+ *   GET /api/user/teams/:id/coach-suggestions?days=sun,tue&teamType=league   -> bani hui team
+ *   GET /api/user/teams/coach-suggestions?clubId=&days=sun,tue&teamType=league -> nayi team ka form
+ * days / teamType na do toh team ke saved values (nayi team: koi din nahi, type league).
+ * Club ke saare coaches, best match pehle. League team par jo coach pehle se doosri league team ka hai,
+ * wo "assignedLeagueTeam" ke saath sabse neeche (wo yahan assign nahi ho sakta). Sirf batata hai, assign nahi karta.
  */
 const coachSuggestions = async (req, res) => {
     try {
         const { id } = req.params;
         let clubId;
         let teamDays;
+        let teamType = "league"; // createTeam ka default bhi league hai
         let currentCoachId = null;
 
         if (id) {
             if (!isValidId(id)) return sendError(res, 400, "Invalid team id.");
-            const team = await Team.findById(id).select("clubId preferredTrainingDays coachId");
+            const team = await Team.findById(id).select("clubId preferredTrainingDays coachId teamType");
             if (!team || !canAccess(req, team.clubId)) return sendError(res, 404, "Team not found.");
             clubId = team.clubId;
             teamDays = team.preferredTrainingDays || [];
+            teamType = team.teamType || "league";
             currentCoachId = team.coachId ? String(team.coachId) : null;
         } else {
             clubId = req.user.role === ROLES.CLUB_ADMIN ? req.clubId : String(req.query.clubId || "").trim();
@@ -676,23 +726,39 @@ const coachSuggestions = async (req, res) => {
             teamDays = [];
         }
 
-        // Edit form mein din badle par abhi save nahi kiye: ?days= se unhi par match
+        // Form mein din / type badle par abhi save nahi kiye: query se unhi par match
         if (req.query.days !== undefined) {
             const parsed = parseTrainingDays(req.query.days);
             if (parsed.message) return sendError(res, 400, parsed.message);
             teamDays = parsed.days;
         }
+        if (req.query.teamType !== undefined) {
+            const t = String(req.query.teamType).trim().toLowerCase();
+            if (!VALID_TEAM_TYPES.includes(t)) return sendError(res, 400, `Team type must be one of: ${VALID_TEAM_TYPES.join(", ")}.`);
+            teamType = t;
+        }
 
         const coaches = await Coach.find({ clubId })
             .select("userId preferredTrainingDays unavailableHours")
             .populate("userId", "firstname lastname profile_image");
+        const coachIds = coaches.map((c) => c._id);
 
-        // Har coach kitni teams pehle se sambhal raha hai
+        // Har coach kitni active teams pehle se sambhal raha hai
         const teamCounts = await Team.aggregate([
-            { $match: { coachId: { $in: coaches.map((c) => c._id) }, status: "active" } },
+            { $match: { coachId: { $in: coachIds }, status: "active" } },
             { $group: { _id: "$coachId", count: { $sum: 1 } } },
         ]);
         const countOf = Object.fromEntries(teamCounts.map((t) => [String(t._id), t.count]));
+
+        // League team ke liye: kaunse coach pehle se kisi (doosri) league team ke coach hain
+        const leagueTeams = teamType === "league"
+            ? await Team.find({
+                coachId: { $in: coachIds },
+                teamType: "league",
+                ...(id ? { _id: { $ne: id } } : {}),
+            }).select("name coachId")
+            : [];
+        const leagueTeamOf = Object.fromEntries(leagueTeams.map((t) => [String(t.coachId), { _id: t._id, name: t.name }]));
 
         const suggestions = coaches
             .map((coach) => ({
@@ -703,9 +769,12 @@ const coachSuggestions = async (req, res) => {
                 profile_image: coach.userId?.profile_image || "",
                 isCurrentCoach: currentCoachId === String(coach._id),
                 activeTeams: countOf[String(coach._id)] || 0,
+                // League team par: ye coach doosri league team ka hai toh yahan assign nahi ho sakta
+                assignedLeagueTeam: leagueTeamOf[String(coach._id)] || null,
                 match: computeCoachMatch(teamDays, coach),
             }))
             .sort((a, b) =>
+                Number(Boolean(a.assignedLeagueTeam)) - Number(Boolean(b.assignedLeagueTeam)) ||
                 LEVEL_RANK[a.match.level] - LEVEL_RANK[b.match.level] ||
                 (b.match.matchPercent ?? -1) - (a.match.matchPercent ?? -1) ||
                 a.match.unavailableOnTeamDays.length - b.match.unavailableOnTeamDays.length ||
@@ -718,7 +787,7 @@ const coachSuggestions = async (req, res) => {
             status: 200,
             message: "Coach suggestions fetched successfully.",
             message_desc: "Coach suggestions fetched successfully.",
-            data: { teamDays, suggestions },
+            data: { teamDays, teamType, suggestions },
         });
     } catch (e) {
         return sendServerError(res, "Coach suggestions", e);
