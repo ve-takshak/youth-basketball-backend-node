@@ -62,6 +62,7 @@ const {
 } = require("../app/controllers/api/admin/Adminparentcontroller");
 const { createFacility, listFacilities, getFacility, deleteFacility, updateFacility } = require("../app/controllers/api/facilitysController");
 const { getCoachDashboard } = require("../app/controllers/api/dashbaordController");
+const { createNote, updateNote, deleteNote, listCoachNotes, listPlayerNotes } = require("../app/controllers/api/Notecontroller");
 
 router.get("/test", (req, res) => res.send("API working"));
 
@@ -154,5 +155,13 @@ router.put("/user/facilities/:id/update", superAdminOrClubAdminAuthentication, u
 router.delete("/user/facilities/:id/delete", superAdminOrClubAdminAuthentication, deleteFacility);
 
 router.get("/user/coach/dashboard", authentication, getCoachDashboard);
+
+// ---------- Notes (coach + player) ----------
+router.post("/user/notes/create", authentication, createNote);
+router.get("/user/notes/coach", authentication, listCoachNotes);
+router.get("/user/notes/player", authentication, listPlayerNotes);
+router.put("/user/notes/:id/update", authentication, updateNote);
+router.delete("/user/notes/:id/delete", authentication, deleteNote);
+
 
 module.exports = router;
