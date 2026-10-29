@@ -2,19 +2,22 @@ const Note = require("../../models/Note");
 const { NOTE_TYPES, NOTE_MAX_LENGTH } = require("../../models/Note");
 const Coach = require("../../models/Coach");
 const Player = require("../../models/Player");
-const Team = require("../../models/Team");
 const Parent = require("../../models/Parent");
+const Team = require("../../models/Team");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, getPagination } = require("../../helpers/common");
 
-// Coach notes + player notes. Rules:
-//                 | coach note                  | player note
-//   likhna        | manager                     | manager + us player ki team ka coach
-//   dekhna        | manager + wahi coach        | abhi tay nahi: koi bhi logged-in user, sirf apne club ke
-//                 |                             | (frontend jahan chahe dikhaye)
-//   edit          | jisne likha                 | jisne likha
-//   delete        | sirf manager                | sirf manager
-// manager = superAdmin (sab clubs) ya clubAdmin (apna club).
+// Notes: neeche wale likhte hain, upar wale padhte hain.
+//
+//               | COACH NOTE                          | PLAYER NOTE
+//   likhna      | coach (apne naam se)                | parent (apne youth bachche ke liye),
+//               |                                     | senior player (apne liye)
+//   padhna      | club admin, superAdmin              | us player ki team ka coach, club admin, superAdmin
+//               | + likhne wala coach                 | + parent (apne bachchon ke) / senior (apne)
+//   edit        | sirf likhne wala                    | sirf likhne wala
+//   delete      | likhne wala, ya club admin / superAdmin (dono type)
+//
+// clubAdmin sirf apne club ke notes, superAdmin sab clubs ke.
 
 const sendError = (res, status, message, data = {}) =>
     res.status(status).json({ error: true, status, message, message_desc: message, data });
@@ -30,62 +33,86 @@ const sendServerError = (res, label, e) => {
     });
 };
 
-const isManager = (user) => [ROLES.SUPER_ADMIN, ROLES.CLUB_ADMIN].includes(user.role);
+const isManagerRole = (role) => [ROLES.SUPER_ADMIN, ROLES.CLUB_ADMIN].includes(role);
+const sameId = (a, b) => Boolean(a) && Boolean(b) && String(a?._id || a) === String(b?._id || b);
+
+// ---------------------------------------------------------------------------
+// Logged-in user notes ke liye kaun hai
+// ---------------------------------------------------------------------------
 
 /**
- * Logged-in user kaun hai notes ke liye.
- *   manager: { manager: true, clubId (clubAdmin ka, superAdmin ka null) }
- *   coach:   { coach, clubId, teamIds }
- * Koi aur role: { status, message }
+ * kind: "manager" | "coach" | "parent" | "senior"
+ *   manager: { clubId (superAdmin ka null) }
+ *   coach:   { coach, clubId, teamIds[] }
+ *   parent:  { parent, clubId, childPlayerIds[] }
+ *   senior:  { player, clubId }
+ * Koi aur (youth player ka login nahi hota): { status, message }
  */
 const getViewer = async (req) => {
-    if (req.user.role === ROLES.SUPER_ADMIN) return { manager: true, clubId: null };
-    if (req.user.role === ROLES.CLUB_ADMIN) {
+    const { role, _id } = req.user;
+    const userId = _id;
+
+    if (role === ROLES.SUPER_ADMIN) return { kind: "manager", userId, clubId: null };
+
+    if (role === ROLES.CLUB_ADMIN) {
         if (!req.clubId) return { status: 403, message: "Your account is not linked to any club." };
-        return { manager: true, clubId: req.clubId };
+        return { kind: "manager", userId, clubId: req.clubId };
     }
-    if (req.user.role === ROLES.COACH) {
-        const coach = await Coach.findOne({ userId: req.user._id }).select("_id clubId");
+
+    if (role === ROLES.COACH) {
+        const coach = await Coach.findOne({ userId }).select("_id clubId");
         if (!coach) return { status: 404, message: "Coach profile not found." };
         const teams = await Team.find({ coachId: coach._id }).select("_id");
-        return { manager: false, coach, clubId: coach.clubId, teamIds: teams.map((t) => String(t._id)) };
+        return { kind: "coach", userId, coach, clubId: coach.clubId, teamIds: teams.map((t) => String(t._id)) };
     }
+
+    if (role === ROLES.PARENT) {
+        const parent = await Parent.findOne({ userId }).select("_id clubId");
+        if (!parent) return { status: 403, message: "Please select your club first." };
+        const children = await Player.find({ "parents.parentId": parent._id }).select("_id");
+        return { kind: "parent", userId, parent, clubId: parent.clubId, childPlayerIds: children.map((p) => String(p._id)) };
+    }
+
+    if (role === ROLES.SENIOR_PLAYER) {
+        const player = await Player.findOne({ userId }).select("_id clubId teamId");
+        if (!player) return { status: 404, message: "Player profile not found." };
+        return { kind: "senior", userId, player, clubId: player.clubId };
+    }
+
     return { status: 403, message: "You don't have access to notes." };
 };
 
-// Manager ka club se match (superAdmin sab)
-const managerCanSeeClub = (viewer, clubId) => viewer.clubId === null || String(viewer.clubId) === String(clubId);
-
-// Coach is player ki team ka coach hai?
-const coachHasPlayer = (viewer, player) => player.teamId && viewer.teamIds.includes(String(player.teamId));
+// Manager ka club (superAdmin sab)
+const managerSeesClub = (viewer, clubId) => viewer.clubId === null || sameId(viewer.clubId, clubId);
 
 /**
- * Ye coach / manager is note ko dekh sakta hai? (update / delete ke liye)
- * Player note: abhi koi team rule nahi, sirf same club.
+ * Ye user is note ko dekh sakta hai?
+ * playerTeamId: player note ke liye us player ki team (coach check ke liye)
  */
-const canView = (viewer, note) => {
-    if (viewer.manager) return managerCanSeeClub(viewer, note.clubId);
-    if (String(note.clubId) !== String(viewer.clubId)) return false;
-    if (note.type === "coach") return String(note.coachId?._id || note.coachId) === String(viewer.coach._id);
-    return true;
+const canView = (viewer, note, playerTeamId = null) => {
+    // Likhne wala apna note hamesha dekh sakta hai
+    if (sameId(note.createdBy, viewer.userId)) return true;
+
+    if (viewer.kind === "manager") return managerSeesClub(viewer, note.clubId);
+    if (!sameId(note.clubId, viewer.clubId)) return false;
+
+    if (note.type === "coach") return false; // coach note sirf likhne wala + manager
+
+    // Player note
+    if (viewer.kind === "coach") return Boolean(playerTeamId) && viewer.teamIds.includes(String(playerTeamId));
+    if (viewer.kind === "parent") return viewer.childPlayerIds.includes(String(note.playerId?._id || note.playerId));
+    if (viewer.kind === "senior") return sameId(note.playerId, viewer.player._id);
+    return false;
 };
 
-/**
- * Player notes ki list ke liye: user kis club ka hai (koi bhi role).
- * superAdmin: null (sab clubs). Club na mile toh { status, message }
- */
-const getUserClubId = async (req) => {
-    const { role, _id } = req.user;
-    if (role === ROLES.SUPER_ADMIN) return { clubId: null };
-    if (role === ROLES.CLUB_ADMIN) return req.clubId ? { clubId: req.clubId } : { status: 403, message: "Your account is not linked to any club." };
+const canEditNote = (viewer, note) => sameId(note.createdBy, viewer.userId);
 
-    let record = null;
-    if (role === ROLES.COACH) record = await Coach.findOne({ userId: _id }).select("clubId");
-    else if (role === ROLES.PARENT) record = await Parent.findOne({ userId: _id }).select("clubId");
-    else if ([ROLES.SENIOR_PLAYER, ROLES.YOUTH_PLAYER].includes(role)) record = await Player.findOne({ userId: _id }).select("clubId");
+const canDeleteNote = (viewer, note) =>
+    sameId(note.createdBy, viewer.userId) || (viewer.kind === "manager" && managerSeesClub(viewer, note.clubId));
 
-    return record?.clubId ? { clubId: record.clubId } : { status: 403, message: "Your account is not linked to any club." };
-};
+// ---------------------------------------------------------------------------
+// Format
+// ---------------------------------------------------------------------------
 
 const fullName = (u) => `${u?.firstname || ""} ${u?.lastname || ""}`.trim();
 
@@ -94,15 +121,15 @@ const populateNote = (query) =>
         .populate({ path: "coachId", select: "userId", populate: { path: "userId", select: "firstname lastname profile_image" } })
         .populate({
             path: "playerId",
-            select: "userId teamId",
+            select: "userId teamId playerType",
             populate: [
                 { path: "userId", select: "firstname lastname profile_image" },
                 { path: "teamId", select: "name" },
             ],
         })
-        .populate("createdBy", "firstname lastname profile_image role");
+        .populate("createdBy", "firstname lastname profile_image");
 
-const formatNote = (note, req) => {
+const formatNote = (note, viewer) => {
     const coach = note.coachId && note.coachId._id ? note.coachId : null;
     const player = note.playerId && note.playerId._id ? note.playerId : null;
     const author = note.createdBy && note.createdBy._id ? note.createdBy : null;
@@ -118,15 +145,17 @@ const formatNote = (note, req) => {
                 _id: player._id,
                 name: fullName(player.userId),
                 profile_image: player.userId?.profile_image || "",
+                playerType: player.playerType,
                 team: player.teamId && player.teamId._id ? { _id: player.teamId._id, name: player.teamId.name } : null,
             }
             : null,
+        // Kisne likha: coach / parent / seniorPlayer
         createdBy: author
             ? { _id: author._id, name: fullName(author), profile_image: author.profile_image || "", role: note.createdByRole }
             : null,
-        // Frontend buttons ke liye
-        canEdit: String(author?._id || note.createdBy) === String(req.user._id),
-        canDelete: isManager(req.user),
+        // Frontend ke Edit / Delete buttons ke liye
+        canEdit: canEditNote(viewer, note),
+        canDelete: canDeleteNote(viewer, note),
         createdAt: note.createdAt,
         updatedAt: note.updatedAt,
     };
@@ -140,66 +169,8 @@ const cleanText = (raw) => {
     return { text };
 };
 
-/**
- * POST /api/user/notes/create   (manager ya coach)
- * body: { type: "coach" | "player", coachId (type coach), playerId (type player), text }
- */
-const createNote = async (req, res) => {
-    try {
-        const viewer = await getViewer(req);
-        if (viewer.message) return sendError(res, viewer.status, viewer.message);
-
-        const body = req.body || {};
-        const type = String(body.type || "").trim().toLowerCase();
-        if (!NOTE_TYPES.includes(type)) return sendError(res, 400, `Type must be one of: ${NOTE_TYPES.join(", ")}.`);
-
-        const checked = cleanText(body.text);
-        if (checked.message) return sendError(res, 400, checked.message);
-
-        const data = { type, text: checked.text, createdBy: req.user._id, createdByRole: req.user.role };
-
-        if (type === "coach") {
-            // Coach note sirf manager likhta hai
-            if (!viewer.manager) return sendError(res, 403, "Only managers can add coach notes.");
-            const coachId = String(body.coachId || "").trim();
-            if (!isValidId(coachId)) return sendError(res, 400, "Please select a valid coach.");
-            const coach = await Coach.findById(coachId).select("clubId");
-            if (!coach || !managerCanSeeClub(viewer, coach.clubId)) return sendError(res, 404, "Coach not found.");
-            data.clubId = coach.clubId;
-            data.coachId = coach._id;
-        } else {
-            const playerId = String(body.playerId || "").trim();
-            if (!isValidId(playerId)) return sendError(res, 400, "Please select a valid player.");
-            const player = await Player.findById(playerId).select("clubId teamId");
-            if (!player) return sendError(res, 404, "Player not found.");
-            if (viewer.manager) {
-                if (!managerCanSeeClub(viewer, player.clubId)) return sendError(res, 404, "Player not found.");
-            } else if (!coachHasPlayer(viewer, player)) {
-                return sendError(res, 403, "You can only add notes for players in your teams.");
-            }
-            data.clubId = player.clubId;
-            data.playerId = player._id;
-        }
-
-        const note = await Note.create(data);
-        const saved = await populateNote(Note.findById(note._id));
-
-        return res.status(201).json({
-            error: false,
-            status: 201,
-            message: "Note added successfully.",
-            message_desc: "Note added successfully.",
-            data: formatNote(saved, req),
-        });
-    } catch (e) {
-        return sendServerError(res, "Create note", e);
-    }
-};
-
-/**
- * Notes ki list response (dono APIs ka same shape)
- */
-const sendNotesPage = async (req, res, filter) => {
+// List ka response (dono list APIs ka same shape)
+const sendNotesPage = async (req, res, viewer, filter) => {
     const { page, limit, skip } = getPagination(req.query);
     const [notes, total] = await Promise.all([
         populateNote(Note.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit)),
@@ -211,17 +182,93 @@ const sendNotesPage = async (req, res, filter) => {
         message: "Notes fetched successfully.",
         message_desc: "Notes fetched successfully.",
         data: {
-            notes: notes.map((n) => formatNote(n, req)),
+            notes: notes.map((n) => formatNote(n, viewer)),
             pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
         },
     });
 };
 
+// ---------------------------------------------------------------------------
+// APIs
+// ---------------------------------------------------------------------------
+
 /**
- * GET /api/user/notes/coach?coachId=&clubId=&page=1&limit=20   (manager ya coach)
- * Coach notes. coachId = "All coaches" dropdown se ek coach.
- *   manager: apne club ke (superAdmin saare, ya clubId se ek club)
- *   coach:   sirf apne baare ke
+ * POST /api/user/notes/create
+ *   Coach:          { text }                     -> coach note (apne naam se)
+ *   Parent:         { playerId, text }           -> player note (apne youth bachche ke liye)
+ *   Senior player:  { text }                     -> player note (apne liye)
+ * "type" bhejna optional hai (role se apne aap tay hota hai). Bheja aur role se match nahi kiya toh error.
+ * Club admin / superAdmin notes nahi likhte, sirf padhte hain.
+ */
+const createNote = async (req, res) => {
+    try {
+        const viewer = await getViewer(req);
+        if (viewer.message) return sendError(res, viewer.status, viewer.message);
+
+        if (viewer.kind === "manager") return sendError(res, 403, "Managers can view notes but can't add them.");
+
+        const body = req.body || {};
+        const expectedType = viewer.kind === "coach" ? "coach" : "player";
+        const type = body.type ? String(body.type).trim().toLowerCase() : expectedType;
+        if (!NOTE_TYPES.includes(type)) return sendError(res, 400, `Type must be one of: ${NOTE_TYPES.join(", ")}.`);
+        if (type !== expectedType) {
+            return sendError(
+                res,
+                403,
+                expectedType === "coach"
+                    ? "Coaches can only add coach notes."
+                    : "Parents and senior players can only add player notes."
+            );
+        }
+
+        const checked = cleanText(body.text);
+        if (checked.message) return sendError(res, 400, checked.message);
+
+        const data = {
+            type,
+            text: checked.text,
+            clubId: viewer.clubId,
+            createdBy: req.user._id,
+            createdByRole: req.user.role,
+        };
+
+        if (viewer.kind === "coach") {
+            data.coachId = viewer.coach._id;
+        } else if (viewer.kind === "senior") {
+            data.playerId = viewer.player._id;
+        } else {
+            // Parent: kis bachche ke liye
+            const playerId = String(body.playerId || "").trim();
+            if (!isValidId(playerId)) return sendError(res, 400, "Please select a valid player.");
+            if (!viewer.childPlayerIds.includes(playerId)) {
+                return sendError(res, 403, "You can only add notes for your own children.");
+            }
+            const player = await Player.findById(playerId).select("clubId");
+            if (!player) return sendError(res, 404, "Player not found.");
+            data.playerId = player._id;
+            data.clubId = player.clubId;
+        }
+
+        const note = await Note.create(data);
+        const saved = await populateNote(Note.findById(note._id));
+
+        return res.status(201).json({
+            error: false,
+            status: 201,
+            message: "Note added successfully.",
+            message_desc: "Note added successfully.",
+            data: formatNote(saved, viewer),
+        });
+    } catch (e) {
+        return sendServerError(res, "Create note", e);
+    }
+};
+
+/**
+ * GET /api/user/notes/coach?coachId=&clubId=&page=1&limit=20
+ *   club admin / superAdmin: club ke saare coach notes (coachId = "All coaches" dropdown, clubId sirf superAdmin)
+ *   coach:                   sirf apne likhe hue
+ *   baaki:                   403
  */
 const listCoachNotes = async (req, res) => {
     try {
@@ -233,51 +280,79 @@ const listCoachNotes = async (req, res) => {
         if (coachId && !isValidId(coachId)) return sendError(res, 400, "Invalid coach id.");
 
         const filter = { type: "coach" };
-        if (coachId) filter.coachId = coachId;
 
-        if (viewer.manager) {
+        if (viewer.kind === "manager") {
+            if (coachId) filter.coachId = coachId;
             if (viewer.clubId) filter.clubId = viewer.clubId;
             else if (clubId) {
                 if (!isValidId(clubId)) return sendError(res, 400, "Invalid club id.");
                 filter.clubId = clubId;
             }
+        } else if (viewer.kind === "coach") {
+            filter.coachId = viewer.coach._id;
+            filter.createdBy = viewer.userId;
         } else {
-            // Coach sirf apne baare ke notes. Kisi aur coach ki id di toh kuch nahi milega
-            filter.clubId = viewer.clubId;
-            filter.coachId = coachId && coachId !== String(viewer.coach._id) ? null : viewer.coach._id;
+            return sendError(res, 403, "You don't have access to coach notes.");
         }
 
-        return await sendNotesPage(req, res, filter);
+        return await sendNotesPage(req, res, viewer, filter);
     } catch (e) {
         return sendServerError(res, "List coach notes", e);
     }
 };
 
 /**
- * GET /api/user/notes/player?playerId=&clubId=&page=1&limit=20   (koi bhi logged-in user)
- * Player notes. Kaun dekhega ye abhi tay nahi, isliye koi role rule nahi:
- * har user ko sirf APNE club ke player notes milte hain (superAdmin ko saare, ya clubId se ek club).
- * playerId = ek player ke notes.
+ * GET /api/user/notes/player?playerId=&clubId=&page=1&limit=20
+ *   club admin / superAdmin: club ke saare player notes (clubId sirf superAdmin)
+ *   coach:                   apni teams ke players ke
+ *   parent:                  apne bachchon ke
+ *   senior player:           apne
+ * playerId = ek player ke notes (sirf wahi jo upar ke hisaab se allowed hai)
  */
 const listPlayerNotes = async (req, res) => {
     try {
-        const club = await getUserClubId(req);
-        if (club.message) return sendError(res, club.status, club.message);
+        const viewer = await getViewer(req);
+        if (viewer.message) return sendError(res, viewer.status, viewer.message);
 
         const playerId = String(req.query.playerId || "").trim();
         const clubId = String(req.query.clubId || "").trim();
         if (playerId && !isValidId(playerId)) return sendError(res, 400, "Invalid player id.");
 
         const filter = { type: "player" };
-        if (playerId) filter.playerId = playerId;
 
-        if (club.clubId) filter.clubId = club.clubId;
-        else if (clubId) {
-            if (!isValidId(clubId)) return sendError(res, 400, "Invalid club id.");
-            filter.clubId = clubId;
+        // Ye user kin players ke notes dekh sakta hai (manager ke liye null = club ke sab)
+        let allowedPlayerIds = null;
+
+        if (viewer.kind === "manager") {
+            if (viewer.clubId) filter.clubId = viewer.clubId;
+            else if (clubId) {
+                if (!isValidId(clubId)) return sendError(res, 400, "Invalid club id.");
+                filter.clubId = clubId;
+            }
+        } else {
+            filter.clubId = viewer.clubId;
+            if (viewer.kind === "coach") {
+                const teamPlayers = viewer.teamIds.length
+                    ? await Player.find({ teamId: { $in: viewer.teamIds } }).select("_id")
+                    : [];
+                allowedPlayerIds = teamPlayers.map((p) => String(p._id));
+            } else if (viewer.kind === "parent") {
+                allowedPlayerIds = viewer.childPlayerIds;
+            } else {
+                allowedPlayerIds = [String(viewer.player._id)];
+            }
         }
 
-        return await sendNotesPage(req, res, filter);
+        if (allowedPlayerIds === null) {
+            if (playerId) filter.playerId = playerId;
+        } else if (playerId) {
+            // Allowed nahi toh khaali list (doosre ke notes kabhi nahi)
+            filter.playerId = allowedPlayerIds.includes(playerId) ? playerId : null;
+        } else {
+            filter.playerId = { $in: allowedPlayerIds };
+        }
+
+        return await sendNotesPage(req, res, viewer, filter);
     } catch (e) {
         return sendServerError(res, "List player notes", e);
     }
@@ -291,8 +366,36 @@ const findNote = async (req, id) => {
 
     const note = await Note.findById(id);
     if (!note) return { status: 404, message: "Note not found." };
-    if (!canView(viewer, note)) return { status: 404, message: "Note not found." };
+
+    let playerTeamId = null;
+    if (note.type === "player" && viewer.kind === "coach") {
+        const player = await Player.findById(note.playerId).select("teamId");
+        playerTeamId = player?.teamId || null;
+    }
+    if (!canView(viewer, note, playerTeamId)) return { status: 404, message: "Note not found." };
     return { note, viewer };
+};
+
+/**
+ * GET /api/user/notes/:id   (jo note dekh sakta hai)
+ */
+const getNote = async (req, res) => {
+    try {
+        const found = await findNote(req, req.params.id);
+        if (found.message) return sendError(res, found.status, found.message);
+
+        const saved = await populateNote(Note.findById(found.note._id));
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Note fetched successfully.",
+            message_desc: "Note fetched successfully.",
+            data: formatNote(saved, found.viewer),
+        });
+    } catch (e) {
+        return sendServerError(res, "Get note", e);
+    }
 };
 
 /**
@@ -303,11 +406,9 @@ const updateNote = async (req, res) => {
     try {
         const found = await findNote(req, req.params.id);
         if (found.message) return sendError(res, found.status, found.message);
-        const { note } = found;
+        const { note, viewer } = found;
 
-        if (String(note.createdBy) !== String(req.user._id)) {
-            return sendError(res, 403, "Only the person who wrote this note can edit it.");
-        }
+        if (!canEditNote(viewer, note)) return sendError(res, 403, "Only the person who wrote this note can edit it.");
 
         const checked = cleanText((req.body || {}).text);
         if (checked.message) return sendError(res, 400, checked.message);
@@ -321,7 +422,7 @@ const updateNote = async (req, res) => {
             status: 200,
             message: "Note updated successfully.",
             message_desc: "Note updated successfully.",
-            data: formatNote(saved, req),
+            data: formatNote(saved, viewer),
         });
     } catch (e) {
         return sendServerError(res, "Update note", e);
@@ -329,27 +430,41 @@ const updateNote = async (req, res) => {
 };
 
 /**
- * DELETE /api/user/notes/:id/delete   (sirf manager: superAdmin / clubAdmin)
+ * DELETE /api/user/notes/:id/delete   (likhne wala, ya club admin / superAdmin)
  */
 const deleteNote = async (req, res) => {
     try {
-        if (!isManager(req.user)) return sendError(res, 403, "Only managers can delete notes.");
-
         const found = await findNote(req, req.params.id);
         if (found.message) return sendError(res, found.status, found.message);
+        const { note, viewer } = found;
 
-        await Note.findByIdAndDelete(found.note._id);
+        if (!canDeleteNote(viewer, note)) {
+            return sendError(res, 403, "Only the person who wrote this note or a club admin can delete it.");
+        }
+
+        await Note.findByIdAndDelete(note._id);
 
         return res.status(200).json({
             error: false,
             status: 200,
             message: "Note deleted successfully.",
             message_desc: "Note deleted successfully.",
-            data: { _id: found.note._id },
+            data: { _id: note._id },
         });
     } catch (e) {
         return sendServerError(res, "Delete note", e);
     }
 };
 
-module.exports = { createNote, listCoachNotes, listPlayerNotes, updateNote, deleteNote, canView };
+module.exports = {
+    createNote,
+    listCoachNotes,
+    listPlayerNotes,
+    getNote,
+    updateNote,
+    deleteNote,
+    // test ke liye
+    canView,
+    canEditNote,
+    canDeleteNote,
+};
