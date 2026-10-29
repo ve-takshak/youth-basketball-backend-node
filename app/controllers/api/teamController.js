@@ -123,6 +123,30 @@ const validateTeamSchedule = (body) => {
     return { values };
 };
 
+// Association / league classification number: letters, digits, "-" (max 30). "" / null = khaali
+const LEAGUE_NUMBER_RX = /^[A-Za-z0-9-]{1,30}$/;
+const LEAGUE_NUMBER_FIELDS = {
+    associationNumber: "Association number",
+    leagueClassificationNumber: "League classification number",
+};
+
+/**
+ * League numbers (sirf jo bheje gaye). Galti ho toh { message }, warna { values }
+ * Non-league team ke liye ye hamesha null rakhe jaate hain (controller mein).
+ */
+const parseLeagueNumbers = (body) => {
+    const values = {};
+    for (const [field, label] of Object.entries(LEAGUE_NUMBER_FIELDS)) {
+        if (body[field] === undefined) continue;
+        const raw = body[field] === null ? "" : String(body[field]).trim();
+        if (raw && !LEAGUE_NUMBER_RX.test(raw)) {
+            return { message: `${label} can only have letters, digits and "-" (max 30).` };
+        }
+        values[field] = raw || null;
+    }
+    return { values };
+};
+
 // Suggestions ke sort ke liye: full > partial > low > unknown
 const LEVEL_RANK = { full: 0, partial: 1, low: 2, unknown: 3 };
 
@@ -190,6 +214,9 @@ const formatTeam = (record) => {
         athleticsTraining: formatAthletics(record.athleticsTraining),
         gender: record.gender || "mixed",
         teamType: record.teamType || "league",
+        // Sirf league team ke liye, non-league par null
+        associationNumber: record.associationNumber || null,
+        leagueClassificationNumber: record.leagueClassificationNumber || null,
         season: record.season || "",
         teamCapacity: record.teamCapacity !== undefined ? record.teamCapacity : 20,
         status: record.status || "active",
@@ -241,6 +268,7 @@ const resolveHomeVenue = async (raw, clubId) => {
 /**
  * POST /api/user/teams/create
  * Body: { name, clubId, categoryId, gender?, teamType?, season?, teamCapacity?, coachId?, status?,
+ *         associationNumber?, leagueClassificationNumber?   (sirf league, optional. non-league par null)
  *         homeVenueId?, preferredTrainingDays?,
  *         unavailableHours?: [{ day, from, to }],
  *         athleticsTraining?: { enabled, locationName, day, from, to } }
@@ -295,6 +323,10 @@ const createTeam = async (req, res) => {
         const schedule = validateTeamSchedule(body);
         if (schedule.message) return sendError(res, 400, schedule.message);
 
+        // 6c. League numbers (optional)
+        const leagueNumbers = parseLeagueNumbers(body);
+        if (leagueNumbers.message) return sendError(res, 400, leagueNumbers.message);
+
         // 7. Duplicate check (within same club)
         const duplicate = await Team.findOne({
             clubId: targetClubId,
@@ -319,6 +351,10 @@ const createTeam = async (req, res) => {
             categoryId: targetCategoryId,
             gender: cleanGender,
             teamType: cleanTeamType,
+            // League ho toh jo bheja (ya null), non-league ho toh hamesha null
+            associationNumber: cleanTeamType === "league" ? leagueNumbers.values.associationNumber ?? null : null,
+            leagueClassificationNumber:
+                cleanTeamType === "league" ? leagueNumbers.values.leagueClassificationNumber ?? null : null,
             season: season ? String(season).trim() : "",
             teamCapacity: isNaN(capacityNum) || capacityNum < 1 ? 20 : capacityNum,
             coachId: resolvedCoachId,
@@ -441,6 +477,7 @@ const getTeam = async (req, res) => {
 /**
  * PUT /api/user/teams/:id/update
  * Body: { name?, clubId?, categoryId?, gender?, teamType?, season?, teamCapacity?, coachId?, status?,
+ *         associationNumber?, leagueClassificationNumber?   (sirf league. team non-league bani toh dono null)
  *         homeVenueId?, preferredTrainingDays?, unavailableHours?, athleticsTraining? }
  * homeVenueId: "" = venue hatana.  preferredTrainingDays / unavailableHours: [] = sab hatana (poori list replace).
  * athleticsTraining: { enabled: false } = band karna.
@@ -457,9 +494,11 @@ const updateTeam = async (req, res) => {
         const body = req.body || {};
         const { name, clubId, categoryId, gender, teamType, season, teamCapacity, coachId, status } = body;
 
-        // Unavailable hours + athletics pehle hi check
+        // Unavailable hours + athletics + league numbers pehle hi check
         const schedule = validateTeamSchedule(body);
         if (schedule.message) return sendError(res, 400, schedule.message);
+        const leagueNumbers = parseLeagueNumbers(body);
+        if (leagueNumbers.message) return sendError(res, 400, leagueNumbers.message);
 
         // 1. Club update (superAdmin only)
         let targetClubId = team.clubId;
@@ -509,6 +548,14 @@ const updateTeam = async (req, res) => {
         if (teamType !== undefined) {
             const t = String(teamType).toLowerCase();
             if (VALID_TEAM_TYPES.includes(t)) team.teamType = t;
+        }
+
+        // 5b. League numbers: league team par jo bheja wahi, non-league par dono null
+        if (team.teamType === "league") {
+            Object.assign(team, leagueNumbers.values);
+        } else {
+            team.associationNumber = null;
+            team.leagueClassificationNumber = null;
         }
 
         // 6. Season update

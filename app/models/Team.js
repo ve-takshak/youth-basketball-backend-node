@@ -57,6 +57,18 @@ const TeamSchema = new mongoose.Schema(
             enum: ["league", "non-league"],
             default: "league",
         },
+        // Sirf league team ke liye (optional). Non-league team ke liye hamesha null.
+        // String rakha hai taaki aage ke zero (0123) na kat jaayein.
+        associationNumber: {
+            type: String,
+            trim: true,
+            default: null, // "6055"
+        },
+        leagueClassificationNumber: {
+            type: String,
+            trim: true,
+            default: null, // "12433"
+        },
         season: {
             type: String,
             trim: true,
