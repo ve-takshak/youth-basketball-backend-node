@@ -96,4 +96,53 @@ const parseUnavailableHours = (raw) => {
     return { blocks };
 };
 
-module.exports = { WEEK_DAYS, TIME_RX, toMinutes, parseTrainingDays, parseUnavailableHours };
+// Band / khaali athletics session
+const EMPTY_ATHLETICS = { enabled: false, locationName: "", day: "", from: "", to: "" };
+
+/**
+ * Athletics / conditioning training: hafte mein ek alag session, alag jagah par.
+ * { enabled: true, locationName: "Sharon Athletics Track", day: "wed", from: "17:00", to: "18:30" }
+ * enabled false / null / "" = band (baaki fields khaali ho jaate hain).
+ * JSON object ya form-data mein JSON string, dono chalte hain.
+ * Galti ho toh { message }, warna { athletics }
+ */
+const parseAthleticsTraining = (raw) => {
+    let value = raw;
+    if (value === null || value === "") return { athletics: { ...EMPTY_ATHLETICS } };
+    if (typeof value === "string") {
+        try {
+            value = JSON.parse(value);
+        } catch (e) {
+            return { message: "Athletics training must be a valid object." };
+        }
+    }
+    if (typeof value !== "object" || Array.isArray(value)) return { message: "Athletics training must be an object." };
+
+    const enabled = value.enabled === true || String(value.enabled) === "true";
+    if (!enabled) return { athletics: { ...EMPTY_ATHLETICS } };
+
+    const locationName = String(value.locationName ?? "").trim();
+    const day = String(value.day || "").trim().toLowerCase();
+    const from = String(value.from || "").trim();
+    const to = String(value.to || "").trim();
+
+    if (!locationName) return { message: "Athletics training: location name is required." };
+    if (locationName.length > 150) return { message: "Athletics training: location name must be 150 characters or less." };
+    if (!WEEK_DAYS.includes(day)) return { message: `Athletics training: day must be one of ${WEEK_DAYS.join(", ")}.` };
+    if (!TIME_RX.test(from) || !TIME_RX.test(to)) {
+        return { message: "Athletics training: time must be in HH:MM format (00:00 - 23:59)." };
+    }
+    if (toMinutes(from) >= toMinutes(to)) return { message: 'Athletics training: "from" must be before "to".' };
+
+    return { athletics: { enabled: true, locationName, day, from, to } };
+};
+
+module.exports = {
+    WEEK_DAYS,
+    TIME_RX,
+    toMinutes,
+    parseTrainingDays,
+    parseUnavailableHours,
+    parseAthleticsTraining,
+    EMPTY_ATHLETICS,
+};

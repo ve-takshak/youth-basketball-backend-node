@@ -5,11 +5,25 @@ const Facility = require("../../models/Facility");
 const TeamCategory = require("../../models/TeamCategory");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, escapeRegex, getPagination } = require("../../helpers/common");
-const { WEEK_DAYS, parseTrainingDays } = require("../../helpers/scheduleHelper");
+const {
+    WEEK_DAYS,
+    EMPTY_ATHLETICS,
+    parseTrainingDays,
+    parseUnavailableHours,
+    parseAthleticsTraining,
+} = require("../../helpers/scheduleHelper");
 
 const VALID_GENDERS = ["boys", "girls", "mixed"];
 const VALID_TEAM_TYPES = ["league", "non-league"];
 const VALID_STATUSES = ["active", "inactive"];
+
+// Logo ka poora URL (S3 wala waise hi, local path ho toh APP_URL ke saath)
+const fileUrlOf = (value) => {
+    if (!value) return "";
+    if (value.startsWith("http")) return value;
+    const appUrl = process.env.APP_URL || "http://localhost:5000";
+    return `${appUrl}/${value.replace(/\\/g, "/")}`;
+};
 
 const sendError = (res, status, message, data = {}) =>
     res.status(status).json({ error: true, status, message, message_desc: message, data });
@@ -85,6 +99,30 @@ const computeCoachMatch = (teamDays = [], coach = null) => {
     return { level, matchPercent, teamDays, coachDays, matchingDays, missingDays, unavailableOnTeamDays, warning };
 };
 
+// Athletics ka response hamesha poore shape mein
+const formatAthletics = (a) =>
+    a && a.enabled
+        ? { enabled: true, locationName: a.locationName || "", day: a.day || "", from: a.from || "", to: a.to || "" }
+        : { ...EMPTY_ATHLETICS };
+
+/**
+ * Unavailable hours + athletics (sirf jo bheje gaye). Galti ho toh { message }, warna { values }
+ */
+const validateTeamSchedule = (body) => {
+    const values = {};
+    if (body.unavailableHours !== undefined) {
+        const hours = parseUnavailableHours(body.unavailableHours);
+        if (hours.message) return { message: hours.message.replace("Unavailable", "Team unavailable") };
+        values.unavailableHours = hours.blocks;
+    }
+    if (body.athleticsTraining !== undefined) {
+        const athletics = parseAthleticsTraining(body.athleticsTraining);
+        if (athletics.message) return { message: athletics.message };
+        values.athleticsTraining = athletics.athletics;
+    }
+    return { values };
+};
+
 // Suggestions ke sort ke liye: full > partial > low > unknown
 const LEVEL_RANK = { full: 0, partial: 1, low: 2, unknown: 3 };
 
@@ -100,12 +138,17 @@ const formatTeam = (record) => {
     if (!record) return null;
     const coach = record.coachId && typeof record.coachId === "object" && record.coachId._id ? record.coachId : null;
     const teamDays = record.preferredTrainingDays || [];
+    const club = record.clubId && typeof record.clubId === "object" && record.clubId._id ? record.clubId : null;
+    // Team ka apna logo nahi hota, club ka logo hi team ka logo hai
+    const clubLogoUrl = club ? fileUrlOf(club.logo) : "";
     return {
         _id: record._id,
         name: record.name,
-        club: record.clubId && typeof record.clubId === "object" ? {
-            _id: record.clubId._id,
-            name: record.clubId.name,
+        logoUrl: clubLogoUrl,
+        club: club ? {
+            _id: club._id,
+            name: club.name,
+            logoUrl: clubLogoUrl,
         } : (record.clubId ? { _id: record.clubId } : null),
         category: record.categoryId && typeof record.categoryId === "object" ? {
             _id: record.categoryId._id,
@@ -141,6 +184,10 @@ const formatTeam = (record) => {
             },
         } : null,
         preferredTrainingDays: teamDays,
+        // Team kab nahi aa sakti (har hafte)
+        unavailableHours: (record.unavailableHours || []).map((b) => ({ day: b.day, from: b.from, to: b.to })),
+        // Athletics / conditioning session (band ho toh enabled: false aur baaki khaali)
+        athleticsTraining: formatAthletics(record.athleticsTraining),
         gender: record.gender || "mixed",
         teamType: record.teamType || "league",
         season: record.season || "",
@@ -194,7 +241,9 @@ const resolveHomeVenue = async (raw, clubId) => {
 /**
  * POST /api/user/teams/create
  * Body: { name, clubId, categoryId, gender?, teamType?, season?, teamCapacity?, coachId?, status?,
- *         homeVenueId?, preferredTrainingDays? }
+ *         homeVenueId?, preferredTrainingDays?,
+ *         unavailableHours?: [{ day, from, to }],
+ *         athleticsTraining?: { enabled, locationName, day, from, to } }
  * Response ke "coachMatch" mein coach aur team ke din kitne milte hain (warning ke saath). Assign kabhi rukta nahi.
  */
 const createTeam = async (req, res) => {
@@ -242,6 +291,10 @@ const createTeam = async (req, res) => {
         const days = parseTrainingDays(body.preferredTrainingDays ?? []);
         if (days.message) return sendError(res, 400, days.message);
 
+        // 6b. Unavailable hours + athletics training (optional)
+        const schedule = validateTeamSchedule(body);
+        if (schedule.message) return sendError(res, 400, schedule.message);
+
         // 7. Duplicate check (within same club)
         const duplicate = await Team.findOne({
             clubId: targetClubId,
@@ -271,6 +324,7 @@ const createTeam = async (req, res) => {
             coachId: resolvedCoachId,
             homeVenueId: venue.venueId,
             preferredTrainingDays: days.days,
+            ...schedule.values,
             status: status && VALID_STATUSES.includes(String(status).toLowerCase()) ? String(status).toLowerCase() : "active",
             createdBy: req.user._id,
         });
@@ -387,8 +441,9 @@ const getTeam = async (req, res) => {
 /**
  * PUT /api/user/teams/:id/update
  * Body: { name?, clubId?, categoryId?, gender?, teamType?, season?, teamCapacity?, coachId?, status?,
- *         homeVenueId?, preferredTrainingDays? }
- * homeVenueId: "" = venue hatana.  preferredTrainingDays: [] = saare din hatana.
+ *         homeVenueId?, preferredTrainingDays?, unavailableHours?, athleticsTraining? }
+ * homeVenueId: "" = venue hatana.  preferredTrainingDays / unavailableHours: [] = sab hatana (poori list replace).
+ * athleticsTraining: { enabled: false } = band karna.
  * Response ke "coachMatch" mein coach aur team ke din kitne milte hain. Assign kabhi rukta nahi.
  */
 const updateTeam = async (req, res) => {
@@ -401,6 +456,10 @@ const updateTeam = async (req, res) => {
 
         const body = req.body || {};
         const { name, clubId, categoryId, gender, teamType, season, teamCapacity, coachId, status } = body;
+
+        // Unavailable hours + athletics pehle hi check
+        const schedule = validateTeamSchedule(body);
+        if (schedule.message) return sendError(res, 400, schedule.message);
 
         // 1. Club update (superAdmin only)
         let targetClubId = team.clubId;
@@ -499,6 +558,9 @@ const updateTeam = async (req, res) => {
             if (days.message) return sendError(res, 400, days.message);
             team.preferredTrainingDays = days.days;
         }
+
+        // 11. Unavailable hours + athletics (sirf jo bheje gaye)
+        Object.assign(team, schedule.values);
 
         await team.save();
 

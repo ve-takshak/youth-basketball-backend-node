@@ -1,7 +1,34 @@
 const mongoose = require("../../config/database");
+const { WEEK_DAYS, TIME_RX } = require("../helpers/scheduleHelper");
 
-// Hafte ke din (preferred training days). Order yahi rakhna, sort isi se hota hai.
-const WEEK_DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+// "HH:MM" ya khaali (athletics band ho toh time khaali rehta hai)
+const optionalTime = {
+    type: String,
+    default: "",
+    validate: { validator: (v) => v === "" || TIME_RX.test(v), message: "Time must be HH:MM." },
+};
+
+// Team kab NAHI khel / train sakti (har hafte): din + time
+const UnavailableBlockSchema = new mongoose.Schema(
+    {
+        day: { type: String, enum: WEEK_DAYS, required: true },
+        from: { type: String, match: TIME_RX, required: true }, // "16:00"
+        to: { type: String, match: TIME_RX, required: true }, // "18:00"
+    },
+    { _id: false }
+);
+
+// Hafte mein ek athletics / conditioning session, alag jagah par
+const AthleticsTrainingSchema = new mongoose.Schema(
+    {
+        enabled: { type: Boolean, default: false },
+        locationName: { type: String, trim: true, default: "" }, // "Sharon Athletics Track"
+        day: { type: String, enum: [...WEEK_DAYS, ""], default: "" },
+        from: optionalTime, // "17:00"
+        to: optionalTime, // "18:30"
+    },
+    { _id: false }
+);
 
 const TeamSchema = new mongoose.Schema(
     {
@@ -63,6 +90,18 @@ const TeamSchema = new mongoose.Schema(
         preferredTrainingDays: {
             type: [{ type: String, enum: WEEK_DAYS }],
             default: [],
+        },
+
+        // Har hafte team kab NAHI aa sakti, jaise [{ day: "fri", from: "12:00", to: "18:00" }]
+        unavailableHours: {
+            type: [UnavailableBlockSchema],
+            default: [],
+        },
+
+        // Athletics / conditioning training (checkbox + location + din + time)
+        athleticsTraining: {
+            type: AthleticsTrainingSchema,
+            default: () => ({}),
         },
 
         createdBy: {
