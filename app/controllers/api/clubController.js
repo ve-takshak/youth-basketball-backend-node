@@ -300,8 +300,16 @@ const listClubs = async (req, res) => {
             .populate("userId", "firstname lastname email countryCode mobileNumber profile_image")
             .sort({ createdAt: 1 });
 
+        // Har club ki teams ki ginti
+        const teamCounts = await Team.aggregate([
+            { $match: { clubId: { $in: clubs.map((club) => club._id) } } },
+            { $group: { _id: "$clubId", count: { $sum: 1 } } },
+        ]);
+        const teamsCountByClub = new Map(teamCounts.map((row) => [String(row._id), row.count]));
+
         const clubsWithAdmins = clubs.map((club) => ({
             ...formatClub(club),
+            teamsCount: teamsCountByClub.get(String(club._id)) || 0,
             clubAdmins: admins
                 .filter((admin) => String(admin.clubId) === String(club._id))
                 .map(formatClubAdmin),

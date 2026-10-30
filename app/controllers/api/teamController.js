@@ -5,6 +5,7 @@ const Facility = require("../../models/Facility");
 const TeamCategory = require("../../models/TeamCategory");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, escapeRegex, getPagination } = require("../../helpers/common");
+const { parseSeason } = require("../../helpers/season");
 const {
     WEEK_DAYS,
     EMPTY_ATHLETICS,
@@ -351,6 +352,10 @@ const createTeam = async (req, res) => {
         const leagueNumbers = parseLeagueNumbers(body);
         if (leagueNumbers.message) return sendError(res, 400, leagueNumbers.message);
 
+        // 6d. Season (YYYY/YY)
+        const seasonResult = parseSeason(season);
+        if (seasonResult.message) return sendError(res, 400, seasonResult.message);
+
         // 7. Duplicate check (within same club)
         const duplicate = await Team.findOne({
             clubId: targetClubId,
@@ -385,7 +390,7 @@ const createTeam = async (req, res) => {
             associationNumber: cleanTeamType === "league" ? leagueNumbers.values.associationNumber ?? null : null,
             leagueClassificationNumber:
                 cleanTeamType === "league" ? leagueNumbers.values.leagueClassificationNumber ?? null : null,
-            season: season ? String(season).trim() : "",
+            season: seasonResult.value,
             teamCapacity: isNaN(capacityNum) || capacityNum < 1 ? 20 : capacityNum,
             coachId: resolvedCoachId,
             homeVenueId: venue.venueId,
@@ -595,7 +600,12 @@ const updateTeam = async (req, res) => {
         }
 
         // 6. Season update
-        if (season !== undefined) team.season = String(season).trim();
+        // (purani free-text season jaisi ki taisi bheji jaaye toh dobara check nahi)
+        if (season !== undefined && String(season).trim() !== (team.season || "")) {
+            const seasonResult = parseSeason(season);
+            if (seasonResult.message) return sendError(res, 400, seasonResult.message);
+            team.season = seasonResult.value;
+        }
 
         // 7. Capacity update
         if (teamCapacity !== undefined) {

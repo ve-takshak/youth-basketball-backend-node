@@ -9,6 +9,7 @@ const { populatePlayer, formatPlayer } = require("../Playercontroller");
 
 // Admin panel (superAdmin / clubAdmin) ki parent APIs:
 //   GET    /user/parents                                  -> parents ki list (bachchon ke saath)
+//   GET    /user/parents/:id                              -> ek parent ki poori detail + bachchon ki details
 //   PUT    /user/parents/:id/update                       -> parent ki details edit
 //   DELETE /user/parents/:id/delete                       -> parent delete (sirf jab koi bachcha linked na ho)
 //   POST   /user/players/:id/parents/link                 -> youth player se parent jodna
@@ -151,6 +152,57 @@ const findParentForAdmin = async (req, id) => {
     const parent = await Parent.findById(id);
     if (!parent || !canAccess(req, parent.clubId)) return { status: 404, message: "Parent not found." };
     return { parent };
+};
+
+/**
+ * GET /api/user/parents/:id   (superAdmin ya clubAdmin, :id = Parent ki _id)
+ * Parent + club + har bachche ki details (team, coach, status, shirt waghera) - detail page ke liye.
+ */
+const getParent = async (req, res) => {
+    try {
+        const found = await findParentForAdmin(req, req.params.id);
+        if (found.message) return sendError(res, found.status, found.message);
+
+        const parent = await Parent.findById(found.parent._id)
+            .populate("userId", PARENT_USER_FIELDS)
+            .populate("clubId", "name");
+
+        const players = await populatePlayer(Player.find({ "parents.parentId": parent._id }).sort({ createdAt: 1 }));
+        const children = players.map((player) => {
+            const base = formatPlayer(player);
+            const link = (player.parents || []).find(
+                (item) => String(item.parentId?._id || item.parentId) === String(parent._id)
+            );
+            return {
+                playerId: base._id,
+                firstname: base.firstname,
+                lastname: base.lastname,
+                profile_image: base.profile_image,
+                age: base.age,
+                gender: base.gender,
+                status: base.status,
+                playerType: base.playerType,
+                shirtNumber: base.shirtNumber,
+                registrationNumber: base.registrationNumber,
+                season: base.season,
+                is_verify: base.is_verify,
+                team: base.team,
+                coach: base.coach,
+                relation: link?.relation || "",
+                isPrimary: link?.isPrimary || false,
+            };
+        });
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Parent fetched successfully.",
+            message_desc: "Parent fetched successfully.",
+            data: formatParent(parent, children),
+        });
+    } catch (e) {
+        return sendServerError(res, "Get parent", e);
+    }
 };
 
 /**
@@ -370,6 +422,7 @@ const unlinkParentFromPlayer = async (req, res) => {
 
 module.exports = {
     listParents,
+    getParent,
     updateParent,
     deleteParent,
     linkParentToPlayer,

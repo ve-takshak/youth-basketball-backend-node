@@ -88,6 +88,19 @@ const createTeamCategory = async (req, res) => {
  * GET /api/user/listTeamCategories
  * Query: { search?, page?, limit? }
  */
+// Har category ke saath uski teams ki ginti (teamsCount) jodna
+const formatWithTeamCounts = async (categories) => {
+    const counts = await Team.aggregate([
+        { $match: { categoryId: { $in: categories.map((category) => category._id) } } },
+        { $group: { _id: "$categoryId", count: { $sum: 1 } } },
+    ]);
+    const countById = new Map(counts.map((row) => [String(row._id), row.count]));
+    return categories.map((category) => ({
+        ...formatCategory(category),
+        teamsCount: countById.get(String(category._id)) || 0,
+    }));
+};
+
 const listTeamCategories = async (req, res) => {
     try {
         const { search } = req.query;
@@ -112,7 +125,7 @@ const listTeamCategories = async (req, res) => {
                 message: "Team categories fetched successfully.",
                 message_desc: "Team categories fetched successfully.",
                 data: {
-                    categories: categories.map(formatCategory),
+                    categories: await formatWithTeamCounts(categories),
                     pagination: {
                         page,
                         limit,
@@ -130,7 +143,7 @@ const listTeamCategories = async (req, res) => {
             message: "Team categories fetched successfully.",
             message_desc: "Team categories fetched successfully.",
             data: {
-                categories: categories.map(formatCategory),
+                categories: await formatWithTeamCounts(categories),
                 total,
             },
         });

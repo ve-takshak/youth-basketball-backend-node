@@ -55,6 +55,7 @@ const {
 } = require("../app/controllers/api/parentController");
 const {
     listParents,
+    getParent,
     updateParent,
     deleteParent,
     linkParentToPlayer,
@@ -133,6 +134,7 @@ router.delete("/user/players/:id/parents/:parentId/unlink", superAdminOrClubAdmi
 
 // ---------- Parents (admin panel) ----------
 router.get("/user/parents", superAdminOrClubAdminAuthentication, listParents);
+router.get("/user/parents/:id", superAdminOrClubAdminAuthentication, getParent);
 router.put("/user/parents/:id/update", superAdminOrClubAdminAuthentication, updateParent);
 router.delete("/user/parents/:id/delete", superAdminOrClubAdminAuthentication, deleteParent);
 
