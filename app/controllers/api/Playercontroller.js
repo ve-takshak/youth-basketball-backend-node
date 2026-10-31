@@ -745,6 +745,55 @@ const listPlayers = async (req, res) => {
 };
 
 /**
+ * GET /api/user/players/sizes?clubId=&teamId=&playerType=&status=   (superAdmin ya clubAdmin)
+ * Kapdon ke size ki ginti (bulk order ke liye): har size ke saamne game / training / winter kitne players.
+ * status na do toh inactive / left players nahi ginte. teamId=none: jin players ki koi team nahi.
+ * response: { sizes: [{ size, gameWearSize, trainingWearSize, winterWearSize }], notSet: {...}, totals: {...}, totalPlayers }
+ */
+const getSizeSummary = async (req, res) => {
+    try {
+        const teamId = String(req.query.teamId || "").trim();
+
+        const built = await buildPlayerFilter(req);
+        if (built.message) return sendError(res, built.status, built.message);
+        const { filter } = built;
+
+        if (!filter.status) filter.status = { $in: ["pending", "active", "waitlisted"] };
+        if (teamId === "none") filter.teamId = null;
+        else if (teamId && isValidId(teamId)) filter.teamId = teamId;
+
+        const players = await Player.find(filter).select(WEAR_SIZE_FIELDS.join(" ")).lean();
+
+        const blank = () => Object.fromEntries(WEAR_SIZE_FIELDS.map((field) => [field, 0]));
+        const bySize = new Map(SHIRT_SIZES.map((size) => [size, { size, ...blank() }]));
+        const notSet = blank();
+        const totals = blank();
+
+        players.forEach((player) => {
+            WEAR_SIZE_FIELDS.forEach((field) => {
+                const row = bySize.get(player[field]);
+                if (row) {
+                    row[field] += 1;
+                    totals[field] += 1;
+                } else {
+                    notSet[field] += 1;
+                }
+            });
+        });
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Size summary fetched successfully.",
+            message_desc: "Size summary fetched successfully.",
+            data: { sizes: [...bySize.values()], notSet, totals, totalPlayers: players.length },
+        });
+    } catch (e) {
+        return sendServerError(res, "Size summary", e);
+    }
+};
+
+/**
  * GET /api/user/players/unassigned?clubId=&status=&playerType=&gender=&search=&page=1&limit=10   (superAdmin ya clubAdmin)
  * Wo players jo KISI bhi team mein nahi hain (teamId: null).
  * clubAdmin: sirf apne club ke. superAdmin: saare clubs ke (ya clubId se ek club).
@@ -1266,6 +1315,7 @@ module.exports = {
     listOtherTeamPlayers,
     assignPlayerToTeam,
     removePlayerFromTeam,
+    getSizeSummary,
 
     // parentController / adminParentController ke liye
     removeIdDocument,

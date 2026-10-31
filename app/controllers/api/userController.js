@@ -1,7 +1,16 @@
 const jwt = require("jsonwebtoken");
 const validator = require("validator");
 const User = require("../../models/User");
-const { ROLES, USE_STATIC_OTP, STATIC_OTP, OTP_VALID_MINUTES } = require("../../helpers/constants");
+const {
+    ROLES,
+    USE_STATIC_OTP,
+    STATIC_OTP,
+    OTP_VALID_MINUTES,
+    OTP_MAX_REQUESTS,
+    OTP_REQUEST_WINDOW_MINUTES,
+    OTP_MAX_FAILED_ATTEMPTS,
+    OTP_LOCK_MINUTES,
+} = require("../../helpers/constants");
 const { cleanMobile } = require("../../helpers/common");
 const { publicUser, getRoleData } = require("../../helpers/userHelper");
 const Parent = require("../../models/Parent");
@@ -20,6 +29,46 @@ const createToken = (user) =>
         expiresIn: "180d",
     });
 
+// ---- OTP rate limit / lockout (per user, DB mein, isliye server restart pe bhi rehta hai) ----
+const minutesLeft = (until) => Math.max(1, Math.ceil((new Date(until).getTime() - Date.now()) / 60000));
+
+const tooManyAttempts = (res, minutes) => {
+    const message = `Too many attempts. Please try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`;
+    return res.status(429).json({ error: true, status: 429, message, message_desc: message, data: {} });
+};
+
+// OTP maangne se pehle: lock ya window ki limit ho toh { blockedMinutes }, warna count badhata hai (save caller karta hai)
+const trackOtpRequest = (user) => {
+    const now = Date.now();
+    if (user.otp_locked_until && new Date(user.otp_locked_until).getTime() > now) {
+        return { blockedMinutes: minutesLeft(user.otp_locked_until) };
+    }
+
+    const started = user.otp_request_window_started ? new Date(user.otp_request_window_started).getTime() : 0;
+    if (!started || now - started > OTP_REQUEST_WINDOW_MINUTES * 60000) {
+        user.otp_request_window_started = new Date(now);
+        user.otp_request_count = 0;
+    }
+
+    const windowEnd = new Date(user.otp_request_window_started).getTime() + OTP_REQUEST_WINDOW_MINUTES * 60000;
+    if (user.otp_request_count >= OTP_MAX_REQUESTS) return { blockedMinutes: minutesLeft(windowEnd) };
+
+    user.otp_request_count += 1;
+    return {};
+};
+
+// Galat OTP: count badhao, limit pe lock. true = ab lock ho gaya
+const recordFailedOtp = async (user) => {
+    user.otp_failed_attempts = (user.otp_failed_attempts || 0) + 1;
+    const locked = user.otp_failed_attempts >= OTP_MAX_FAILED_ATTEMPTS;
+    if (locked) {
+        user.otp_locked_until = new Date(Date.now() + OTP_LOCK_MINUTES * 60000);
+        user.otp_failed_attempts = 0;
+    }
+    await user.save();
+    return locked;
+};
+
 // Club ka ek hi format, har API mein same: { _id, clubCode, name, theme }
 const formatClub = (club) =>
     club && club._id
@@ -28,10 +77,13 @@ const formatClub = (club) =>
               clubCode: club.clubCode || "",
               name: club.name || "",
               theme: club.theme || {},
+              isArchived: !!club.isArchived,
           }
         : null;
 
-const CLUB_FIELDS = "_id clubCode name theme";
+const CLUB_FIELDS = "_id clubCode name theme isArchived";
+
+const ARCHIVED_MESSAGE = "Your club has been archived. Please contact the administrator.";
 
 const getParentClub = async (userId) => {
     const parent = await Parent.findOne({ userId }).populate("clubId", CLUB_FIELDS);
@@ -289,6 +341,7 @@ const registerParent = async (req, res) => {
         }
 
         // ---- 5. User save (naya ya purana unverified) ----
+        const isNewUser = !user;
         if (!user) {
             user = new User({
                 countryCode,
@@ -296,6 +349,11 @@ const registerParent = async (req, res) => {
                 role: ROLES.PARENT, // body se role nahi lete
             });
             createdUserId = user._id;
+        }
+
+        if (!isNewUser) {
+            const limit = trackOtpRequest(user);
+            if (limit.blockedMinutes) return tooManyAttempts(res, limit.blockedMinutes);
         }
 
         user.firstname = firstname;
@@ -485,6 +543,20 @@ const login = async (req, res) => {
             });
         }
 
+        // Archived club ke users login nahi kar sakte
+        if ((await getUserClub(user))?.isArchived) {
+            return res.status(403).json({
+                error: true,
+                status: 403,
+                message: ARCHIVED_MESSAGE,
+                message_desc: ARCHIVED_MESSAGE,
+                data: {},
+            });
+        }
+
+        const limit = trackOtpRequest(user);
+        if (limit.blockedMinutes) return tooManyAttempts(res, limit.blockedMinutes);
+
         user.otp = generateOtp();
         user.otp_generated_at = new Date();
         await user.save();
@@ -550,9 +622,24 @@ const verifyOtp = async (req, res) => {
             });
         }
 
+        if ((await getUserClub(user))?.isArchived) {
+            return res.status(403).json({
+                error: true,
+                status: 403,
+                message: ARCHIVED_MESSAGE,
+                message_desc: ARCHIVED_MESSAGE,
+                data: {},
+            });
+        }
+
+        if (user.otp_locked_until && new Date(user.otp_locked_until).getTime() > Date.now()) {
+            return tooManyAttempts(res, minutesLeft(user.otp_locked_until));
+        }
+
         if (USE_STATIC_OTP) {
             // Testing: sirf "0000" check
             if (otp !== STATIC_OTP) {
+                if (await recordFailedOtp(user)) return tooManyAttempts(res, OTP_LOCK_MINUTES);
                 return res.status(400).json({
                     error: true,
                     status: 400,
@@ -564,6 +651,7 @@ const verifyOtp = async (req, res) => {
         } else {
             // Asli SMS wala flow: DB wala OTP match + expiry
             if (!user.otp || user.otp !== otp) {
+                if (await recordFailedOtp(user)) return tooManyAttempts(res, OTP_LOCK_MINUTES);
                 return res.status(400).json({
                     error: true,
                     status: 400,
@@ -587,6 +675,10 @@ const verifyOtp = async (req, res) => {
 
         user.otp = "";
         user.otp_generated_at = null;
+        user.otp_failed_attempts = 0;
+        user.otp_locked_until = null;
+        user.otp_request_count = 0;
+        user.otp_request_window_started = null;
         user.otp_verify_at = new Date();
         user.is_verify = true;
         if (device_type !== undefined) user.device_type = device_type;
@@ -644,6 +736,9 @@ const resendOtp = async (req, res) => {
                 data: {},
             });
         }
+
+        const limit = trackOtpRequest(user);
+        if (limit.blockedMinutes) return tooManyAttempts(res, limit.blockedMinutes);
 
         user.otp = generateOtp();
         user.otp_generated_at = new Date();

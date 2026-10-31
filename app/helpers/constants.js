@@ -16,4 +16,19 @@ const USE_STATIC_OTP = true;
 const STATIC_OTP = "0000";
 const OTP_VALID_MINUTES = 10;
 
-module.exports = { ROLES, USE_STATIC_OTP, STATIC_OTP, OTP_VALID_MINUTES };
+// OTP ka misuse rokna (SMS bomb / brute force), per user
+const OTP_MAX_REQUESTS = 10; // itne OTP request ek window mein
+const OTP_REQUEST_WINDOW_MINUTES = 10;
+const OTP_MAX_FAILED_ATTEMPTS = 5; // itni galat OTP ke baad lock
+const OTP_LOCK_MINUTES = 15;
+
+module.exports = {
+    ROLES,
+    USE_STATIC_OTP,
+    STATIC_OTP,
+    OTP_VALID_MINUTES,
+    OTP_MAX_REQUESTS,
+    OTP_REQUEST_WINDOW_MINUTES,
+    OTP_MAX_FAILED_ATTEMPTS,
+    OTP_LOCK_MINUTES,
+};

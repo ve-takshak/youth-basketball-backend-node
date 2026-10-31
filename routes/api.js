@@ -5,10 +5,11 @@ const {
     authentication,
     superAdminAuthentication,
     superAdminOrClubAdminAuthentication,
+    requireTermsAccepted,
 } = require("../app/middleware/authentication");
 
 const { register, login, verifyOtp, getProfile, resendOtp, registerParent, updateParentProfile } = require("../app/controllers/api/userController");
-const { createClub, listClubs, getClub, updateClub, deleteClub, clubOptions } = require("../app/controllers/api/clubController");
+const { createClub, listClubs, getClub, getDashboardSummary, updateClub, deleteClub, restoreClub, clubOptions } = require("../app/controllers/api/clubController");
 const {
     createClubAdmin,
     listClubAdmins,
@@ -43,6 +44,7 @@ const {
     assignPlayerToTeam,
     removePlayerFromTeam,
     listUnassignedPlayers,
+    getSizeSummary,
 } = require("../app/controllers/api/Playercontroller");
 const { removeProfileImage, updateProfileImage } = require("../app/controllers/api/Profileimagecontroller");
 const {
@@ -62,6 +64,7 @@ const {
     unlinkParentFromPlayer,
 } = require("../app/controllers/api/admin/Adminparentcontroller");
 const { createFacility, listFacilities, getFacility, deleteFacility, updateFacility } = require("../app/controllers/api/facilitysController");
+const { listClubTerms, getClubTermsVersion, createClubTerms, getCurrentTerms, acceptTerms } = require("../app/controllers/api/termsController");
 const { getCoachDashboard } = require("../app/controllers/api/dashbaordController");
 const { createNote, updateNote, deleteNote, listCoachNotes, listPlayerNotes, getNote } = require("../app/controllers/api/Notecontroller");
 
@@ -83,6 +86,15 @@ router.get("/user/listClubs", superAdminOrClubAdminAuthentication, listClubs);  
 router.get("/user/getClub/:id", superAdminOrClubAdminAuthentication, getClub);
 router.put("/user/updateClub/:id", superAdminAuthentication, updateClub);
 router.delete("/user/deleteClub/:id", superAdminAuthentication, deleteClub);
+router.put("/user/restoreClub/:id", superAdminAuthentication, restoreClub);
+router.get("/user/dashboard/summary", superAdminOrClubAdminAuthentication, getDashboardSummary);
+
+// ---------- Club Terms & Conditions ----------
+router.get("/user/clubs/:id/terms", superAdminOrClubAdminAuthentication, listClubTerms);            // versions + current, clubAdmin apne club ka
+router.get("/user/clubs/:id/terms/:version", superAdminOrClubAdminAuthentication, getClubTermsVersion);
+router.post("/user/clubs/:id/terms", superAdminOrClubAdminAuthentication, createClubTerms);         // naya version
+router.get("/user/terms/current", authentication, getCurrentTerms);                                  // parent: apne club ke terms
+router.post("/user/terms/accept", authentication, acceptTerms);                                      // parent: accept
 router.get("/user/clubOptions", clubOptions);                                    // bina token (parent registration)
 
 // ---------- Club Admin (sirf superAdmin banata hai) ----------
@@ -121,6 +133,7 @@ router.put("/user/teams/:id/players/:playerId/remove", superAdminOrClubAdminAuth
 // Fixed paths (shirt-sizes, unassigned, assign) ":id" se PEHLE
 router.get("/user/players/shirt-sizes", listShirtSizes);
 router.get("/user/players/unassigned", superAdminOrClubAdminAuthentication, listUnassignedPlayers);
+router.get("/user/players/sizes", superAdminOrClubAdminAuthentication, getSizeSummary);
 router.post("/user/players/assign", superAdminOrClubAdminAuthentication, assignPlayerToTeam);
 router.post("/user/players/create", superAdminOrClubAdminAuthentication, createPlayer);
 router.get("/user/players", superAdminOrClubAdminAuthentication, listPlayers);
@@ -142,11 +155,11 @@ router.delete("/user/parents/:id/delete", superAdminOrClubAdminAuthentication, d
 router.post("/user/parent/register", registerParent);
 router.put("/user/parent/profile", authentication, updateParentProfile);
 router.post("/user/parent/selectClub", authentication, selectParentClub);
-router.post("/user/parent/players/create", authentication, createYouthPlayer);
-router.get("/user/parent/listMyYouthPlayers", authentication, listMyYouthPlayers);
-router.get("/user/parent/players/:id", authentication, getMyYouthPlayer);
-router.put("/user/parent/players/:id/update", authentication, updateMyYouthPlayer);
-router.delete("/user/parent/players/:id/delete", authentication, deleteMyYouthPlayer);
+router.post("/user/parent/players/create", authentication, requireTermsAccepted, createYouthPlayer);
+router.get("/user/parent/listMyYouthPlayers", authentication, requireTermsAccepted, listMyYouthPlayers);
+router.get("/user/parent/players/:id", authentication, requireTermsAccepted, getMyYouthPlayer);
+router.put("/user/parent/players/:id/update", authentication, requireTermsAccepted, updateMyYouthPlayer);
+router.delete("/user/parent/players/:id/delete", authentication, requireTermsAccepted, deleteMyYouthPlayer);
 
 
 // ---------- Facilities ----------

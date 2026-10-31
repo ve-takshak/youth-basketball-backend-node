@@ -32,6 +32,12 @@ const UserSchema = new mongoose.Schema(
         otp_generated_at: { type: Date, default: null },
         otp_verify_at: { type: Date, default: null },
 
+        // OTP rate limit / lockout (userController)
+        otp_request_count: { type: Number, default: 0 },
+        otp_request_window_started: { type: Date, default: null },
+        otp_failed_attempts: { type: Number, default: 0 },
+        otp_locked_until: { type: Date, default: null },
+
         // Mobile push notifications
         device_type: { type: String, enum: ["android", "ios", "web", ""], default: "" },
         device_token: { type: String, default: "" },

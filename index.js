@@ -34,7 +34,7 @@ app.use(cors({
 }));
 
 app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
+app.use(express.json({ limit: "1mb" })); // Terms (rich text) 100kb se bade ho sakte hain
 
 // form-data (files + text fields) padhne ke liye: req.files aur req.body yahi bharta hai
 app.use(fileUpload({
@@ -43,6 +43,19 @@ app.use(fileUpload({
 }));
 
 app.get("/", (req, res) => res.send("Hello from Node.js!"));
+
+// API docs (Swagger UI): http://localhost:5000/api-docs
+// swagger-output.json `npm run docs` se banta hai (routes / controller comments badalne ke baad dobara chalao)
+try {
+    const swaggerUi = require("swagger-ui-express");
+    const swaggerDocument = require("./swagger-output.json");
+    app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
+        customSiteTitle: "Courtside API docs",
+        swaggerOptions: { persistAuthorization: true, docExpansion: "none", tagsSorter: "alpha" },
+    }));
+} catch (e) {
+    console.warn("API docs not available (run `npm run docs`):", e.message);
+}
 
 app.use("/api", router);
 
