@@ -2,7 +2,10 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const ClubAdmin = require("../models/ClubAdmin");
 const Coach = require("../models/Coach");
+const Parent = require("../models/Parent");
+const Club = require("../models/Club");
 const { ROLES } = require("../helpers/constants");
+const { getRequiredTerms, hasAcceptedRequired } = require("../helpers/termsHelper");
 
 const sendError = (res, status, message) =>
     res.status(status).json({ error: true, status, message, message_desc: message, data: {} });
@@ -41,6 +44,16 @@ const attachClub = async (req) => {
         const coach = await Coach.findOne({ userId: req.user._id });
         if (!coach) return "Your account is not linked to any club.";
         req.clubId = coach.clubId;
+    }
+
+    // Archived club: already logged-in users ka token bhi kaam nahi karega
+    let clubId = req.clubId;
+    if (req.user.role === ROLES.PARENT) {
+        const parent = await Parent.findOne({ userId: req.user._id }).select("clubId");
+        clubId = parent?.clubId;
+    }
+    if (clubId && (await Club.exists({ _id: clubId, isArchived: true }))) {
+        return "Your club has been archived. Please contact the administrator.";
     }
 
     return null;
@@ -106,4 +119,27 @@ const superAdminOrClubAdminAuthentication = async (req, res, next) => {
     }
 };
 
-module.exports = { authentication, superAdminAuthentication, superAdminOrClubAdminAuthentication };
+/**
+ * Parent ke bachche / payment APIs ke liye, authentication ke BAAD lagao.
+ * Club ke terms hon aur parent ne required version accept na kiya ho toh 403 + data.termsRequired.
+ * Dusre roles ko aur club bina terms wale parents ko nahi rokta.
+ * router.get("/user/parent/listMyYouthPlayers", authentication, requireTermsAccepted, listMyYouthPlayers)
+ */
+const requireTermsAccepted = async (req, res, next) => {
+    try {
+        if (req.user.role !== ROLES.PARENT) return next();
+
+        const parent = await Parent.findOne({ userId: req.user._id }).select("clubId");
+        if (!parent) return next();
+
+        const required = await getRequiredTerms(parent.clubId);
+        if (!required || (await hasAcceptedRequired(req.user._id, parent.clubId, required))) return next();
+
+        const message = "Please accept your club's terms and conditions to continue.";
+        return res.status(403).json({ error: true, status: 403, message, message_desc: message, data: { termsRequired: true } });
+    } catch (e) {
+        return sendError(res, 500, "Something went wrong.");
+    }
+};
+
+module.exports = { authentication, superAdminAuthentication, superAdminOrClubAdminAuthentication, requireTermsAccepted };

@@ -5,6 +5,8 @@ const Club = require("../../models/Club");
 const Coach = require("../../models/Coach");
 const ClubAdmin = require("../../models/ClubAdmin");
 const Team = require("../../models/Team");
+const Player = require("../../models/Player");
+const Parent = require("../../models/Parent");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, escapeRegex, getPagination } = require("../../helpers/common");
 const { validatePersonInput, findDuplicateUser } = require("../../helpers/userHelper");
@@ -79,6 +81,30 @@ const formatClubAdmin = (admin) => ({
     mobileNumber: admin.userId?.mobileNumber || "",
 });
 
+// Legal & tax fields (sab optional). Jo bheje gaye wahi wapas: { fields } ya { error }.
+// taxId / deductionFileNumber: sirf digits (5-15), khaali bhejne pe field saaf ho jaati hai.
+const LEGAL_DIGIT_FIELDS = { taxId: "Tax ID / registration number", deductionFileNumber: "Deduction file number" };
+const pickLegal = (body = {}) => {
+    const fields = {};
+
+    for (const key of ["legalName", "officialAddress"]) {
+        if (body[key] === undefined) continue;
+        const value = String(body[key] ?? "").trim();
+        const max = key === "legalName" ? 150 : 250;
+        if (value.length > max) return { error: `${key === "legalName" ? "Legal name" : "Official address"} must be ${max} characters or fewer.` };
+        fields[key] = value;
+    }
+
+    for (const [key, label] of Object.entries(LEGAL_DIGIT_FIELDS)) {
+        if (body[key] === undefined) continue;
+        const value = String(body[key] ?? "").replace(/[\s-]/g, "");
+        if (value && !/^\d{5,15}$/.test(value)) return { error: `${label} must be 5 to 15 digits.` };
+        fields[key] = value;
+    }
+
+    return { fields };
+};
+
 // theme object se sirf valid colors nikalna, galat ho toh error
 const pickTheme = (theme = {}) => {
     const result = {};
@@ -102,6 +128,7 @@ const findClubByName = (name, excludeId = null) =>
  * Ek hi call mein 3 cheezein banti hain: Club + User (role: clubAdmin) + ClubAdmin record.
  * multipart/form-data: {
  *   name, logo? (file), theme?: { primary, secondary, background },
+ *   legalName?, taxId?, deductionFileNumber?, officialAddress?,
  *   clubAdmin: { firstname, lastname, countryCode, mobileNumber, email? }
  * }
  */
@@ -167,6 +194,17 @@ const createClub = async (req, res) => {
             });
         }
 
+        const legal = pickLegal(req.body);
+        if (legal.error) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: legal.error,
+                message_desc: legal.error,
+                data: {},
+            });
+        }
+
         const checked = validatePersonInput(clubAdmin || {});
         if (checked.message) {
             const message = `Club admin: ${checked.message}`;
@@ -216,6 +254,7 @@ const createClub = async (req, res) => {
             name,
             logo: String(logo).trim(),
             theme: picked.theme,
+            ...legal.fields,
             createdBy: req.user._id,
         });
 
@@ -274,15 +313,19 @@ const createClub = async (req, res) => {
 };
 
 /**
- * GET /api/user/listClubs?search=&page=1&limit=10   (superAdmin ya clubAdmin)
+ * GET /api/user/listClubs?search=&status=active|archived|all&page=1&limit=10   (superAdmin ya clubAdmin)
  * superAdmin: saare clubs. clubAdmin: sirf apna club.
+ * status: default "active" (archived clubs nahi dikhte).
  */
 const listClubs = async (req, res) => {
     try {
         const search = String(req.query.search || "").trim();
+        const status = String(req.query.status || "active").toLowerCase();
         const { page, limit, skip } = getPagination(req.query);
 
         const filter = {};
+        if (status === "archived") filter.isArchived = true;
+        else if (status !== "all") filter.isArchived = { $ne: true };
         if (req.user.role === ROLES.CLUB_ADMIN) filter._id = req.clubId;
         if (search) filter.name = new RegExp(escapeRegex(search), "i");
 
@@ -338,6 +381,72 @@ const listClubs = async (req, res) => {
 };
 
 /**
+ * GET /api/user/dashboard/summary   (superAdmin ya clubAdmin)
+ * Dashboard ke asli counts. superAdmin: saare active (non-archived) clubs. clubAdmin: sirf apna club.
+ * players = status "active" wale. response: { totals: { clubs, players, teams, coaches, parents }, clubs: [{ _id, name, logoUrl, players, teams, coaches }] }
+ */
+const getDashboardSummary = async (req, res) => {
+    try {
+        const clubFilter = { isArchived: { $ne: true } };
+        if (req.user.role === ROLES.CLUB_ADMIN) clubFilter._id = req.clubId;
+
+        const clubs = await Club.find(clubFilter).select("_id name logo").sort({ name: 1 }).lean();
+        const ids = clubs.map((club) => club._id);
+        const byClub = (model, extra = {}) =>
+            model.aggregate([
+                { $match: { clubId: { $in: ids }, ...extra } },
+                { $group: { _id: "$clubId", count: { $sum: 1 } } },
+            ]);
+
+        const [players, teams, coaches, parents] = await Promise.all([
+            byClub(Player, { status: "active" }),
+            byClub(Team),
+            byClub(Coach),
+            byClub(Parent),
+        ]);
+        const toMap = (rows) => new Map(rows.map((row) => [String(row._id), row.count]));
+        const playersBy = toMap(players);
+        const teamsBy = toMap(teams);
+        const coachesBy = toMap(coaches);
+        const parentsBy = toMap(parents);
+        const sum = (map) => [...map.values()].reduce((total, count) => total + count, 0);
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Dashboard summary fetched successfully.",
+            message_desc: "Dashboard summary fetched successfully.",
+            data: {
+                totals: {
+                    clubs: clubs.length,
+                    players: sum(playersBy),
+                    teams: sum(teamsBy),
+                    coaches: sum(coachesBy),
+                    parents: sum(parentsBy),
+                },
+                clubs: clubs.map((club) => ({
+                    _id: club._id,
+                    name: club.name,
+                    logoUrl: formatClub(club)?.logoUrl || "",
+                    players: playersBy.get(String(club._id)) || 0,
+                    teams: teamsBy.get(String(club._id)) || 0,
+                    coaches: coachesBy.get(String(club._id)) || 0,
+                })),
+            },
+        });
+    } catch (e) {
+        console.error("Dashboard summary error:", e);
+        return res.status(500).json({
+            error: true,
+            status: 500,
+            message: "Something went wrong.",
+            message_desc: e.message,
+            data: {},
+        });
+    }
+};
+
+/**
  * GET /api/user/getClub/:id   (superAdmin ya clubAdmin)
  * Club + uske club admins, coaches aur teams. clubAdmin sirf apna club dekh sakta hai.
  */
@@ -377,7 +486,7 @@ const getClub = async (req, res) => {
         }
 
         const personFields = "firstname lastname email countryCode mobileNumber is_verify profile_image";
-        const [clubAdmins, coaches, teams] = await Promise.all([
+        const [clubAdmins, coaches, teams, playersCount] = await Promise.all([
             ClubAdmin.find({ clubId: id }).populate("userId", personFields).sort({ createdAt: -1 }),
             Coach.find({ clubId: id }).populate("userId", personFields).sort({ createdAt: -1 }),
             Team.find({ clubId: id })
@@ -388,6 +497,7 @@ const getClub = async (req, res) => {
                     populate: { path: "userId", select: "firstname lastname profile_image" },
                 })
                 .sort({ createdAt: -1 }),
+            Player.countDocuments({ clubId: id, status: "active" }),
         ]);
 
         const flatten = (record) => ({
@@ -433,6 +543,7 @@ const getClub = async (req, res) => {
                 clubAdmins: clubAdmins.map(flatten),
                 coaches: coaches.map(flatten),
                 teams: teams.map(flattenTeam),
+                playersCount,
             },
         });
     } catch (e) {
@@ -449,7 +560,7 @@ const getClub = async (req, res) => {
 
 /**
  * PUT /api/user/updateClub/:id   (sirf superAdmin)
- * multipart/form-data: jo badalna hai wahi { name?, logo? (file), theme?, clubAdmin? }
+ * multipart/form-data: jo badalna hai wahi { name?, logo? (file), theme?, clubAdmin?, legalName?, taxId?, deductionFileNumber?, officialAddress? }
  * logo ko "" bhejo toh logo hat jayega
  */
 const updateClub = async (req, res) => {
@@ -515,6 +626,18 @@ const updateClub = async (req, res) => {
 
             club.name = newName;
         }
+
+        const legal = pickLegal(req.body);
+        if (legal.error) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: legal.error,
+                message_desc: legal.error,
+                data: {},
+            });
+        }
+        Object.assign(club, legal.fields);
 
         if (theme !== undefined) {
             let parsedTheme = theme;
@@ -673,7 +796,10 @@ const updateClub = async (req, res) => {
 
 /**
  * DELETE /api/user/deleteClub/:id   (sirf superAdmin)
- * Club ke saath:
+ * Default: club ARCHIVE hota hai (isArchived: true), data bacha rehta hai, uske club admins / coaches /
+ * parents login nahi kar paate. Wapas laane ke liye PUT /api/user/restoreClub/:id.
+ * Permanent delete: DELETE /api/user/deleteClub/:id?permanent=true
+ * Permanent delete mein club ke saath:
  * 1. Club admins aur Coaches ke User accounts delete hote hain (user table)
  * 2. ClubAdmin, Coach aur Team records delete hote hain
  * 3. Club ka logo S3 se delete hota hai (purana local file ho toh disk se)
@@ -701,6 +827,20 @@ const deleteClub = async (req, res) => {
                 message: "Club not found.",
                 message_desc: "Club not found.",
                 data: {},
+            });
+        }
+
+        if (String(req.query.permanent) !== "true") {
+            club.isArchived = true;
+            club.archivedAt = new Date();
+            await club.save();
+
+            return res.status(200).json({
+                error: false,
+                status: 200,
+                message: "Club archived successfully.",
+                message_desc: "Club archived successfully. Its users can no longer log in.",
+                data: { _id: club._id, isArchived: true },
             });
         }
 
@@ -760,6 +900,47 @@ const deleteClub = async (req, res) => {
 
 
 /**
+ * PUT /api/user/restoreClub/:id   (sirf superAdmin)
+ * Archived club wapas active, uske users dobara login kar sakte hain.
+ */
+const restoreClub = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const club = isValidId(id) ? await Club.findById(id) : null;
+        if (!club) {
+            return res.status(404).json({
+                error: true,
+                status: 404,
+                message: "Club not found.",
+                message_desc: "Club not found.",
+                data: {},
+            });
+        }
+
+        club.isArchived = false;
+        club.archivedAt = null;
+        await club.save();
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Club restored successfully.",
+            message_desc: "Club restored successfully.",
+            data: { _id: club._id, isArchived: false },
+        });
+    } catch (e) {
+        console.error("Restore club error:", e);
+        return res.status(500).json({
+            error: true,
+            status: 500,
+            message: "Something went wrong.",
+            message_desc: e.message,
+            data: {},
+        });
+    }
+};
+
+/**
  * GET /api/user/clubOptions?search=   (token optional)
  * Dropdown ke liye clubs: { _id, clubCode, name }
  * Bina token: saare clubs (parent registration screen ke liye)
@@ -767,7 +948,7 @@ const deleteClub = async (req, res) => {
 const clubOptions = async (req, res) => {
     try {
         const search = String(req.query.search || "").trim();
-        const filter = {};
+        const filter = { isArchived: { $ne: true } };
 
         // Token ke saath clubAdmin aaya toh sirf uska club. Bina token req.user nahi hota.
         if (req.user?.role === ROLES.CLUB_ADMIN) {
@@ -818,4 +999,4 @@ const clubOptions = async (req, res) => {
 };
 
 
-module.exports = { createClub, listClubs, getClub, updateClub, deleteClub, clubOptions };
+module.exports = { createClub, listClubs, getClub, getDashboardSummary, updateClub, deleteClub, restoreClub, clubOptions };

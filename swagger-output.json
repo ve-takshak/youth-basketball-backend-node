@@ -1,0 +1,3490 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Courtside – Youth Basketball API",
+    "description": "Admin panel + mobile app API.\n\n**Login:** `POST /user/login` sends an OTP, `POST /user/verify-otp` returns a token. Click **Authorize** and paste the token (without `Bearer`) to call protected routes.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:5000/api",
+      "description": "Local"
+    },
+    {
+      "url": "http://51.17.184.245:5000/api",
+      "description": "Live"
+    }
+  ],
+  "paths": {
+    "/test": {
+      "get": {
+        "description": "**Access:** Public (no token)",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "General"
+        ],
+        "summary": "Health check"
+      }
+    },
+    "/user/register": {
+      "post": {
+        "description": "**Access:** Public (no token)\n\nsirf superAdmin signup\n\n```\nSirf SUPER ADMIN ka signup. ClubAdmin aur Coach yahan se nahi bante, unhe superAdmin/clubAdmin banata hai.\nbody: { firstname, lastname, countryCode, mobileNumber, username?, email? }\n```",
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "firstname",
+                  "lastname",
+                  "countryCode",
+                  "mobileNumber"
+                ],
+                "properties": {
+                  "firstname": {
+                    "type": "string"
+                  },
+                  "lastname": {
+                    "type": "string"
+                  },
+                  "countryCode": {
+                    "type": "string"
+                  },
+                  "mobileNumber": {
+                    "type": "string"
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Register"
+      }
+    },
+    "/user/login": {
+      "post": {
+        "description": "**Access:** Public (no token)\n\nsab roles\n\n```\nbody: { countryCode, mobileNumber }\nSab roles ke liye. OTP set karta hai. Resend OTP ke liye bhi yahi.\n```",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "countryCode",
+                  "mobileNumber"
+                ],
+                "properties": {
+                  "countryCode": {
+                    "type": "string"
+                  },
+                  "mobileNumber": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Login"
+      }
+    },
+    "/user/verify-otp": {
+      "post": {
+        "description": "**Access:** Public (no token)\n\nsab roles, token yahin milta hai\n\n```\nbody: { countryCode, mobileNumber, otp, device_type?, device_token? }\nSahi OTP pe token milta hai, saath mein club { _id, clubCode, name, theme } (har role ke liye, superAdmin ko null).\n```",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "countryCode",
+                  "mobileNumber",
+                  "otp"
+                ],
+                "properties": {
+                  "countryCode": {
+                    "type": "string"
+                  },
+                  "mobileNumber": {
+                    "type": "string"
+                  },
+                  "otp": {
+                    "type": "string"
+                  },
+                  "device_type": {
+                    "type": "string"
+                  },
+                  "device_token": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Verify otp"
+      }
+    },
+    "/user/resend-otp": {
+      "post": {
+        "description": "**Access:** Public (no token)",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "countryCode": {
+                    "example": "any"
+                  },
+                  "mobileNumber": {
+                    "example": "any"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Resend otp"
+      }
+    },
+    "/user/profile": {
+      "get": {
+        "description": "**Access:** Any logged-in user\n\n```\nApp/panel refresh pe user ki latest details + club { _id, clubCode, name, theme }.\n```",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Get profile",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/{userId}/profile-image": {
+      "put": {
+        "description": "**Access:** Any logged-in user\n\n```\nform-data: profile_image (file)   — PNG / JPG / WEBP, max 5MB\n:userId = User ki _id (apni, parent ho toh bachche ki, admin ho toh player / coach ki)\n```",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Update profile image",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "description": "**Access:** Any logged-in user\n\n```\n:userId = User ki _id (apni, parent ho toh bachche ki, admin ho toh player / coach ki)\n```",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Remove profile image",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/createClub": {
+      "post": {
+        "description": "**Access:** Super admin only\n\n```\nEk hi call mein 3 cheezein banti hain: Club + User (role: clubAdmin) + ClubAdmin record.\nmultipart/form-data: {\n  name, logo? (file), theme?: { primary, secondary, background },\n  legalName?, taxId?, deductionFileNumber?, officialAddress?,\n  clubAdmin: { firstname, lastname, countryCode, mobileNumber, email? }\n}\n```",
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Club"
+        ],
+        "summary": "Create club",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/listClubs": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\nclubAdmin ko sirf apna club\n\n```\nsuperAdmin: saare clubs. clubAdmin: sirf apna club.\nstatus: default \"active\" (archived clubs nahi dikhte).\n```",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Club"
+        ],
+        "summary": "List clubs",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/getClub/{id}": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\n```\nClub + uske club admins, coaches aur teams. clubAdmin sirf apna club dekh sakta hai.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Club"
+        ],
+        "summary": "Get club",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/updateClub/{id}": {
+      "put": {
+        "description": "**Access:** Super admin only\n\n```\nmultipart/form-data: jo badalna hai wahi { name?, logo? (file), theme?, clubAdmin?, legalName?, taxId?, deductionFileNumber?, officialAddress? }\nlogo ko \"\" bhejo toh logo hat jayega\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "error": {
+                    "example": "any"
+                  },
+                  "status": {
+                    "example": "any"
+                  },
+                  "message": {
+                    "example": "any"
+                  },
+                  "message_desc": {
+                    "example": "any"
+                  },
+                  "data": {
+                    "example": "any"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Club"
+        ],
+        "summary": "Update club",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/deleteClub/{id}": {
+      "delete": {
+        "description": "**Access:** Super admin only\n\n```\nDefault: club ARCHIVE hota hai (isArchived: true), data bacha rehta hai, uske club admins / coaches /\nparents login nahi kar paate. Wapas laane ke liye PUT /api/user/restoreClub/:id.\nPermanent delete: DELETE /api/user/deleteClub/:id?permanent=true\nPermanent delete mein club ke saath:\n1. Club admins aur Coaches ke User accounts delete hote hain (user table)\n2. ClubAdmin, Coach aur Team records delete hote hain\n3. Club ka logo S3 se delete hota hai (purana local file ho toh disk se)\n4. Club document delete hota hai (club table)\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "permanent",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Club"
+        ],
+        "summary": "Delete club",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/restoreClub/{id}": {
+      "put": {
+        "description": "**Access:** Super admin only\n\n```\nArchived club wapas active, uske users dobara login kar sakte hain.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Club"
+        ],
+        "summary": "Restore club",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/dashboard/summary": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\n```\nDashboard ke asli counts. superAdmin: saare active (non-archived) clubs. clubAdmin: sirf apna club.\nplayers = status \"active\" wale. response: { totals: { clubs, players, teams, coaches, parents }, clubs: [{ _id, name, logoUrl, players, teams, coaches }] }\n```",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Club"
+        ],
+        "summary": "Get dashboard summary",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/clubs/{id}/terms": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\nversions + current, clubAdmin apne club ka\n\n```\nCurrent terms + saare versions (naya pehle), har version pe kitne parents ne accept kiya.\nresponse: { current: { version, content, ... } | null, versions: [...], parentsTotal, requiredVersion }\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Club Terms & Conditions"
+        ],
+        "summary": "List club terms",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "description": "**Access:** Super admin or club admin\n\nnaya version\n\n```\nbody: { content: { ops: [...] }, requireReaccept? }   content = rich text editor (Quill Delta) ka document\nNaya version banata hai. requireReaccept (default true) false ho toh parents ko dobara accept nahi karna\n(jaise typo theek karna); pehla version hamesha accept karwata hai.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "content"
+                ],
+                "properties": {
+                  "content": {
+                    "type": "string"
+                  },
+                  "requireReaccept": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Club Terms & Conditions"
+        ],
+        "summary": "Create club terms",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/clubs/{id}/terms/{version}": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\n```\nEk version poora text ke saath (purane versions sirf padhne ke liye).\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Club Terms & Conditions"
+        ],
+        "summary": "Get club terms version",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/terms/current": {
+      "get": {
+        "description": "**Access:** Any logged-in user\n\nparent: apne club ke terms\n\n```\nParent ke club ke current terms. mustAccept true ho toh app ko accept screen dikhani hai.\nresponse: { terms: { version, content, createdAt } | null, mustAccept }\n```",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Club Terms & Conditions"
+        ],
+        "summary": "Get current terms",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/terms/accept": {
+      "post": {
+        "description": "**Access:** Any logged-in user\n\nparent: accept\n\n```\nbody: { version, device_type? }   version = abhi ka latest version (parent ne jo padha wahi)\nAcceptance log mein time, IP aur device save hota hai. Dobara bhejne pe kuch nahi badalta.\n```",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "string"
+                  },
+                  "device_type": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Club Terms & Conditions"
+        ],
+        "summary": "Accept terms",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/clubOptions": {
+      "get": {
+        "description": "**Access:** Public (no token)\n\nbina token (parent registration)\n\n```\nDropdown ke liye clubs: { _id, clubCode, name }\nBina token: saare clubs (parent registration screen ke liye)\n```",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Club Terms & Conditions"
+        ],
+        "summary": "Club options"
+      }
+    },
+    "/user/createClubAdmin": {
+      "post": {
+        "description": "**Access:** Super admin only\n\n```\nbody: { firstname, lastname, countryCode, mobileNumber, clubId, email? }\nUser (role: clubAdmin) + ClubAdmin record dono banata hai.\n```",
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "firstname",
+                  "lastname",
+                  "countryCode",
+                  "mobileNumber",
+                  "clubId"
+                ],
+                "properties": {
+                  "firstname": {
+                    "type": "string"
+                  },
+                  "lastname": {
+                    "type": "string"
+                  },
+                  "countryCode": {
+                    "type": "string"
+                  },
+                  "mobileNumber": {
+                    "type": "string"
+                  },
+                  "clubId": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Club Admin"
+        ],
+        "summary": "Create club admin",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/listClubAdmins": {
+      "get": {
+        "description": "**Access:** Super admin only\n\n```\nsearch: naam ya mobile number se\n```",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "clubId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Club Admin"
+        ],
+        "summary": "List club admins",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/getClubAdmin/{id}": {
+      "get": {
+        "description": "**Access:** Super admin only",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Club Admin"
+        ],
+        "summary": "Get club admin",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/updateClubAdmin/{id}": {
+      "put": {
+        "description": "**Access:** Super admin only\n\n```\nbody: jo badalna hai wahi { firstname?, lastname?, email?, countryCode?, mobileNumber?, clubId? }\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "error": {
+                    "example": "any"
+                  },
+                  "status": {
+                    "example": "any"
+                  },
+                  "message": {
+                    "example": "any"
+                  },
+                  "message_desc": {
+                    "example": "any"
+                  },
+                  "data": {
+                    "example": "any"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Club Admin"
+        ],
+        "summary": "Update club admin",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/deleteClubAdmin/{id}": {
+      "delete": {
+        "description": "**Access:** Super admin only\n\n```\nClubAdmin record aur uska User dono hatata hai.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Club Admin"
+        ],
+        "summary": "Delete club admin",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/coaches/create": {
+      "post": {
+        "description": "**Access:** Super admin or club admin\n\n```\nbody: { firstname, lastname, countryCode, mobileNumber, clubId (clubAdmin ke liye ignore), email?, birthDate?,\n        preferredTrainingDays?: [\"sun\",\"tue\"], unavailableHours?: [{ day, from, to }] }\nUser (role: coach) + Coach record dono banata hai.\n```",
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "firstname",
+                  "lastname",
+                  "countryCode",
+                  "mobileNumber",
+                  "clubId"
+                ],
+                "properties": {
+                  "firstname": {
+                    "type": "string"
+                  },
+                  "lastname": {
+                    "type": "string"
+                  },
+                  "countryCode": {
+                    "type": "string"
+                  },
+                  "mobileNumber": {
+                    "type": "string"
+                  },
+                  "clubId": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  },
+                  "birthDate": {
+                    "type": "string"
+                  },
+                  "preferredTrainingDays": {
+                    "type": "string"
+                  },
+                  "unavailableHours": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Coaches"
+        ],
+        "summary": "Create coach",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/coaches": {
+      "get": {
+        "description": "**Access:** Any logged-in user\n\n```\nsearch: naam ya mobile number se\n```",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "clubId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Coaches"
+        ],
+        "summary": "List coaches",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/coaches/{id}": {
+      "get": {
+        "description": "**Access:** Any logged-in user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Coaches"
+        ],
+        "summary": "Get coach",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/coaches/{id}/update": {
+      "put": {
+        "description": "**Access:** Any logged-in user\n\n```\nbody: jo badalna hai wahi { firstname?, lastname?, email?, countryCode?, mobileNumber?, birthDate?,\n      clubId? (sirf superAdmin), preferredTrainingDays?, unavailableHours? }\npreferredTrainingDays / unavailableHours bheje toh POORI list replace hoti hai ([] = sab hatana).\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Coaches"
+        ],
+        "summary": "Update coach",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/coaches/{id}/delete": {
+      "delete": {
+        "description": "**Access:** Super admin or club admin\n\n```\nCoach record, uska User aur uski profile image (S3) hatata hai.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Coaches"
+        ],
+        "summary": "Delete coach",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/teams/categories/create": {
+      "post": {
+        "description": "**Access:** Super admin only\n\n```\nBody: { name }\n```",
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team categories"
+        ],
+        "summary": "Create team category",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/teams/categories": {
+      "get": {
+        "description": "**Access:** Any logged-in user",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Team categories"
+        ],
+        "summary": "List team categories",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/teams/categories/{id}": {
+      "get": {
+        "description": "**Access:** Any logged-in user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Team categories"
+        ],
+        "summary": "Get team category",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/teams/categories/{id}/update": {
+      "put": {
+        "description": "**Access:** Super admin only\n\n```\nBody: { name }\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team categories"
+        ],
+        "summary": "Update team category",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/teams/categories/{id}/delete": {
+      "delete": {
+        "description": "**Access:** Super admin only",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Team categories"
+        ],
+        "summary": "Delete team category",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/teams/create": {
+      "post": {
+        "description": "**Access:** Super admin or club admin\n\n```\nBody: { name, clubId, categoryId, gender?, teamType?, season?, teamCapacity?, coachId?, status?,\n        associationNumber?, leagueClassificationNumber?   (sirf league, optional. non-league par null)\n        homeVenueId?, preferredTrainingDays?,\n        unavailableHours?: [{ day, from, to }],\n        athleticsTraining?: { enabled, locationName, day, from, to } }\nResponse ke \"coachMatch\" mein coach aur team ke din kitne milte hain (warning ke saath).\nRule: league team par aisa coach nahi lag sakta jo pehle se doosri league team ka coach hai (409).\n```",
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "clubId",
+                  "categoryId"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "clubId": {
+                    "type": "string"
+                  },
+                  "categoryId": {
+                    "type": "string"
+                  },
+                  "gender": {
+                    "type": "string"
+                  },
+                  "teamType": {
+                    "type": "string"
+                  },
+                  "season": {
+                    "type": "string"
+                  },
+                  "teamCapacity": {
+                    "type": "string"
+                  },
+                  "coachId": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "associationNumber": {
+                    "type": "string"
+                  },
+                  "leagueClassificationNumber": {
+                    "type": "string"
+                  },
+                  "preferredTrainingDays": {
+                    "type": "string"
+                  },
+                  "unavailableHours": {
+                    "type": "string"
+                  },
+                  "athleticsTraining": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Teams"
+        ],
+        "summary": "Create team",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/teams": {
+      "get": {
+        "description": "**Access:** Any logged-in user\n\n```\nQuery params: ?clubId=&categoryId=&coachId=&homeVenueId=&trainingDay=&gender=&teamType=&status=&search=&page=1&limit=10\n```",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "clubId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "categoryId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "coachId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "homeVenueId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "trainingDay",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "gender",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "teamType",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Teams"
+        ],
+        "summary": "List teams",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/teams/{id}": {
+      "get": {
+        "description": "**Access:** Any logged-in user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Teams"
+        ],
+        "summary": "Get team",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/teams/{id}/update": {
+      "put": {
+        "description": "**Access:** Super admin or club admin\n\n```\nBody: { name?, clubId?, categoryId?, gender?, teamType?, season?, teamCapacity?, coachId?, status?,\n        associationNumber?, leagueClassificationNumber?   (sirf league. team non-league bani toh dono null)\n        homeVenueId?, preferredTrainingDays?, unavailableHours?, athleticsTraining? }\nhomeVenueId: \"\" = venue hatana.  preferredTrainingDays / unavailableHours: [] = sab hatana (poori list replace).\nathleticsTraining: { enabled: false } = band karna.\nResponse ke \"coachMatch\" mein coach aur team ke din kitne milte hain.\nRule: league team par aisa coach nahi lag sakta jo pehle se doosri league team ka coach hai (409).\n      Ye check tab chalta hai jab coach badle ya team league bane. Purane data par baaki edit rukte nahi.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "clubId": {
+                    "type": "string"
+                  },
+                  "categoryId": {
+                    "type": "string"
+                  },
+                  "gender": {
+                    "type": "string"
+                  },
+                  "teamType": {
+                    "type": "string"
+                  },
+                  "season": {
+                    "type": "string"
+                  },
+                  "teamCapacity": {
+                    "type": "string"
+                  },
+                  "coachId": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "associationNumber": {
+                    "type": "string"
+                  },
+                  "leagueClassificationNumber": {
+                    "type": "string"
+                  },
+                  "preferredTrainingDays": {
+                    "type": "string"
+                  },
+                  "unavailableHours": {
+                    "type": "string"
+                  },
+                  "athleticsTraining": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Teams"
+        ],
+        "summary": "Update team",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/teams/{id}/delete": {
+      "delete": {
+        "description": "**Access:** Super admin or club admin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Teams"
+        ],
+        "summary": "Delete team",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/teams/{id}/shirt-numbers": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\n```\nTeam ke bhare hue (taken) shirt numbers. Sirf active / waitlisted players ke.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "excludePlayerId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Teams"
+        ],
+        "summary": "List shirt numbers",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/teams/{id}/other-players": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\n```\n(superAdmin ya clubAdmin)\n\nIsi team ke CLUB ke woh players jo IS team mein NAHI hain:\n  - doosri teams ke players\n  - bina team wale players (waitlist)\nTeam page pe \"doosri team se player add / move karo\" ke liye.\n\nfromTeamId: sirf ek khaas team ke players (ya \"none\" = bina team wale)\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fromTeamId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "playerType",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Teams"
+        ],
+        "summary": "List other team players",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/teams/{id}/players/{playerId}/remove": {
+      "put": {
+        "description": "**Access:** Super admin or club admin\n\n```\nPlayer ko team se HATANA. Player aur uska User delete NAHI hote,\nbas teamId null ho jaata hai (aur shirt number free). Baad mein kisi bhi team mein assign kar sakte ho.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "playerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Teams"
+        ],
+        "summary": "Remove player from team",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/players/shirt-sizes": {
+      "get": {
+        "description": "**Access:** Public (no token)",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "Players"
+        ],
+        "summary": "List shirt sizes"
+      }
+    },
+    "/user/players/unassigned": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\n```\nWo players jo KISI bhi team mein nahi hain (teamId: null).\nclubAdmin: sirf apne club ke. superAdmin: saare clubs ke (ya clubId se ek club).\n```",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Players"
+        ],
+        "summary": "List unassigned players",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/players/sizes": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\n```\nKapdon ke size ki ginti (bulk order ke liye): har size ke saamne game / training / winter kitne players.\nstatus na do toh inactive / left players nahi ginte. teamId=none: jin players ki koi team nahi.\nresponse: { sizes: [{ size, gameWearSize, trainingWearSize, winterWearSize }], notSet: {...}, totals: {...}, totalPlayers }\n```",
+        "parameters": [
+          {
+            "name": "teamId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Players"
+        ],
+        "summary": "Get size summary",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/players/assign": {
+      "post": {
+        "description": "**Access:** Super admin or club admin\n\n```\nPehle se bane EK YA ZYADA players ko ek team mein daalna. Naya player NAHI banta.\nPlayer bina team ka ho ya kisi doosri team mein ho, dono chalega (doosri team se move ho jayega).\nHar player ka purana shirt number aur status rehta hai.\nbody: { teamId, playerIds: [\"id1\", \"id2\", \"id3\"] }\nHar player alag se check hota hai. Jo sahi hain wo assign, jinme problem hai wo \"failed\" mein wajah ke saath.\n```",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "teamId",
+                  "playerIds"
+                ],
+                "properties": {
+                  "teamId": {
+                    "type": "string"
+                  },
+                  "playerIds": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Players"
+        ],
+        "summary": "Assign player to team",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/players/create": {
+      "post": {
+        "description": "**Access:** Super admin or club admin\n\n```\nJSON ya multipart/form-data (file ke saath). Multipart mein parents JSON string mein bhejo.\nidDocument (file, optional): JPG / PNG / PDF, max 5MB\nbody: {\n  playerType: \"youth\" (default) | \"senior\"\n  firstname, lastname, birthDate, gender, idNumber?, email?, countryCode?, mobileNumber?,   -> User\n    (senior ke liye mobileNumber zaroori)\n  clubId (sirf superAdmin), teamId?, season?, shirtNumber?, status?, medicalNotes?,         -> Player\n  gameWearSize?, trainingWearSize?, winterWearSize?                                         -> Player\n  parents (sirf youth, zaroori): [{ firstname, lastname, countryCode, mobileNumber, email?, relation?, isPrimary? }]\n}\n```",
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "playerType",
+                  "lastname",
+                  "birthDate",
+                  "gender"
+                ],
+                "properties": {
+                  "playerType": {
+                    "type": "string"
+                  },
+                  "lastname": {
+                    "type": "string"
+                  },
+                  "birthDate": {
+                    "type": "string"
+                  },
+                  "gender": {
+                    "type": "string"
+                  },
+                  "idNumber": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  },
+                  "countryCode": {
+                    "type": "string"
+                  },
+                  "mobileNumber": {
+                    "type": "string"
+                  },
+                  "teamId": {
+                    "type": "string"
+                  },
+                  "season": {
+                    "type": "string"
+                  },
+                  "shirtNumber": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "medicalNotes": {
+                    "type": "string"
+                  },
+                  "trainingWearSize": {
+                    "type": "string"
+                  },
+                  "winterWearSize": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Players"
+        ],
+        "summary": "Create player",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/players": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\n```\nsearch: naam ya ID number.  teamId=none: jin players ki koi team nahi\n```",
+        "parameters": [
+          {
+            "name": "teamId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Players"
+        ],
+        "summary": "List players",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/players/{id}": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\n```\nDetail page ke liye: player + club (logo, theme, primary admin) + team (category, capacity, counts) + coach + parents\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Players"
+        ],
+        "summary": "Get player",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/players/{id}/update": {
+      "put": {
+        "description": "**Access:** Super admin or club admin\n\n```\nbody: jo badalna hai wahi. teamId: \"\" = team se hatana.\nidDocument (file) = nayi file. removeIdDocument=true = file hatana.\nNOTE: parents is API se update NAHI hote (uske liye link / unlink APIs).\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "playerType": {
+                    "example": "any"
+                  },
+                  "teamId": {
+                    "example": "any"
+                  },
+                  "removeIdDocument": {
+                    "example": "any"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Players"
+        ],
+        "summary": "Update player",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/players/{id}/delete": {
+      "delete": {
+        "description": "**Access:** Super admin or club admin\n\n```\nPlayer + uska User hatta hai. Jis parent ka ab koi aur bachcha nahi, uska Parent + User bhi.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Players"
+        ],
+        "summary": "Delete player",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/players/{id}/parents/link": {
+      "post": {
+        "description": "**Access:** Super admin or club admin\n\n```\nbody: { firstname, lastname, countryCode, mobileNumber, email?, relation?, isPrimary? }\nMobile se parent pehle se hai (isi club ka) toh wahi link hota hai, warna naya parent banta hai.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "firstname",
+                  "lastname",
+                  "countryCode",
+                  "mobileNumber"
+                ],
+                "properties": {
+                  "firstname": {
+                    "type": "string"
+                  },
+                  "lastname": {
+                    "type": "string"
+                  },
+                  "countryCode": {
+                    "type": "string"
+                  },
+                  "mobileNumber": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  },
+                  "relation": {
+                    "type": "string"
+                  },
+                  "isPrimary": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Players"
+        ],
+        "summary": "Link parent to player",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/players/{id}/parents/{parentId}/unlink": {
+      "delete": {
+        "description": "**Access:** Super admin or club admin\n\n```\n:id = Player ki _id, :parentId = Parent ki _id\nSirf link hatta hai, parent ka account rehta hai. Youth ka aakhri parent nahi hat sakta.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "parentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Players"
+        ],
+        "summary": "Unlink parent from player",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/parents": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\n```\nsearch: parent ka naam, mobile ya email\n```",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "clubId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Parents"
+        ],
+        "summary": "List parents",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/parents/{id}": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\n```\nParent + club + har bachche ki details (team, coach, status, shirt waghera) - detail page ke liye.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Parents"
+        ],
+        "summary": "Get parent",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/parents/{id}/update": {
+      "put": {
+        "description": "**Access:** Super admin or club admin\n\n```\nbody: { firstname, lastname, countryCode, mobileNumber, email? }\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Parents"
+        ],
+        "summary": "Update parent",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "firstname",
+                  "lastname",
+                  "countryCode",
+                  "mobileNumber"
+                ],
+                "properties": {
+                  "firstname": {
+                    "type": "string"
+                  },
+                  "lastname": {
+                    "type": "string"
+                  },
+                  "countryCode": {
+                    "type": "string"
+                  },
+                  "mobileNumber": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/user/parents/{id}/delete": {
+      "delete": {
+        "description": "**Access:** Super admin or club admin\n\n```\nParent + uska User hatta hai. Koi bachcha abhi bhi linked hai toh delete NAHI hota\n(pehle Players page se \"unlink\" karo), taaki koi youth player bina parent ke na bache.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Parents"
+        ],
+        "summary": "Delete parent",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/parent/register": {
+      "post": {
+        "description": "**Access:** Public (no token)\n\n```\nParent registration: naam + mobile + club code (+ email optional). Mobile par OTP jaata hai.\nClub isi step mein jud jaata hai, alag se selectClub ki zaroorat nahi.\nbody: { firstname, lastname, countryCode, mobileNumber, clubCode, email?, device_type?, device_token? }\n```",
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "firstname",
+                  "lastname",
+                  "countryCode",
+                  "mobileNumber",
+                  "clubCode"
+                ],
+                "properties": {
+                  "firstname": {
+                    "type": "string"
+                  },
+                  "lastname": {
+                    "type": "string"
+                  },
+                  "countryCode": {
+                    "type": "string"
+                  },
+                  "mobileNumber": {
+                    "type": "string"
+                  },
+                  "clubCode": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  },
+                  "device_type": {
+                    "type": "string"
+                  },
+                  "device_token": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Parent"
+        ],
+        "summary": "Register parent"
+      }
+    },
+    "/user/parent/profile": {
+      "put": {
+        "description": "**Access:** Any logged-in user\n\n```\nProfile edit: firstname, lastname, email (optional).\nbody: { firstname, lastname, email? }\n```",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "firstname",
+                  "lastname"
+                ],
+                "properties": {
+                  "firstname": {
+                    "type": "string"
+                  },
+                  "lastname": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Parent"
+        ],
+        "summary": "Update parent profile",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/parent/selectClub": {
+      "post": {
+        "description": "**Access:** Any logged-in user\n\n```\nbody: { clubId } ya { clubCode }\nParent ko club se jodta hai. Ek parent ka ek hi club.\n```",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "201": {
+            "description": "Created"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Parent"
+        ],
+        "summary": "Select parent club",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "clubId"
+                ],
+                "properties": {
+                  "clubId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/user/parent/players/create": {
+      "post": {
+        "description": "**Access:** Any logged-in user\n\n```\nmultipart/form-data (file ho toh) ya JSON:\n  firstname, lastname, birthDate, idNumber          (zaroori)\n  gender?, gameWearSize?, trainingWearSize?, winterWearSize?, medicalNotes?, relation?   (optional)\n  profile_image (file, optional) JPG / PNG, max 5MB      -> User.profile_image\n  idDocument  (file, optional) JPG / PNG / PDF, max 5MB  -> Player.idDocument\nClub parent ke club se aata hai, body se nahi. registrationNumber server khud banata hai.\n```",
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Parent"
+        ],
+        "summary": "Create youth player",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/parent/listMyYouthPlayers": {
+      "get": {
+        "description": "**Access:** Any logged-in user\n\n```\nSirf wahi players jinke \"parents\" mein ye parent hai.\nstatus (optional): pending | active | waitlisted | inactive | left\n```",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Parent"
+        ],
+        "summary": "List my youth players",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/parent/players/{id}": {
+      "get": {
+        "description": "**Access:** Any logged-in user\n\n```\nApne ek bachche ki details.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Parent"
+        ],
+        "summary": "Get my youth player",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/parent/players/{id}/update": {
+      "put": {
+        "description": "**Access:** Any logged-in user\n\n```\nmultipart/form-data ya JSON. Jo badalna hai sirf wahi bhejo:\n  firstname?, lastname?, birthDate?, idNumber?, gender?, gameWearSize?, trainingWearSize?, winterWearSize?,\n  medicalNotes?, relation?\n  profile_image (file) = nayi photo.       removeProfileImage=true = photo hatana\n  idDocument (file)  = naya ID document.   removeIdDocument=true  = document hatana\nParent team, shirt number, status, playerType, registrationNumber NAHI badal sakta (wo clubAdmin ka kaam).\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Parent"
+        ],
+        "summary": "Update my youth player",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/parent/players/{id}/delete": {
+      "delete": {
+        "description": "**Access:** Any logged-in user\n\n```\nSirf \"pending\" player delete ho sakta hai (club ne abhi approve nahi kiya).\nApprove ho chuke player ke liye clubAdmin se baat karni hogi.\nPlayer + bachche ka User + uski files (photo, ID document) hat jaati hain. Parent ka apna account rehta hai.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Parent"
+        ],
+        "summary": "Delete my youth player",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/facilities/create": {
+      "post": {
+        "description": "**Access:** Super admin or club admin\n\n```\nbody: { name, address?, type?, parallelUnits?, hallManager?: { name, countryCode, phone, email }, clubId (sirf superAdmin) }\n```",
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "clubId"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "address": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string"
+                  },
+                  "parallelUnits": {
+                    "type": "string"
+                  },
+                  "hallManager": {
+                    "type": "string"
+                  },
+                  "clubId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Facilities"
+        ],
+        "summary": "Create facility",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/facilities": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\n```\nsearch: facility ka naam, address ya hall manager ka naam\n```",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "clubId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Facilities"
+        ],
+        "summary": "List facilities",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/facilities/{id}": {
+      "get": {
+        "description": "**Access:** Super admin or club admin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Facilities"
+        ],
+        "summary": "Get facility",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/facilities/{id}/update": {
+      "put": {
+        "description": "**Access:** Super admin or club admin\n\n```\nbody: jo badalna hai wahi. hallManager mein bhi sirf bheje gaye fields badalte hain.\nClub nahi badalta.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Facilities"
+        ],
+        "summary": "Update facility",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/facilities/{id}/delete": {
+      "delete": {
+        "description": "**Access:** Super admin or club admin\n\n```\nJo facility kisi team ka home venue hai wo delete nahi hoti (pehle team ka venue badlo).\nNOTE: schedule / trainings aane par unka check bhi yahin lagana.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Facilities"
+        ],
+        "summary": "Delete facility",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/coach/dashboard": {
+      "get": {
+        "description": "**Access:** Any logged-in user",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Facilities"
+        ],
+        "summary": "Get coach dashboard",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/notes/create": {
+      "post": {
+        "description": "**Access:** Any logged-in user\n\n```\nCoach:          { text }                     -> coach note (apne naam se)\n  Parent:         { playerId, text }           -> player note (apne youth bachche ke liye)\n  Senior player:  { text }                     -> player note (apne liye)\n\"type\" bhejna optional hai (role se apne aap tay hota hai). Bheja aur role se match nahi kiya toh error.\nClub admin / superAdmin notes nahi likhte, sirf padhte hain.\n```",
+        "responses": {
+          "201": {
+            "description": "Created"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "example": "any"
+                  },
+                  "text": {
+                    "example": "any"
+                  },
+                  "playerId": {
+                    "example": "any"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Notes"
+        ],
+        "summary": "Create note",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/notes/coach": {
+      "get": {
+        "description": "**Access:** Any logged-in user\n\n```\nclub admin / superAdmin: club ke saare coach notes (coachId = \"All coaches\" dropdown, clubId sirf superAdmin)\n  coach:                   sirf apne likhe hue\n  baaki:                   403\n```",
+        "parameters": [
+          {
+            "name": "coachId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "clubId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Notes"
+        ],
+        "summary": "List coach notes",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/notes/player": {
+      "get": {
+        "description": "**Access:** Any logged-in user\n\n```\nclub admin / superAdmin: club ke saare player notes (clubId sirf superAdmin)\n  coach:                   apni teams ke players ke\n  parent:                  apne bachchon ke\n  senior player:           apne\nplayerId = ek player ke notes (sirf wahi jo upar ke hisaab se allowed hai)\n```",
+        "parameters": [
+          {
+            "name": "playerId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "clubId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Notes"
+        ],
+        "summary": "List player notes",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/notes/{id}": {
+      "get": {
+        "description": "**Access:** Any logged-in user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Notes"
+        ],
+        "summary": "Get note",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/notes/{id}/update": {
+      "put": {
+        "description": "**Access:** Any logged-in user\n\n```\nbody: { text }\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Notes"
+        ],
+        "summary": "Update note",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "text"
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/user/notes/{id}/delete": {
+      "delete": {
+        "description": "**Access:** Any logged-in user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Notes"
+        ],
+        "summary": "Delete note",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "General"
+    },
+    {
+      "name": "Auth"
+    },
+    {
+      "name": "Club"
+    },
+    {
+      "name": "Club Terms & Conditions"
+    },
+    {
+      "name": "Club Admin"
+    },
+    {
+      "name": "Coaches"
+    },
+    {
+      "name": "Team categories"
+    },
+    {
+      "name": "Teams"
+    },
+    {
+      "name": "Players"
+    },
+    {
+      "name": "Parents"
+    },
+    {
+      "name": "Parent"
+    },
+    {
+      "name": "Facilities"
+    },
+    {
+      "name": "Notes"
+    }
+  ]
+}

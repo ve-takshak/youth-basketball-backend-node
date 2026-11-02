@@ -30,6 +30,16 @@ const ClubSchema = new mongoose.Schema(
             background: { type: String, default: "#FFFFFF" },
         },
 
+        // Legal & tax profile (sab optional): invoices / Form 101 ke liye
+        legalName: { type: String, trim: true, default: "" },
+        taxId: { type: String, trim: true, default: "" }, // ח.פ. / עמותה #
+        deductionFileNumber: { type: String, trim: true, default: "" }, // תיק ניכויים
+        officialAddress: { type: String, trim: true, default: "" },
+
+        // Soft-delete: archived club ke users login/API use nahi kar sakte, data bacha rehta hai
+        isArchived: { type: Boolean, default: false, index: true },
+        archivedAt: { type: Date, default: null },
+
         // Kis super admin ne club banaya
         createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     },
