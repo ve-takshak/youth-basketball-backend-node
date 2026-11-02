@@ -3,6 +3,7 @@ const Club = require("../../models/Club");
 const Coach = require("../../models/Coach");
 const Facility = require("../../models/Facility");
 const TeamCategory = require("../../models/TeamCategory");
+const Schedule = require("../../models/Schedule");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, escapeRegex, getPagination } = require("../../helpers/common");
 const { parseSeason } = require("../../helpers/season");
@@ -683,6 +684,7 @@ const updateTeam = async (req, res) => {
 
 /**
  * DELETE /api/user/teams/:id/delete
+ * Team ke schedules bhi hat jaate hain.
  */
 const deleteTeam = async (req, res) => {
     try {
@@ -693,6 +695,7 @@ const deleteTeam = async (req, res) => {
         if (!team || !canAccess(req, team.clubId)) return sendError(res, 404, "Team not found.");
 
         await Team.findByIdAndDelete(team._id);
+        await Schedule.deleteMany({ teamId: team._id });
 
         return res.status(200).json({
             error: false,

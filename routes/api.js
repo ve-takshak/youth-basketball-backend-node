@@ -66,6 +66,14 @@ const {
 const { createFacility, listFacilities, getFacility, deleteFacility, updateFacility } = require("../app/controllers/api/facilitysController");
 const { listClubTerms, getClubTermsVersion, createClubTerms, getCurrentTerms, acceptTerms } = require("../app/controllers/api/termsController");
 const { getCoachDashboard } = require("../app/controllers/api/dashbaordController");
+const {
+    createSchedule,
+    listSchedules,
+    getSchedule,
+    updateSchedule,
+    deleteSchedule,
+    sendSchedule,
+} = require("../app/controllers/api/scheduleController");
 const { createNote, updateNote, deleteNote, listCoachNotes, listPlayerNotes, getNote } = require("../app/controllers/api/Notecontroller");
 
 router.get("/test", (req, res) => res.send("API working"));
@@ -169,6 +177,15 @@ router.get("/user/facilities", superAdminOrClubAdminAuthentication, listFaciliti
 router.get("/user/facilities/:id", superAdminOrClubAdminAuthentication, getFacility);
 router.put("/user/facilities/:id/update", superAdminOrClubAdminAuthentication, updateFacility);
 router.delete("/user/facilities/:id/delete", superAdminOrClubAdminAuthentication, deleteFacility);
+
+// ---------- Schedule ----------
+// "send" ":id" se PEHLE. List / get coach bhi (sirf apne published schedules).
+router.post("/user/schedules/send", superAdminOrClubAdminAuthentication, sendSchedule);
+router.post("/user/schedules/create", superAdminOrClubAdminAuthentication, createSchedule);
+router.get("/user/schedules", authentication, listSchedules);
+router.get("/user/schedules/:id", authentication, getSchedule);
+router.put("/user/schedules/:id/update", superAdminOrClubAdminAuthentication, updateSchedule);
+router.delete("/user/schedules/:id/delete", superAdminOrClubAdminAuthentication, deleteSchedule);
 
 router.get("/user/coach/dashboard", authentication, getCoachDashboard);
 

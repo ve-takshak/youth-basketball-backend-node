@@ -1,7 +1,9 @@
 const validator = require("validator");
+const moment = require("moment");
 const Club = require("../../models/Club");
 const Facility = require("../../models/Facility");
 const Team = require("../../models/Team");
+const Schedule = require("../../models/Schedule");
 const { FACILITY_TYPES } = require("../../models/Facility");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, cleanMobile, escapeRegex, getPagination } = require("../../helpers/common");
@@ -299,7 +301,7 @@ const updateFacility = async (req, res) => {
 /**
  * DELETE /api/user/facilities/:id/delete   (superAdmin ya clubAdmin)
  * Jo facility kisi team ka home venue hai wo delete nahi hoti (pehle team ka venue badlo).
- * NOTE: schedule / trainings aane par unka check bhi yahin lagana.
+ * Jis facility par aaj ya aage ke schedules hain wo bhi delete nahi hoti.
  */
 const deleteFacility = async (req, res) => {
     try {
@@ -316,6 +318,19 @@ const deleteFacility = async (req, res) => {
                 `This facility is the home venue of: ${names}. Change their home venue first.`,
                 { teams: teams.map((t) => ({ _id: t._id, name: t.name })) }
             );
+        }
+
+        // Aaj ya aage ke (cancel nahi hue) schedules toh nahi? Repeat wala until tak chalta hai
+        const today = moment().format("YYYY-MM-DD");
+        const upcoming = await Schedule.countDocuments({
+            facilityId: found.facility._id,
+            status: { $ne: "cancelled" },
+            $or: [{ date: { $gte: today } }, { "repeat.until": { $gte: today } }],
+        });
+        if (upcoming) {
+            return sendError(res, 400, `This facility has ${upcoming} upcoming schedule(s). Move or delete them first.`, {
+                upcomingSchedules: upcoming,
+            });
         }
 
         await Facility.findByIdAndDelete(found.facility._id);

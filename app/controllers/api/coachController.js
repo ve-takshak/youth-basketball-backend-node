@@ -2,6 +2,7 @@ const User = require("../../models/User");
 const Club = require("../../models/Club");
 const Coach = require("../../models/Coach");
 const Team = require("../../models/Team");
+const Schedule = require("../../models/Schedule");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, escapeRegex, getPagination } = require("../../helpers/common");
 const { validatePersonInput, findDuplicateUser, applyPersonUpdates } = require("../../helpers/userHelper");
@@ -299,6 +300,8 @@ const deleteCoach = async (req, res) => {
         await User.findByIdAndDelete(record.userId);
         // Is coach ki teams se coach hata do
         await Team.updateMany({ coachId: record._id }, { $set: { coachId: null } });
+        // Schedules se bhi (schedule rehta hai, bas bina coach)
+        await Schedule.updateMany({ coachId: record._id }, { $set: { coachId: null } });
         // Profile image bhi S3 se
         if (coachUser?.profile_image) await removeS3File(coachUser.profile_image);
 
