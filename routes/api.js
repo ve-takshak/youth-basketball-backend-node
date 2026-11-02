@@ -7,7 +7,7 @@ const {
     superAdminOrClubAdminAuthentication,
 } = require("../app/middleware/authentication");
 
-const { register, login, verifyOtp, getProfile, resendOtp, registerParent, updateParentProfile } = require("../app/controllers/api/userController");
+const { register, login, verifyOtp, getProfile, updateProfile, resendOtp, registerParent, updateParentProfile } = require("../app/controllers/api/userController");
 const { createClub, listClubs, getClub, updateClub, deleteClub, clubOptions } = require("../app/controllers/api/clubController");
 const {
     createClubAdmin,
@@ -73,6 +73,7 @@ router.post("/user/login", login);                  // sab roles
 router.post("/user/verify-otp", verifyOtp);         // sab roles, token yahin milta hai
 router.post("/user/resend-otp", resendOtp);
 router.get("/user/profile", authentication, getProfile);
+router.put("/user/profile", superAdminOrClubAdminAuthentication, updateProfile); // web panel: apni profile edit
 
 router.put("/user/:userId/profile-image", authentication, updateProfileImage);
 router.delete("/user/:userId/profile-image", authentication, removeProfileImage);

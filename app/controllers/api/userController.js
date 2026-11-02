@@ -3,7 +3,7 @@ const validator = require("validator");
 const User = require("../../models/User");
 const { ROLES, USE_STATIC_OTP, STATIC_OTP, OTP_VALID_MINUTES } = require("../../helpers/constants");
 const { cleanMobile } = require("../../helpers/common");
-const { publicUser, getRoleData } = require("../../helpers/userHelper");
+const { publicUser, getRoleData, applyPersonUpdates } = require("../../helpers/userHelper");
 const Parent = require("../../models/Parent");
 const Club = require("../../models/Club");
 const ClubAdmin = require("../../models/ClubAdmin");
@@ -711,4 +711,62 @@ const getProfile = async (req, res) => {
     }
 };
 
-module.exports = { register, login, verifyOtp, getProfile, resendOtp, registerParent, updateParentProfile };
+/**
+ * PUT /api/user/profile
+ * Web panel (superAdmin / clubAdmin) apni profile badle.
+ * body: { firstname?, lastname?, email?, birthDate? }
+ * Mobile yahan se nahi badalta (login usi se hota hai).
+ */
+const updateProfile = async (req, res) => {
+    try {
+        const user = await User.findById(req.user._id);
+
+        if (!user) {
+            return res.status(404).json({
+                error: true,
+                status: 404,
+                message: "User not found.",
+                message_desc: "User not found.",
+                data: {},
+            });
+        }
+
+        // Sirf ye fields, baaki (mobile, role waghera) ignore
+        const { firstname, lastname, email, birthDate } = req.body || {};
+        const updateError = await applyPersonUpdates(user, { firstname, lastname, email, birthDate });
+        if (updateError) {
+            return res.status(updateError.status).json({
+                error: true,
+                status: updateError.status,
+                message: updateError.message,
+                message_desc: updateError.message,
+                data: {},
+            });
+        }
+
+        await user.save();
+        const roleData = await buildRoleData(user);
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Profile updated successfully.",
+            message_desc: "Profile updated successfully.",
+            data: {
+                ...publicUser(user),
+                ...roleData,
+            },
+        });
+    } catch (e) {
+        console.error("Update profile error:", e);
+        return res.status(500).json({
+            error: true,
+            status: 500,
+            message: "Something went wrong.",
+            message_desc: e.message,
+            data: {},
+        });
+    }
+};
+
+module.exports = { register, login, verifyOtp, getProfile, updateProfile, resendOtp, registerParent, updateParentProfile };
