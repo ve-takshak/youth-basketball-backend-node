@@ -44,10 +44,6 @@ const ScheduleSchema = new mongoose.Schema(
             frequency: { type: String, enum: REPEAT_FREQUENCIES, default: "none" },
             until: { type: String, default: "" }, // "YYYY-MM-DD", frequency none ho toh khaali
         },
-        // Repeat ki jo dates hata di gayi (delete, ya alag se edit hokar naya schedule bani)
-        excludedDates: { type: [String], default: [] },
-        // Repeat ki jo dates cancel hain (calendar par dikhti hain, "cancelled")
-        cancelledDates: { type: [String], default: [] },
 
         createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     },

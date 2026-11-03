@@ -1,4 +1,3 @@
-const mongoose = require("mongoose");
 const moment = require("moment");
 const Schedule = require("../../models/Schedule");
 const Team = require("../../models/Team");
@@ -11,26 +10,19 @@ const { isValidId } = require("../../helpers/common");
 
 // Schedule (calendar). superAdmin sab clubs, clubAdmin sirf apna club, coach sirf apne published schedules.
 // Repeat wala schedule EK hi document hai (date = pehli date, repeat.until = aakhri).
-// List API range ki har date ke liye ek entry banati hai (us din ki "occurrence").
+// List API range ki har date ke liye ek entry banati hai. Update / delete hamesha poore schedule par.
 //   POST   /user/schedules/create
 //   GET    /user/schedules                 calendar range + filters
 //   GET    /user/schedules/:id             ?date= (repeat ki ek date)
-//   PUT    /user/schedules/:id/update      scope = this | following | all, occurrenceDate
-//   DELETE /user/schedules/:id/delete      ?scope=&occurrenceDate=
+//   PUT    /user/schedules/:id/update
+//   DELETE /user/schedules/:id/delete
 //   POST   /user/schedules/send            "Send schedule": drafts + badlav portal par
 
-const SCOPES = ["this", "following", "all"];
 const MAX_OCCURRENCES = 200; // ek repeat mein zyada se zyada itni dates
 const MAX_REPEAT_DAYS = 366;
 const MAX_RANGE_DAYS = 186; // list mein from-to ka max gap
 const MAX_CONFLICTS_SHOWN = 50;
 const REPEAT_STEP = { daily: 1, weekly: 7, biweekly: 14 };
-
-// Document ke wo fields jo update / split mein copy hote hain
-const FIELDS = [
-    "type", "date", "startTime", "endTime", "teamId", "coachId", "facilityId", "opponent", "description",
-    "status", "hasUnsentChanges", "publishedAt", "repeat", "excludedDates", "cancelledDates",
-];
 
 const sendError = (res, status, message, data = {}) =>
     res.status(status).json({ error: true, status, message, message_desc: message, data });
@@ -91,23 +83,20 @@ const maxConcurrent = (intervals) => {
 const isRecurring = (s) => Boolean(REPEAT_STEP[s.repeat?.frequency]);
 const lastDate = (s) => (isRecurring(s) ? s.repeat.until : s.date);
 
-// Schedule ki dates [from, to] ke beech (excludedDates chhod ke)
+// Schedule ki dates [from, to] ke beech
 const occurrenceDates = (s, from, to) => {
-    const skip = new Set(s.excludedDates || []);
     const step = REPEAT_STEP[s.repeat?.frequency];
-    if (!step) return s.date >= from && s.date <= to && !skip.has(s.date) ? [s.date] : [];
+    if (!step) return s.date >= from && s.date <= to ? [s.date] : [];
 
     const end = s.repeat.until < to ? s.repeat.until : to;
     let d = s.date;
     if (d < from) d = addDays(d, Math.ceil(daysBetween(d, from) / step) * step);
     const dates = [];
-    for (; d <= end; d = addDays(d, step)) if (!skip.has(d)) dates.push(d);
+    for (; d <= end; d = addDays(d, step)) dates.push(d);
     return dates;
 };
 
 const allDates = (s) => occurrenceDates(s, s.date, lastDate(s));
-const isOccurrence = (s, date) => occurrenceDates(s, date, date).length > 0;
-const isCancelledOn = (s, date) => s.status === "cancelled" || (s.cancelledDates || []).includes(date);
 
 // Mongo filter: jo schedules [from, to] mein kahin bhi padte hain
 const rangeFilter = (from, to) => ({
@@ -156,15 +145,12 @@ const formatSchedule = (s, date = s.date) => {
         club: club ? { _id: club._id, name: club.name } : null,
         opponent: s.opponent || "",
         description: s.description || "",
-        // Poora schedule cancel ho ya sirf yeh date
-        status: isCancelledOn(s, date) ? "cancelled" : s.status,
+        status: s.status,
         hasUnsentChanges: Boolean(s.hasUnsentChanges),
         publishedAt: s.publishedAt,
         isRecurring: isRecurring(s),
         startDate: s.date, // repeat ki pehli date
         repeat: { frequency: s.repeat?.frequency || "none", until: s.repeat?.until || "" },
-        excludedDates: s.excludedDates || [],
-        cancelledDates: s.cancelledDates || [],
         createdAt: s.createdAt,
         updatedAt: s.updatedAt,
     };
@@ -250,7 +236,7 @@ const repeatSent = (body) =>
  * Repeat: { frequency: "weekly", until: "2026-12-31" } ya flat repeatFrequency / repeatUntil.
  * Galti ho toh { message }, warna { repeat }
  */
-const parseRepeat = (body, startDate, excludedDates = []) => {
+const parseRepeat = (body, startDate) => {
     const raw = typeof body.repeat === "object" && body.repeat !== null ? body.repeat : {};
     const frequency = String(raw.frequency ?? body.repeatFrequency ?? "none").trim().toLowerCase() || "none";
     if (!REPEAT_FREQUENCIES.includes(frequency)) {
@@ -265,7 +251,7 @@ const parseRepeat = (body, startDate, excludedDates = []) => {
     if (daysBetween(startDate, until) > MAX_REPEAT_DAYS) return { message: "A repeat can run for at most one year." };
 
     const repeat = { frequency, until };
-    if (allDates({ date: startDate, repeat, excludedDates }).length > MAX_OCCURRENCES) {
+    if (allDates({ date: startDate, repeat }).length > MAX_OCCURRENCES) {
         return { message: `A repeat can have at most ${MAX_OCCURRENCES} dates.` };
     }
     return { repeat };
@@ -293,41 +279,37 @@ const checkRefs = async (req, { teamId, coachId, facilityId }) => {
 // ---------------------------------------------------------------------------
 
 /**
- * candidates: naye / badle hue schedules (plain objects) jinki har date check hogi.
- * replacements: DB ke wo schedules jo save ke baad badal jayenge (DB wala version chhod ke yeh liya jaata hai).
+ * candidate: naya / badla hua schedule (plain object), uski har date check hoti hai.
+ * Edit mein candidate._id wala DB document khud se nahi takrata.
  * Returns: [{ date, startTime, endTime, reason: "team" | "coach" | "facility", schedule: {...} }]
  */
-const findConflicts = async (candidates, replacements = []) => {
-    const plan = candidates
-        .map((c) => ({ c, dates: allDates(c).filter((d) => !isCancelledOn(c, d)) }))
-        .filter((p) => p.dates.length);
-    if (!plan.length) return [];
-
-    const dates = plan.flatMap((p) => p.dates).sort();
+const findConflicts = async (candidate) => {
+    const c = candidate;
+    const dates = allDates(c);
+    if (c.status === "cancelled" || !dates.length) return [];
     const min = dates[0];
     const max = dates[dates.length - 1];
-    const ids = (key) => [...new Set(candidates.map((c) => c[key]).filter(Boolean).map(String))];
-    const facilityIds = ids("facilityId");
 
-    const or = [{ teamId: { $in: ids("teamId") } }];
-    if (ids("coachId").length) or.push({ coachId: { $in: ids("coachId") } });
-    if (facilityIds.length) or.push({ facilityId: { $in: facilityIds } });
+    const or = [{ teamId: c.teamId }];
+    if (c.coachId) or.push({ coachId: c.coachId });
+    if (c.facilityId) or.push({ facilityId: c.facilityId });
 
-    const skipIds = [...candidates, ...replacements].filter((d) => d._id).map((d) => d._id);
-    const [docs, facilities] = await Promise.all([
-        Schedule.find({ _id: { $nin: skipIds }, status: { $ne: "cancelled" }, $and: [rangeFilter(min, max), { $or: or }] })
-            .select("date startTime endTime teamId coachId facilityId type repeat excludedDates cancelledDates status")
+    const [docs, facility] = await Promise.all([
+        Schedule.find({
+            ...(c._id ? { _id: { $ne: c._id } } : {}),
+            status: { $ne: "cancelled" },
+            $and: [rangeFilter(min, max), { $or: or }],
+        })
+            .select("date startTime endTime teamId coachId facilityId type repeat")
             .populate("teamId", "name"),
-        Facility.find({ _id: { $in: facilityIds } }).select("parallelUnits"),
+        c.facilityId ? Facility.findById(c.facilityId).select("parallelUnits") : null,
     ]);
-    const unitsOf = new Map(facilities.map((f) => [String(f._id), f.parallelUnits || 1]));
+    const units = facility?.parallelUnits || 1;
 
     // Har din ke chal rahe schedules
     const byDate = new Map();
-    [...docs, ...replacements.filter((r) => r.status !== "cancelled")].forEach((s) => {
-        occurrenceDates(s, min, max)
-            .filter((d) => !isCancelledOn(s, d))
-            .forEach((d) => byDate.set(d, [...(byDate.get(d) || []), s]));
+    docs.forEach((s) => {
+        occurrenceDates(s, min, max).forEach((d) => byDate.set(d, [...(byDate.get(d) || []), s]));
     });
 
     const same = (a, b) => Boolean(a) && Boolean(b) && String(a?._id || a) === String(b?._id || b);
@@ -341,27 +323,25 @@ const findConflicts = async (candidates, replacements = []) => {
     });
 
     const conflicts = [];
-    plan.forEach(({ c, dates: cDates }) => {
-        cDates.forEach((date) => {
-            const clashing = (byDate.get(date) || []).filter((s) => overlaps(s, c));
-            const add = (reason, s) =>
-                conflicts.push({ date, startTime: c.startTime, endTime: c.endTime, reason, schedule: brief(s, date) });
+    dates.forEach((date) => {
+        const clashing = (byDate.get(date) || []).filter((s) => overlaps(s, c));
+        const add = (reason, s) =>
+            conflicts.push({ date, startTime: c.startTime, endTime: c.endTime, reason, schedule: brief(s, date) });
 
-            clashing.filter((s) => same(s.teamId, c.teamId)).forEach((s) => add("team", s));
-            clashing.filter((s) => same(s.coachId, c.coachId)).forEach((s) => add("coach", s));
+        clashing.filter((s) => same(s.teamId, c.teamId)).forEach((s) => add("team", s));
+        clashing.filter((s) => same(s.coachId, c.coachId)).forEach((s) => add("coach", s));
 
-            if (c.facilityId) {
-                const atFacility = clashing.filter((s) => same(s.facilityId, c.facilityId));
-                // Sirf apne samay ke andar ka hissa gino
-                const clipped = atFacility.map((s) => ({
-                    startTime: s.startTime > c.startTime ? s.startTime : c.startTime,
-                    endTime: s.endTime < c.endTime ? s.endTime : c.endTime,
-                }));
-                if (atFacility.length && maxConcurrent(clipped) >= (unitsOf.get(String(c.facilityId)) || 1)) {
-                    atFacility.forEach((s) => add("facility", s));
-                }
+        if (c.facilityId) {
+            const atFacility = clashing.filter((s) => same(s.facilityId, c.facilityId));
+            // Sirf apne samay ke andar ka hissa gino
+            const clipped = atFacility.map((s) => ({
+                startTime: s.startTime > c.startTime ? s.startTime : c.startTime,
+                endTime: s.endTime < c.endTime ? s.endTime : c.endTime,
+            }));
+            if (atFacility.length && maxConcurrent(clipped) >= units) {
+                atFacility.forEach((s) => add("facility", s));
             }
-        });
+        }
     });
     return conflicts;
 };
@@ -404,28 +384,6 @@ const findSchedule = async (req, id) => {
     return { schedule };
 };
 
-/**
- * Repeat wale schedule mein scope + occurrenceDate. Repeat nahi toh hamesha "all".
- * following + pehli date = all. Galti ho toh { message }, warna { scope, occ }
- */
-const readScope = (req, schedule) => {
-    let scope = String(req.body?.scope || req.query.scope || "this").trim().toLowerCase();
-    if (!SCOPES.includes(scope)) return { message: `Scope must be one of: ${SCOPES.join(", ")}.` };
-    if (!isRecurring(schedule)) return { scope: "all", occ: schedule.date };
-    if (scope === "all") return { scope, occ: schedule.date };
-
-    const occ = String(req.body?.occurrenceDate || req.query.occurrenceDate || "").trim();
-    if (!occ) return { message: 'occurrenceDate is required when scope is "this" or "following".' };
-    if (!isValidDate(occ) || !isOccurrence(schedule, occ)) return { message: "occurrenceDate is not a date of this schedule." };
-    if (scope === "following" && occ === schedule.date) scope = "all";
-    return { scope, occ };
-};
-
-// Status "active" = published tha toh published, warna draft
-const statusFor = (base, requested) => (requested === "cancelled" ? "cancelled" : base.publishedAt ? "published" : "draft");
-
-const pickFields = (o) => Object.fromEntries(FIELDS.map((k) => [k, o[k]]));
-
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -455,15 +413,15 @@ const createSchedule = async (req, res) => {
         const doc = { ...values, repeat: rep.repeat, clubId: refs.clubId, status: "draft", createdBy: req.user._id };
 
         if (!ignoreConflicts(body)) {
-            const conflicts = await findConflicts([doc]);
+            const conflicts = await findConflicts(doc);
             if (conflicts.length) return sendConflicts(res, conflicts);
         }
 
         const created = await Schedule.create(doc);
         const saved = await populateSchedule(Schedule.findById(created._id));
-        const dates = allDates(saved);
+        const count = allDates(saved).length;
 
-        const message = dates.length > 1 ? `Schedule created as a draft (${dates.length} dates).` : "Schedule created as a draft.";
+        const message = count > 1 ? `Schedule created as a draft (${count} dates).` : "Schedule created as a draft.";
         return sendOk(res, 201, message, formatSchedule(saved));
     } catch (e) {
         return sendServerError(res, "Create schedule", e);
@@ -536,13 +494,13 @@ const listSchedules = async (req, res) => {
             }
         }
 
-        // Status har date ka alag ho sakta hai (cancelledDates), isliye entries banne ke baad filter
-        const statuses = q.status && isAdmin(req) ? String(q.status).toLowerCase().split(",").map((x) => x.trim()) : null;
+        if (q.status && isAdmin(req)) {
+            and.push({ status: { $in: String(q.status).toLowerCase().split(",").map((x) => x.trim()) } });
+        }
 
         const docs = await populateSchedule(Schedule.find({ $and: and }));
         const schedules = docs
             .flatMap((s) => occurrenceDates(s, from, to).map((d) => formatSchedule(s, d)))
-            .filter((row) => !statuses || statuses.includes(row.status))
             .sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime) || a.endTime.localeCompare(b.endTime));
 
         const data = { from, to, schedules };
@@ -580,7 +538,9 @@ const getSchedule = async (req, res) => {
         if (!schedule || !canAccess(req, schedule.clubId)) return sendError(res, 404, "Schedule not found.");
 
         const date = String(req.query.date || "").trim() || schedule.date;
-        if (!isValidDate(date) || !isOccurrence(schedule, date)) return sendError(res, 404, "This date is not part of the schedule.");
+        if (!isValidDate(date) || !occurrenceDates(schedule, date, date).length) {
+            return sendError(res, 404, "This date is not part of the schedule.");
+        }
 
         return sendOk(res, 200, "Schedule fetched successfully.", formatSchedule(schedule, date));
     } catch (e) {
@@ -590,14 +550,10 @@ const getSchedule = async (req, res) => {
 
 /**
  * PUT /api/user/schedules/:id/update   (superAdmin ya clubAdmin)
- * body: jo badalna hai wahi + ignoreConflicts?
+ * body: jo badalna hai wahi (create jaise fields) + ignoreConflicts?
  *       status: "cancelled" = cancel, "active" = wapas
- *       repeat: { frequency, until } (scope all / following)
- * Repeat wale schedule par:
- *   scope "all"                        -> yahi document badalta hai
- *   scope "this" + occurrenceDate      -> sirf status: cancelledDates mein jodna / hatana
- *                                         baaki badlav: wo date is schedule se hat ke alag (bina repeat) schedule banti hai
- *   scope "following" + occurrenceDate -> yeh schedule us date se pehle khatam, aage ki dates naya repeat schedule
+ *       repeat: { frequency, until }   ("none" = repeat band)
+ * Badlav poore schedule (saari dates) par lagta hai.
  * Published schedule badle toh hasUnsentChanges = true, "Send schedule" tak.
  */
 const updateSchedule = async (req, res) => {
@@ -606,11 +562,6 @@ const updateSchedule = async (req, res) => {
         const found = await findSchedule(req, req.params.id);
         if (found.message) return sendError(res, found.status, found.message);
         const doc = found.schedule;
-        const base = doc.toObject();
-
-        const sc = readScope(req, base);
-        if (sc.message) return sendError(res, 400, sc.message);
-        const { scope, occ } = sc;
 
         const checked = validateSchedule(body, true);
         if (checked.message) return sendError(res, 400, checked.message);
@@ -618,156 +569,59 @@ const updateSchedule = async (req, res) => {
         const changingRepeat = repeatSent(body);
         if (!Object.keys(checked.values).length && !changingRepeat) return sendError(res, 400, "Nothing to update.");
 
-        if (scope === "this" && changingRepeat) return sendError(res, 400, 'Repeat can only be changed with scope "all" or "following".');
-        if (scope === "following" && fields.date) {
-            return sendError(res, 400, 'Date cannot be changed for following dates. Use scope "all" or "this".');
-        }
-
-        const unsent = Boolean(base.publishedAt); // published tha toh portal ko batana baaki
-        let next; // jo document save hoga (existing ya naya)
-        let parentNext = null; // split mein purana document ka naya roop
-        let parentGone = false;
-
-        // Poora schedule cancel ho aur sirf ek date wapas chahiye: wo date split hogi (neeche)
-        const onlyDateStatus = scope === "this" && Object.keys(fields).length === 0 && !(status === "active" && base.status === "cancelled");
-
-        if (onlyDateStatus) {
-            // Sirf ek date cancel / wapas: document mein hi
-            const cancelled = new Set(base.cancelledDates || []);
-            if (status === "cancelled") cancelled.add(occ);
-            else cancelled.delete(occ);
-            next = { ...base, cancelledDates: [...cancelled].sort(), hasUnsentChanges: base.hasUnsentChanges || unsent };
-        } else if (scope === "all") {
-            next = { ...base, ...fields, hasUnsentChanges: base.hasUnsentChanges || unsent };
-            if (status) next.status = statusFor(base, status);
-        } else {
-            // Split: yeh date (this) ya yahan se aage (following) naya document
-            const following = scope === "following";
-            next = {
-                ...base,
-                _id: new mongoose.Types.ObjectId(),
-                date: occ,
-                repeat: following ? base.repeat : { frequency: "none", until: "" },
-                excludedDates: following ? (base.excludedDates || []).filter((d) => d >= occ) : [],
-                cancelledDates: following ? (base.cancelledDates || []).filter((d) => d >= occ) : [],
-                ...fields,
-                status: status ? statusFor(base, status) : !following && isCancelledOn(base, occ) ? "cancelled" : base.status,
-                hasUnsentChanges: unsent,
-                isNew: true,
-            };
-            parentNext = following
-                ? {
-                    ...base,
-                    repeat: { ...base.repeat, until: addDays(occ, -1) },
-                    excludedDates: (base.excludedDates || []).filter((d) => d < occ),
-                    cancelledDates: (base.cancelledDates || []).filter((d) => d < occ),
-                }
-                : {
-                    ...base,
-                    excludedDates: [...new Set([...(base.excludedDates || []), occ])].sort(),
-                    cancelledDates: (base.cancelledDates || []).filter((d) => d !== occ),
-                };
-            parentNext.hasUnsentChanges = base.hasUnsentChanges || unsent;
-            parentGone = allDates(parentNext).length === 0;
-        }
-
+        // Naya roop: purana + naya
+        const next = { ...doc.toObject(), ...fields };
+        if (status) next.status = status === "cancelled" ? "cancelled" : doc.publishedAt ? "published" : "draft";
         if (!GAME_TYPES.includes(next.type)) next.opponent = "";
         if (next.startTime >= next.endTime) return sendError(res, 400, "End time must be after start time.");
 
         // Repeat: naya bheja ho ya date badli ho, dono mein check
-        const rep = parseRepeat(changingRepeat ? body : { repeat: next.repeat }, next.date, next.excludedDates);
+        const rep = parseRepeat(changingRepeat ? body : { repeat: next.repeat }, next.date);
         if (rep.message) return sendError(res, 400, rep.message);
         next.repeat = rep.repeat;
-        if (!isRecurring(next)) next.excludedDates = next.cancelledDates = [];
-        if (!allDates(next).length) return sendError(res, 400, "This change leaves the schedule without any date.");
 
         if (["teamId", "coachId", "facilityId"].some((k) => fields[k] !== undefined)) {
             const refs = await checkRefs(req, next);
             if (refs.message) return sendError(res, refs.status, refs.message);
-            if (String(refs.clubId) !== String(base.clubId)) {
+            if (String(refs.clubId) !== String(doc.clubId)) {
                 return sendError(res, 400, "A schedule cannot be moved to a team from another club.");
             }
         }
 
-        // Clash sirf tab check jab din / time / team / coach / facility / repeat badle ya kuch wapas active hua
+        // Clash sirf tab check jab din / time / team / coach / facility / repeat badle ya schedule wapas active hua
         const timingChanged =
             ["date", "startTime", "endTime", "teamId", "coachId", "facilityId"].some((k) => fields[k] !== undefined) ||
             changingRepeat ||
             status === "active";
 
         if (timingChanged && !ignoreConflicts(body)) {
-            const conflicts = await findConflicts([next], parentNext && !parentGone ? [parentNext] : []);
+            const conflicts = await findConflicts(next);
             if (conflicts.length) return sendConflicts(res, conflicts);
         }
 
-        const savedIds = [];
-        if (next.isNew) {
-            const created = await Schedule.create({ ...pickFields(next), _id: next._id, clubId: base.clubId, createdBy: req.user._id });
-            savedIds.push(created._id);
-            if (parentGone) {
-                await Schedule.deleteOne({ _id: doc._id });
-            } else {
-                doc.set(pickFields(parentNext));
-                await doc.save();
-                savedIds.unshift(doc._id);
-            }
-        } else {
-            doc.set(pickFields(next));
-            await doc.save();
-            savedIds.push(doc._id);
-        }
+        doc.set({ ...fields, status: next.status, opponent: next.opponent, repeat: next.repeat });
+        // Published tha toh portal ko batana baaki
+        if (doc.publishedAt) doc.hasUnsentChanges = true;
+        await doc.save();
 
-        const saved = await populateSchedule(Schedule.find({ _id: { $in: savedIds } }).sort({ date: 1 }));
-        return sendOk(res, 200, "Schedule updated successfully.", {
-            schedules: saved.map((s) => formatSchedule(s)),
-            deletedId: parentGone ? doc._id : null,
-        });
+        const saved = await populateSchedule(Schedule.findById(doc._id));
+        return sendOk(res, 200, "Schedule updated successfully.", formatSchedule(saved));
     } catch (e) {
         return sendServerError(res, "Update schedule", e);
     }
 };
 
 /**
- * DELETE /api/user/schedules/:id/delete?scope=this|following|all&occurrenceDate=2026-11-16
- * Repeat wale schedule par:
- *   all       -> poora document delete
- *   this      -> sirf wo date (excludedDates mein)
- *   following -> wo date aur aage ki (repeat us date se pehle khatam)
- * Koi date na bache toh document delete. Sirf "nahi hoga" dikhana ho toh update mein status: "cancelled".
+ * DELETE /api/user/schedules/:id/delete   (superAdmin ya clubAdmin)
+ * Poora schedule (repeat ki saari dates) delete. Sirf "nahi hoga" dikhana ho toh update mein status: "cancelled".
  */
 const deleteSchedule = async (req, res) => {
     try {
         const found = await findSchedule(req, req.params.id);
         if (found.message) return sendError(res, found.status, found.message);
-        const doc = found.schedule;
 
-        const sc = readScope(req, doc);
-        if (sc.message) return sendError(res, 400, sc.message);
-        const { scope, occ } = sc;
-
-        if (scope !== "all") {
-            if (scope === "this") {
-                doc.excludedDates = [...new Set([...(doc.excludedDates || []), occ])].sort();
-                doc.cancelledDates = (doc.cancelledDates || []).filter((d) => d !== occ);
-            } else {
-                doc.repeat.until = addDays(occ, -1);
-                doc.excludedDates = (doc.excludedDates || []).filter((d) => d < occ);
-                doc.cancelledDates = (doc.cancelledDates || []).filter((d) => d < occ);
-            }
-
-            if (allDates(doc).length) {
-                if (doc.publishedAt) doc.hasUnsentChanges = true;
-                await doc.save();
-                const saved = await populateSchedule(Schedule.findById(doc._id));
-                return sendOk(res, 200, scope === "this" ? "Date removed from the schedule." : "Following dates removed from the schedule.", {
-                    deleted: false,
-                    schedule: formatSchedule(saved),
-                });
-            }
-        }
-
-        await Schedule.deleteOne({ _id: doc._id });
-        return sendOk(res, 200, "Schedule deleted successfully.", { deleted: true, _id: doc._id });
+        await Schedule.deleteOne({ _id: found.schedule._id });
+        return sendOk(res, 200, "Schedule deleted successfully.", { _id: found.schedule._id });
     } catch (e) {
         return sendServerError(res, "Delete schedule", e);
     }
