@@ -111,7 +111,11 @@ const rangeFilter = (from, to) => ({
 const populateSchedule = (query) =>
     query
         .populate("clubId", "name")
-        .populate({ path: "teamId", select: "name categoryId coachId", populate: { path: "categoryId", select: "name" } })
+        .populate({
+            path: "teamId",
+            select: "name categoryId coachId gender teamType season status",
+            populate: { path: "categoryId", select: "name" },
+        })
         .populate({ path: "coachId", select: "userId", populate: { path: "userId", select: "firstname lastname profile_image" } })
         .populate("facilityId", "name address type parallelUnits");
 
@@ -131,7 +135,15 @@ const formatSchedule = (s, date = s.date) => {
         startTime: s.startTime,
         endTime: s.endTime,
         team: team
-            ? { _id: team._id, name: team.name, category: populated(team.categoryId) ? { _id: team.categoryId._id, name: team.categoryId.name } : null }
+            ? {
+                _id: team._id,
+                name: team.name,
+                category: populated(team.categoryId) ? { _id: team.categoryId._id, name: team.categoryId.name } : null,
+                gender: team.gender || "mixed",
+                teamType: team.teamType || "league",
+                season: team.season || "",
+                status: team.status || "active",
+            }
             : null,
         coach: coach
             ? {
@@ -629,24 +641,41 @@ const deleteSchedule = async (req, res) => {
 
 /**
  * POST /api/user/schedules/send   (superAdmin ya clubAdmin) - "Send schedule" button
- * body: { clubId (sirf superAdmin, required) }
- * Saare drafts published, aur published schedules ke badlav bhi portal par.
+ * body: { scheduleIds: ["id1", "id2"] }   (required)
+ * Sirf yahi schedules: draft published hota hai, published schedule ke badlav bhi portal par.
+ * Baaki schedules jaise the waise (draft hi) rehte hain.
  * NOTE: push notification abhi nahi (draft banner: "with no push notification").
  */
 const sendSchedule = async (req, res) => {
     try {
-        const clubId = req.user.role === ROLES.CLUB_ADMIN ? req.clubId : String(req.body?.clubId || "").trim();
-        if (!clubId || !isValidId(String(clubId))) return sendError(res, 400, "Please select a valid club.");
+        const raw = req.body?.scheduleIds;
+        const ids = Array.isArray(raw) ? [...new Set(raw.map((id) => String(id).trim()))] : [];
+        if (!ids.length) return sendError(res, 400, "Please select at least one schedule (scheduleIds).");
+        if (ids.some((id) => !isValidId(id))) return sendError(res, 400, "scheduleIds contains an invalid id.");
+
+        // Saare ids mile aur user ke access mein hon (clubAdmin: sirf apna club)
+        const found = await Schedule.find({ _id: { $in: ids } }).select("clubId");
+        if (found.length !== ids.length || found.some((s) => !canAccess(req, s.clubId))) {
+            return sendError(res, 404, "One or more schedules were not found.");
+        }
+        const filter = { _id: { $in: ids } };
 
         const now = new Date();
         const [drafts, changed] = await Promise.all([
-            Schedule.updateMany({ clubId, status: "draft" }, { $set: { status: "published", publishedAt: now, hasUnsentChanges: false } }),
-            Schedule.updateMany({ clubId, hasUnsentChanges: true }, { $set: { hasUnsentChanges: false } }),
+            Schedule.updateMany({ ...filter, status: "draft" }, { $set: { status: "published", publishedAt: now, hasUnsentChanges: false } }),
+            Schedule.updateMany({ ...filter, hasUnsentChanges: true }, { $set: { hasUnsentChanges: false } }),
         ]);
 
         const sent = drafts.modifiedCount + changed.modifiedCount;
         const message = sent ? `Schedule sent: ${sent} schedule${sent > 1 ? "s" : ""} updated on the portals.` : "Nothing new to send.";
-        return sendOk(res, 200, message, { published: drafts.modifiedCount, updated: changed.modifiedCount, sentAt: now });
+        // Bheje gaye schedules, team / coach / facility ki info ke saath
+        const saved = await populateSchedule(Schedule.find(filter).sort({ date: 1, startTime: 1 }));
+        return sendOk(res, 200, message, {
+            published: drafts.modifiedCount,
+            updated: changed.modifiedCount,
+            sentAt: now,
+            schedules: saved.map((s) => formatSchedule(s)),
+        });
     } catch (e) {
         return sendServerError(res, "Send schedule", e);
     }
