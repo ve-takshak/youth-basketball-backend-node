@@ -69,6 +69,7 @@ const { getCoachDashboard } = require("../app/controllers/api/dashbaordControlle
 const {
     createSchedule,
     listSchedules,
+    listSentSchedules,
     getSchedule,
     updateSchedule,
     deleteSchedule,
@@ -179,8 +180,9 @@ router.put("/user/facilities/:id/update", superAdminOrClubAdminAuthentication, u
 router.delete("/user/facilities/:id/delete", superAdminOrClubAdminAuthentication, deleteFacility);
 
 // ---------- Schedule ----------
-// "send" ":id" se PEHLE. List / get coach bhi (sirf apne published schedules).
+// "send" / "sent" ":id" se PEHLE. List / get coach bhi (sirf apne published schedules).
 router.post("/user/schedules/send", superAdminOrClubAdminAuthentication, sendSchedule);
+router.get("/user/schedules/sent", superAdminOrClubAdminAuthentication, listSentSchedules);
 router.post("/user/schedules/create", superAdminOrClubAdminAuthentication, createSchedule);
 router.get("/user/schedules", authentication, listSchedules);
 router.get("/user/schedules/:id", authentication, getSchedule);

@@ -6,7 +6,7 @@ const Facility = require("../../models/Facility");
 const { SCHEDULE_TYPES, GAME_TYPES, REPEAT_FREQUENCIES, DATE_RX } = require("../../models/Schedule");
 const { ROLES } = require("../../helpers/constants");
 const { TIME_RX } = require("../../helpers/scheduleHelper");
-const { isValidId } = require("../../helpers/common");
+const { isValidId, getPagination } = require("../../helpers/common");
 
 // Schedule (calendar). superAdmin sab clubs, clubAdmin sirf apna club, coach sirf apne published schedules.
 // Repeat wala schedule EK hi document hai (date = pehli date, repeat.until = aakhri).
@@ -529,6 +529,55 @@ const listSchedules = async (req, res) => {
 };
 
 /**
+ * GET /api/user/schedules/sent?page=1&limit=10&teamId=&coachId=&facilityId=&type=&clubId=(sirf superAdmin)
+ *   (superAdmin ya clubAdmin)
+ * Jo schedules "Send schedule" se bheje ja chuke hain (publishedAt hai). Har schedule ek baar
+ * (repeat ki dates alag nahi), sabse naya bheja hua pehle.
+ * hasUnsentChanges: true = bhejne ke baad edit hua, naya badlav abhi bhejna baaki.
+ */
+const listSentSchedules = async (req, res) => {
+    try {
+        const q = req.query;
+        const { page, limit, skip } = getPagination(q);
+        const filter = { publishedAt: { $ne: null } };
+
+        if (req.user.role === ROLES.CLUB_ADMIN) {
+            if (!req.clubId) return sendError(res, 403, "Your account is not linked to any club.");
+            filter.clubId = req.clubId;
+        } else if (q.clubId) {
+            if (!isValidId(q.clubId)) return sendError(res, 400, "Invalid club id.");
+            filter.clubId = q.clubId;
+        }
+
+        for (const key of ["teamId", "coachId", "facilityId"]) {
+            if (q[key]) {
+                if (!isValidId(q[key])) return sendError(res, 400, `Invalid ${key}.`);
+                filter[key] = q[key];
+            }
+        }
+
+        if (q.type) {
+            const type = String(q.type).trim().toLowerCase();
+            if (type === "game") filter.type = { $in: GAME_TYPES };
+            else if (SCHEDULE_TYPES.includes(type)) filter.type = type;
+            else return sendError(res, 400, `Invalid type "${type}".`);
+        }
+
+        const [schedules, total] = await Promise.all([
+            populateSchedule(Schedule.find(filter).sort({ publishedAt: -1, date: 1 }).skip(skip).limit(limit)),
+            Schedule.countDocuments(filter),
+        ]);
+
+        return sendOk(res, 200, "Sent schedules fetched successfully.", {
+            schedules: schedules.map((s) => formatSchedule(s)),
+            pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
+        });
+    } catch (e) {
+        return sendServerError(res, "List sent schedules", e);
+    }
+};
+
+/**
  * GET /api/user/schedules/:id?date=2026-11-09   (admin; coach sirf apna published schedule)
  * date = repeat ki kaunsi date (na do toh pehli).
  */
@@ -684,6 +733,7 @@ const sendSchedule = async (req, res) => {
 module.exports = {
     createSchedule,
     listSchedules,
+    listSentSchedules,
     getSchedule,
     updateSchedule,
     deleteSchedule,
