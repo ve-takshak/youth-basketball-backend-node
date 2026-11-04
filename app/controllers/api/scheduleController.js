@@ -3,12 +3,15 @@ const Schedule = require("../../models/Schedule");
 const Team = require("../../models/Team");
 const Coach = require("../../models/Coach");
 const Facility = require("../../models/Facility");
+const Player = require("../../models/Player");
+const Parent = require("../../models/Parent");
 const { SCHEDULE_TYPES, GAME_TYPES, REPEAT_FREQUENCIES, DATE_RX } = require("../../models/Schedule");
 const { ROLES } = require("../../helpers/constants");
 const { TIME_RX } = require("../../helpers/scheduleHelper");
 const { isValidId, getPagination } = require("../../helpers/common");
 
-// Schedule (calendar). superAdmin sab clubs, clubAdmin sirf apna club, coach sirf apne published schedules.
+// Schedule (calendar). superAdmin sab clubs, clubAdmin sirf apna club.
+// Coach / player / parent ki apni alag list / get APIs, sirf bheje gaye (published) schedules.
 // Repeat wala schedule EK hi document hai (date = pehli date, repeat.until = aakhri).
 // List API range ki har date ke liye ek entry banati hai. Update / delete hamesha poore schedule par.
 //   POST   /user/schedules/create
@@ -17,6 +20,10 @@ const { isValidId, getPagination } = require("../../helpers/common");
 //   PUT    /user/schedules/:id/update
 //   DELETE /user/schedules/:id/delete
 //   POST   /user/schedules/send            "Send schedule": drafts + badlav portal par
+//   GET    /user/schedules/sent            bheje gaye schedules (admin)
+//   GET    /user/coach/schedules(/:id)     coach
+//   GET    /user/player/schedules(/:id)    senior / youth player
+//   GET    /user/parent/schedules(/:id)    parent (?playerId= ek bachcha)
 
 const MAX_OCCURRENCES = 200; // ek repeat mein zyada se zyada itni dates
 const MAX_REPEAT_DAYS = 366;
@@ -40,8 +47,6 @@ const sendServerError = (res, label, e) => {
 
 const sendOk = (res, status, message, data) =>
     res.status(status).json({ error: false, status, message, message_desc: message, data });
-
-const isAdmin = (req) => [ROLES.SUPER_ADMIN, ROLES.CLUB_ADMIN].includes(req.user.role);
 
 const canAccess = (req, clubId) =>
     req.user.role === ROLES.SUPER_ADMIN || String(req.clubId) === String(clubId?._id || clubId);
@@ -375,17 +380,43 @@ const ignoreConflicts = (body) => body?.ignoreConflicts === true || String(body?
 // Access
 // ---------------------------------------------------------------------------
 
-// Coach ko sirf published schedules jahan wo coach hai ya uski team ka schedule hai
-const coachFilter = async (req) => {
+const PLAYER_ROLES = [ROLES.SENIOR_PLAYER, ROLES.YOUTH_PLAYER];
+const sentOnly = { publishedAt: { $ne: null }, status: { $ne: "draft" } };
+const notLinked = { status: 403, message: "Your account is not linked to any club." };
+
+// Mobile app wale sirf bheje gaye (published) schedules dekhte hain. Har role ka apna scope.
+// Galti ho toh { status, message }, warna { filter }
+
+// Coach: jahan wo coach hai ya uski team ka schedule
+const coachScope = async (req) => {
+    if (req.user.role !== ROLES.COACH) return { status: 403, message: "Access denied. Coach only." };
     const coach = await Coach.findOne({ userId: req.user._id }).select("_id clubId");
-    if (!coach) return null;
+    if (!coach) return notLinked;
     const teamIds = await Team.find({ coachId: coach._id }).distinct("_id");
-    return {
-        clubId: coach.clubId,
-        publishedAt: { $ne: null },
-        status: { $ne: "draft" },
-        $or: [{ coachId: coach._id }, { teamId: { $in: teamIds } }],
-    };
+    return { filter: { clubId: coach.clubId, ...sentOnly, $or: [{ coachId: coach._id }, { teamId: { $in: teamIds } }] } };
+};
+
+// Player (senior / youth): apni team ka schedule. Team nahi (waitlisted) toh khaali list.
+const playerScope = async (req) => {
+    if (!PLAYER_ROLES.includes(req.user.role)) return { status: 403, message: "Access denied. Player only." };
+    const player = await Player.findOne({ userId: req.user._id }).select("clubId teamId");
+    if (!player) return notLinked;
+    return { filter: { clubId: player.clubId, ...sentOnly, teamId: player.teamId || null } };
+};
+
+// Parent: apne bachchon ki teams ka. ?playerId= do toh sirf us bachche ka.
+const parentScope = async (req) => {
+    if (req.user.role !== ROLES.PARENT) return { status: 403, message: "Access denied. Parent only." };
+    const parent = await Parent.findOne({ userId: req.user._id }).select("_id clubId");
+    if (!parent) return notLinked;
+    const childFilter = { "parents.parentId": parent._id, teamId: { $ne: null } };
+    const { playerId } = req.query;
+    if (playerId) {
+        if (!isValidId(playerId)) return { status: 400, message: "Invalid playerId." };
+        childFilter._id = playerId;
+    }
+    const teamIds = await Player.find(childFilter).distinct("teamId");
+    return { filter: { clubId: parent.clubId, ...sentOnly, teamId: { $in: teamIds } } };
 };
 
 // Schedule id valid + access. Galti ho toh { status, message }
@@ -440,93 +471,126 @@ const createSchedule = async (req, res) => {
     }
 };
 
+// Calendar list ki query (from / to / type / games / teamId / coachId / facilityId) se filter.
+// Galti ho toh { message }, warna { from, to, and }
+const parseListQuery = (q) => {
+    const from = String(q.from || "").trim() || moment().startOf("week").format("YYYY-MM-DD");
+    const to = String(q.to || "").trim() || addDays(from, 6);
+    if (!isValidDate(from) || !isValidDate(to)) return { message: "from / to must be valid dates (YYYY-MM-DD)." };
+    if (to < from) return { message: '"to" must be on or after "from".' };
+    if (daysBetween(from, to) > MAX_RANGE_DAYS) return { message: `Date range can be at most ${MAX_RANGE_DAYS} days.` };
+
+    const and = [rangeFilter(from, to)];
+
+    // Type: "game" = home + away
+    let types = null;
+    if (q.type) {
+        types = new Set();
+        for (const t of String(q.type).toLowerCase().split(",").map((x) => x.trim()).filter(Boolean)) {
+            if (t === "game") GAME_TYPES.forEach((g) => types.add(g));
+            else if (SCHEDULE_TYPES.includes(t)) types.add(t);
+            else return { message: `Invalid type "${t}".` };
+        }
+    }
+
+    // Games dropdown: sirf home / sirf away (trainings bhi chhupa deta hai)
+    if (q.games) {
+        const games = String(q.games).trim().toLowerCase();
+        if (games === "home" || games === "away") {
+            const only = `${games}_game`;
+            types = new Set(!types || types.has(only) ? [only] : []);
+        } else if (games !== "all") {
+            return { message: 'games must be "all", "home" or "away".' };
+        }
+    }
+    if (types) and.push({ type: { $in: [...types] } });
+
+    for (const key of ["teamId", "coachId", "facilityId"]) {
+        if (q[key]) {
+            if (!isValidId(q[key])) return { message: `Invalid ${key}.` };
+            and.push({ [key]: q[key] });
+        }
+    }
+
+    return { from, to, and };
+};
+
+// Filter ke schedules, range ki har date ki entry, date + time order mein
+const expandSchedules = async (and, from, to) => {
+    const docs = await populateSchedule(Schedule.find({ $and: and }));
+    return docs
+        .flatMap((s) => occurrenceDates(s, from, to).map((d) => formatSchedule(s, d)))
+        .sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime) || a.endTime.localeCompare(b.endTime));
+};
+
 /**
  * GET /api/user/schedules?from=2026-11-01&to=2026-11-07&type=training,game&games=home|away
  *                        &teamId=&coachId=&facilityId=&status=&clubId=(sirf superAdmin)
+ *   (superAdmin ya clubAdmin) draft + published + cancelled, aur unsentCount.
  * from / to na do toh is hafte (Sun-Sat). type: training | game | home_game | away_game | other, comma se kai.
  * Repeat wala schedule range ki har date par ek entry deta hai (same _id, alag date).
- * Pagination nahi: range ki saari entries, date + time order mein. Admin ko unsentCount bhi.
+ * Pagination nahi: range ki saari entries, date + time order mein.
  */
 const listSchedules = async (req, res) => {
     try {
         const q = req.query;
-        const from = String(q.from || "").trim() || moment().startOf("week").format("YYYY-MM-DD");
-        const to = String(q.to || "").trim() || addDays(from, 6);
-        if (!isValidDate(from) || !isValidDate(to)) return sendError(res, 400, "from / to must be valid dates (YYYY-MM-DD).");
-        if (to < from) return sendError(res, 400, '"to" must be on or after "from".');
-        if (daysBetween(from, to) > MAX_RANGE_DAYS) return sendError(res, 400, `Date range can be at most ${MAX_RANGE_DAYS} days.`);
+        const parsed = parseListQuery(q);
+        if (parsed.message) return sendError(res, 400, parsed.message);
+        const { from, to, and } = parsed;
 
-        const and = [rangeFilter(from, to)];
         let clubId = null;
-
-        if (req.user.role === ROLES.COACH) {
-            const own = await coachFilter(req);
-            if (!own) return sendError(res, 403, "Your account is not linked to any club.");
-            and.push(own);
-        } else if (isAdmin(req)) {
-            if (req.user.role === ROLES.CLUB_ADMIN) {
-                if (!req.clubId) return sendError(res, 403, "Your account is not linked to any club.");
-                clubId = req.clubId;
-            } else if (q.clubId) {
-                if (!isValidId(q.clubId)) return sendError(res, 400, "Invalid club id.");
-                clubId = q.clubId;
-            }
-            if (clubId) and.push({ clubId });
-        } else {
-            return sendError(res, 403, "Access denied.");
+        if (req.user.role === ROLES.CLUB_ADMIN) {
+            if (!req.clubId) return sendError(res, 403, "Your account is not linked to any club.");
+            clubId = req.clubId;
+        } else if (q.clubId) {
+            if (!isValidId(q.clubId)) return sendError(res, 400, "Invalid club id.");
+            clubId = q.clubId;
         }
+        if (clubId) and.push({ clubId });
 
-        // Type: "game" = home + away
-        let types = null;
-        if (q.type) {
-            types = new Set();
-            for (const t of String(q.type).toLowerCase().split(",").map((x) => x.trim()).filter(Boolean)) {
-                if (t === "game") GAME_TYPES.forEach((g) => types.add(g));
-                else if (SCHEDULE_TYPES.includes(t)) types.add(t);
-                else return sendError(res, 400, `Invalid type "${t}".`);
-            }
-        }
-
-        // Games dropdown: sirf home / sirf away (trainings bhi chhupa deta hai)
-        if (q.games) {
-            const games = String(q.games).trim().toLowerCase();
-            if (games === "home" || games === "away") {
-                const only = `${games}_game`;
-                types = new Set(!types || types.has(only) ? [only] : []);
-            } else if (games !== "all") {
-                return sendError(res, 400, 'games must be "all", "home" or "away".');
-            }
-        }
-        if (types) and.push({ type: { $in: [...types] } });
-
-        for (const key of ["teamId", "coachId", "facilityId"]) {
-            if (q[key]) {
-                if (!isValidId(q[key])) return sendError(res, 400, `Invalid ${key}.`);
-                and.push({ [key]: q[key] });
-            }
-        }
-
-        if (q.status && isAdmin(req)) {
+        if (q.status) {
             and.push({ status: { $in: String(q.status).toLowerCase().split(",").map((x) => x.trim()) } });
         }
 
-        const docs = await populateSchedule(Schedule.find({ $and: and }));
-        const schedules = docs
-            .flatMap((s) => occurrenceDates(s, from, to).map((d) => formatSchedule(s, d)))
-            .sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime) || a.endTime.localeCompare(b.endTime));
+        const schedules = await expandSchedules(and, from, to);
 
-        const data = { from, to, schedules };
-        if (isAdmin(req)) {
-            const unsentFilter = { $or: [{ status: "draft" }, { hasUnsentChanges: true }] };
-            if (clubId) unsentFilter.clubId = clubId;
-            data.unsentCount = await Schedule.countDocuments(unsentFilter);
-        }
+        const unsentFilter = { $or: [{ status: "draft" }, { hasUnsentChanges: true }] };
+        if (clubId) unsentFilter.clubId = clubId;
+        const unsentCount = await Schedule.countDocuments(unsentFilter);
 
-        return sendOk(res, 200, "Schedules fetched successfully.", data);
+        return sendOk(res, 200, "Schedules fetched successfully.", { from, to, schedules, unsentCount });
     } catch (e) {
         return sendServerError(res, "List schedules", e);
     }
 };
+
+// Coach / player / parent ki calendar list: wahi query, scope unke role ka
+const listForViewer = (scope, label) => async (req, res) => {
+    try {
+        const parsed = parseListQuery(req.query);
+        if (parsed.message) return sendError(res, 400, parsed.message);
+        const { from, to, and } = parsed;
+
+        const own = await scope(req);
+        if (own.message) return sendError(res, own.status, own.message);
+        and.push(own.filter);
+
+        const schedules = await expandSchedules(and, from, to);
+        return sendOk(res, 200, "Schedules fetched successfully.", { from, to, schedules });
+    } catch (e) {
+        return sendServerError(res, label, e);
+    }
+};
+
+/**
+ * GET /api/user/coach/schedules?from=&to=&type=&games=&teamId=&facilityId=     (coach)
+ * GET /api/user/player/schedules?from=&to=&type=&games=                        (seniorPlayer / youthPlayer)
+ * GET /api/user/parent/schedules?from=&to=&type=&games=&playerId=              (parent)
+ * Sirf bheje gaye (published / cancelled) schedules, draft kabhi nahi. Response admin list jaisa, unsentCount nahi.
+ */
+const listCoachSchedules = listForViewer(coachScope, "List coach schedules");
+const listPlayerSchedules = listForViewer(playerScope, "List player schedules");
+const listParentSchedules = listForViewer(parentScope, "List parent schedules");
 
 /**
  * GET /api/user/schedules/sent?page=1&limit=10&teamId=&coachId=&facilityId=&type=&clubId=(sirf superAdmin)
@@ -577,8 +641,17 @@ const listSentSchedules = async (req, res) => {
     }
 };
 
+// ?date= repeat ki kaunsi date (na do toh pehli). Galat date par 404.
+const sendOneSchedule = (res, schedule, rawDate) => {
+    const date = String(rawDate || "").trim() || schedule.date;
+    if (!isValidDate(date) || !occurrenceDates(schedule, date, date).length) {
+        return sendError(res, 404, "This date is not part of the schedule.");
+    }
+    return sendOk(res, 200, "Schedule fetched successfully.", formatSchedule(schedule, date));
+};
+
 /**
- * GET /api/user/schedules/:id?date=2026-11-09   (admin; coach sirf apna published schedule)
+ * GET /api/user/schedules/:id?date=2026-11-09   (superAdmin ya clubAdmin)
  * date = repeat ki kaunsi date (na do toh pehli).
  */
 const getSchedule = async (req, res) => {
@@ -586,28 +659,41 @@ const getSchedule = async (req, res) => {
         const { id } = req.params;
         if (!isValidId(id)) return sendError(res, 400, "Invalid schedule id.");
 
-        let filter = { _id: id };
-        if (req.user.role === ROLES.COACH) {
-            const own = await coachFilter(req);
-            if (!own) return sendError(res, 404, "Schedule not found.");
-            filter = { $and: [filter, own] };
-        } else if (!isAdmin(req)) {
-            return sendError(res, 403, "Access denied.");
-        }
-
-        const schedule = await populateSchedule(Schedule.findOne(filter));
+        const schedule = await populateSchedule(Schedule.findById(id));
         if (!schedule || !canAccess(req, schedule.clubId)) return sendError(res, 404, "Schedule not found.");
 
-        const date = String(req.query.date || "").trim() || schedule.date;
-        if (!isValidDate(date) || !occurrenceDates(schedule, date, date).length) {
-            return sendError(res, 404, "This date is not part of the schedule.");
-        }
-
-        return sendOk(res, 200, "Schedule fetched successfully.", formatSchedule(schedule, date));
+        return sendOneSchedule(res, schedule, req.query.date);
     } catch (e) {
         return sendServerError(res, "Get schedule", e);
     }
 };
+
+// Coach / player / parent: sirf apne scope ka bheja gaya schedule, warna 404
+const getForViewer = (scope, label) => async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isValidId(id)) return sendError(res, 400, "Invalid schedule id.");
+
+        const own = await scope(req);
+        if (own.message) return sendError(res, own.status, own.message);
+
+        const schedule = await populateSchedule(Schedule.findOne({ $and: [{ _id: id }, own.filter] }));
+        if (!schedule) return sendError(res, 404, "Schedule not found.");
+
+        return sendOneSchedule(res, schedule, req.query.date);
+    } catch (e) {
+        return sendServerError(res, label, e);
+    }
+};
+
+/**
+ * GET /api/user/coach/schedules/:id?date=    (coach)
+ * GET /api/user/player/schedules/:id?date=   (seniorPlayer / youthPlayer)
+ * GET /api/user/parent/schedules/:id?date=   (parent)
+ */
+const getCoachSchedule = getForViewer(coachScope, "Get coach schedule");
+const getPlayerSchedule = getForViewer(playerScope, "Get player schedule");
+const getParentSchedule = getForViewer(parentScope, "Get parent schedule");
 
 /**
  * PUT /api/user/schedules/:id/update   (superAdmin ya clubAdmin)
@@ -738,4 +824,10 @@ module.exports = {
     updateSchedule,
     deleteSchedule,
     sendSchedule,
+    listCoachSchedules,
+    getCoachSchedule,
+    listPlayerSchedules,
+    getPlayerSchedule,
+    listParentSchedules,
+    getParentSchedule,
 };

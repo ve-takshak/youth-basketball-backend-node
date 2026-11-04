@@ -74,6 +74,12 @@ const {
     updateSchedule,
     deleteSchedule,
     sendSchedule,
+    listCoachSchedules,
+    getCoachSchedule,
+    listPlayerSchedules,
+    getPlayerSchedule,
+    listParentSchedules,
+    getParentSchedule,
 } = require("../app/controllers/api/scheduleController");
 const { createNote, updateNote, deleteNote, listCoachNotes, listPlayerNotes, getNote } = require("../app/controllers/api/Notecontroller");
 
@@ -180,14 +186,22 @@ router.put("/user/facilities/:id/update", superAdminOrClubAdminAuthentication, u
 router.delete("/user/facilities/:id/delete", superAdminOrClubAdminAuthentication, deleteFacility);
 
 // ---------- Schedule ----------
-// "send" / "sent" ":id" se PEHLE. List / get coach bhi (sirf apne published schedules).
+// Admin panel. "send" / "sent" ":id" se PEHLE.
 router.post("/user/schedules/send", superAdminOrClubAdminAuthentication, sendSchedule);
 router.get("/user/schedules/sent", superAdminOrClubAdminAuthentication, listSentSchedules);
 router.post("/user/schedules/create", superAdminOrClubAdminAuthentication, createSchedule);
-router.get("/user/schedules", authentication, listSchedules);
-router.get("/user/schedules/:id", authentication, getSchedule);
+router.get("/user/schedules", superAdminOrClubAdminAuthentication, listSchedules);
+router.get("/user/schedules/:id", superAdminOrClubAdminAuthentication, getSchedule);
 router.put("/user/schedules/:id/update", superAdminOrClubAdminAuthentication, updateSchedule);
 router.delete("/user/schedules/:id/delete", superAdminOrClubAdminAuthentication, deleteSchedule);
+
+// Mobile app: har role ki apni API, sirf bheje gaye (published) schedules
+router.get("/user/coach/schedules", authentication, listCoachSchedules);
+router.get("/user/coach/schedules/:id", authentication, getCoachSchedule);
+router.get("/user/player/schedules", authentication, listPlayerSchedules);
+router.get("/user/player/schedules/:id", authentication, getPlayerSchedule);
+router.get("/user/parent/schedules", authentication, requireTermsAccepted, listParentSchedules);
+router.get("/user/parent/schedules/:id", authentication, requireTermsAccepted, getParentSchedule);
 
 router.get("/user/coach/dashboard", authentication, getCoachDashboard);
 
