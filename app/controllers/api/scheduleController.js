@@ -405,18 +405,37 @@ const playerScope = async (req) => {
 };
 
 // Parent: apne bachchon ki teams ka. ?playerId= do toh sirf us bachche ka.
+// children = parent ke saare bachche (tabs ke liye), decorate = har schedule mein kis bachche ka hai
 const parentScope = async (req) => {
     if (req.user.role !== ROLES.PARENT) return { status: 403, message: "Access denied. Parent only." };
     const parent = await Parent.findOne({ userId: req.user._id }).select("_id clubId");
     if (!parent) return notLinked;
-    const childFilter = { "parents.parentId": parent._id, teamId: { $ne: null } };
+
+    const kids = await Player.find({ "parents.parentId": parent._id })
+        .select("teamId userId")
+        .populate("userId", "firstname lastname profile_image")
+        .populate("teamId", "name");
+    const children = kids.map((p) => ({
+        _id: p._id,
+        firstname: p.userId?.firstname || "",
+        lastname: p.userId?.lastname || "",
+        profile_image: p.userId?.profile_image || "",
+        team: populated(p.teamId) ? { _id: p.teamId._id, name: p.teamId.name } : null,
+    }));
+
     const { playerId } = req.query;
-    if (playerId) {
-        if (!isValidId(playerId)) return { status: 400, message: "Invalid playerId." };
-        childFilter._id = playerId;
-    }
-    const teamIds = await Player.find(childFilter).distinct("teamId");
-    return { filter: { clubId: parent.clubId, ...sentOnly, teamId: { $in: teamIds } } };
+    if (playerId && !isValidId(playerId)) return { status: 400, message: "Invalid playerId." };
+    const selected = playerId ? children.filter((c) => String(c._id) === String(playerId)) : children;
+    if (playerId && !selected.length) return { status: 404, message: "Player not found." };
+
+    const teamIds = [...new Set(selected.filter((c) => c.team).map((c) => String(c.team._id)))];
+    const decorate = (entry) => ({
+        ...entry,
+        children: selected
+            .filter((c) => c.team && entry.team && String(c.team._id) === String(entry.team._id))
+            .map(({ _id, firstname, lastname, profile_image }) => ({ _id, firstname, lastname, profile_image })),
+    });
+    return { filter: { clubId: parent.clubId, ...sentOnly, teamId: { $in: teamIds } }, children, decorate };
 };
 
 // Schedule id valid + access. Galti ho toh { status, message }
@@ -595,8 +614,14 @@ const listForViewer = (scope, label) => async (req, res) => {
         if (own.message) return sendError(res, own.status, own.message);
         and.push(own.filter);
 
-        const schedules = await expandSchedules(and, from, to);
-        return sendOk(res, 200, "Schedules fetched successfully.", { from, to, ...pageOf(req.query, schedules) });
+        const all = await expandSchedules(and, from, to);
+        const schedules = own.decorate ? all.map(own.decorate) : all;
+        return sendOk(res, 200, "Schedules fetched successfully.", {
+            from,
+            to,
+            ...(own.children && { children: own.children }),
+            ...pageOf(req.query, schedules),
+        });
     } catch (e) {
         return sendServerError(res, label, e);
     }
@@ -607,6 +632,7 @@ const listForViewer = (scope, label) => async (req, res) => {
  * GET /api/user/player/schedules?from=&to=&type=&games=                        (seniorPlayer / youthPlayer)
  * GET /api/user/parent/schedules?from=&to=&type=&games=&playerId=              (parent)
  * Sirf bheje gaye (published / cancelled) schedules, draft kabhi nahi. Response admin list jaisa, unsentCount nahi.
+ * Parent: response mein children (saare bachche + team) aur har schedule mein children (kis bachche ka hai).
  * page / limit do toh pagination, admin list jaisa.
  */
 const listCoachSchedules = listForViewer(coachScope, "List coach schedules");
@@ -663,12 +689,12 @@ const listSentSchedules = async (req, res) => {
 };
 
 // ?date= repeat ki kaunsi date (na do toh pehli). Galat date par 404.
-const sendOneSchedule = (res, schedule, rawDate) => {
+const sendOneSchedule = (res, schedule, rawDate, decorate = (x) => x) => {
     const date = String(rawDate || "").trim() || schedule.date;
     if (!isValidDate(date) || !occurrenceDates(schedule, date, date).length) {
         return sendError(res, 404, "This date is not part of the schedule.");
     }
-    return sendOk(res, 200, "Schedule fetched successfully.", formatSchedule(schedule, date));
+    return sendOk(res, 200, "Schedule fetched successfully.", decorate(formatSchedule(schedule, date)));
 };
 
 /**
@@ -701,7 +727,7 @@ const getForViewer = (scope, label) => async (req, res) => {
         const schedule = await populateSchedule(Schedule.findOne({ $and: [{ _id: id }, own.filter] }));
         if (!schedule) return sendError(res, 404, "Schedule not found.");
 
-        return sendOneSchedule(res, schedule, req.query.date);
+        return sendOneSchedule(res, schedule, req.query.date, own.decorate);
     } catch (e) {
         return sendServerError(res, label, e);
     }

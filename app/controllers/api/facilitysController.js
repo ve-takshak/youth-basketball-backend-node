@@ -234,20 +234,47 @@ const listFacilities = async (req, res) => {
 
 /**
  * GET /api/user/facilities/:id   (superAdmin ya clubAdmin)
+ * Facility + homeTeams (jinka home venue yeh hai) + upcomingSchedules (aage ke, cancel nahi, ginti)
  */
 const getFacility = async (req, res) => {
     try {
         const found = await findFacility(req, req.params.id);
         if (found.message) return sendError(res, found.status, found.message);
 
-        await found.facility.populate("clubId", "name");
+        const { facility } = found;
+        await facility.populate("clubId", "name");
+
+        // Detail page: jin teams ka home venue yeh hai, aur aage ke (cancel nahi) schedules kitne
+        const today = moment().format("YYYY-MM-DD");
+        const [homeTeams, upcomingSchedules] = await Promise.all([
+            Team.find({ homeVenueId: facility._id })
+                .select("name categoryId gender season status")
+                .populate("categoryId", "name")
+                .sort({ name: 1 }),
+            Schedule.countDocuments({
+                facilityId: facility._id,
+                status: { $ne: "cancelled" },
+                $or: [{ date: { $gte: today } }, { "repeat.until": { $gte: today } }],
+            }),
+        ]);
 
         return res.status(200).json({
             error: false,
             status: 200,
             message: "Facility fetched successfully.",
             message_desc: "Facility fetched successfully.",
-            data: formatFacility(found.facility),
+            data: {
+                ...formatFacility(facility),
+                homeTeams: homeTeams.map((team) => ({
+                    _id: team._id,
+                    name: team.name,
+                    category: team.categoryId ? { _id: team.categoryId._id, name: team.categoryId.name } : null,
+                    gender: team.gender,
+                    season: team.season || "",
+                    status: team.status,
+                })),
+                upcomingSchedules,
+            },
         });
     } catch (e) {
         return sendServerError(res, "Get facility", e);
