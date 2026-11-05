@@ -515,6 +515,17 @@ const parseListQuery = (q) => {
     return { from, to, and };
 };
 
+// page / limit diya ho toh entries ka ek page + pagination, warna saari (calendar ke liye)
+const pageOf = (q, schedules) => {
+    if (q.page === undefined && q.limit === undefined) return { schedules };
+    const { page, limit, skip } = getPagination(q);
+    const total = schedules.length;
+    return {
+        schedules: schedules.slice(skip, skip + limit),
+        pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
+};
+
 // Filter ke schedules, range ki har date ki entry, date + time order mein
 const expandSchedules = async (and, from, to) => {
     const docs = await populateSchedule(Schedule.find({ $and: and }));
@@ -525,11 +536,12 @@ const expandSchedules = async (and, from, to) => {
 
 /**
  * GET /api/user/schedules?from=2026-11-01&to=2026-11-07&type=training,game&games=home|away
- *                        &teamId=&coachId=&facilityId=&status=&clubId=(sirf superAdmin)
+ *                        &teamId=&coachId=&facilityId=&status=&clubId=(sirf superAdmin)&sent=true
  *   (superAdmin ya clubAdmin) draft + published + cancelled, aur unsentCount.
  * from / to na do toh is hafte (Sun-Sat). type: training | game | home_game | away_game | other, comma se kai.
  * Repeat wala schedule range ki har date par ek entry deta hai (same _id, alag date).
- * Pagination nahi: range ki saari entries, date + time order mein.
+ * page / limit do toh 10-10 ki pagination (repeat ki har date ek entry), na do toh range ki saari entries (calendar).
+ * unsentIds = draft + bhejne ke baad badle schedules ("Send schedule" button ke liye).
  */
 const listSchedules = async (req, res) => {
     try {
@@ -551,14 +563,22 @@ const listSchedules = async (req, res) => {
         if (q.status) {
             and.push({ status: { $in: String(q.status).toLowerCase().split(",").map((x) => x.trim()) } });
         }
+        // sent=true: sirf bheje gaye (draft nahi), admin calendar ke liye
+        if (String(q.sent) === "true") and.push({ publishedAt: { $ne: null } });
 
         const schedules = await expandSchedules(and, from, to);
 
         const unsentFilter = { $or: [{ status: "draft" }, { hasUnsentChanges: true }] };
         if (clubId) unsentFilter.clubId = clubId;
-        const unsentCount = await Schedule.countDocuments(unsentFilter);
+        const unsentIds = await Schedule.find(unsentFilter).distinct("_id");
 
-        return sendOk(res, 200, "Schedules fetched successfully.", { from, to, schedules, unsentCount });
+        return sendOk(res, 200, "Schedules fetched successfully.", {
+            from,
+            to,
+            ...pageOf(q, schedules),
+            unsentCount: unsentIds.length,
+            unsentIds,
+        });
     } catch (e) {
         return sendServerError(res, "List schedules", e);
     }
@@ -576,7 +596,7 @@ const listForViewer = (scope, label) => async (req, res) => {
         and.push(own.filter);
 
         const schedules = await expandSchedules(and, from, to);
-        return sendOk(res, 200, "Schedules fetched successfully.", { from, to, schedules });
+        return sendOk(res, 200, "Schedules fetched successfully.", { from, to, ...pageOf(req.query, schedules) });
     } catch (e) {
         return sendServerError(res, label, e);
     }
@@ -587,6 +607,7 @@ const listForViewer = (scope, label) => async (req, res) => {
  * GET /api/user/player/schedules?from=&to=&type=&games=                        (seniorPlayer / youthPlayer)
  * GET /api/user/parent/schedules?from=&to=&type=&games=&playerId=              (parent)
  * Sirf bheje gaye (published / cancelled) schedules, draft kabhi nahi. Response admin list jaisa, unsentCount nahi.
+ * page / limit do toh pagination, admin list jaisa.
  */
 const listCoachSchedules = listForViewer(coachScope, "List coach schedules");
 const listPlayerSchedules = listForViewer(playerScope, "List player schedules");
