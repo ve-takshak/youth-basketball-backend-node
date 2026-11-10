@@ -157,8 +157,8 @@ router.get("/user/players/unassigned", superAdminOrClubAdminAuthentication, list
 router.get("/user/players/sizes", superAdminOrClubAdminAuthentication, getSizeSummary);
 router.post("/user/players/assign", superAdminOrClubAdminAuthentication, assignPlayerToTeam);
 router.post("/user/players/create", superAdminOrClubAdminAuthentication, createPlayer);
-router.get("/user/players", superAdminOrClubAdminAuthentication, listPlayers);
-router.get("/user/players/:id", superAdminOrClubAdminAuthentication, getPlayer);
+router.get("/user/players", authentication, listPlayers); // coach bhi, sirf apni teams ke players
+router.get("/user/players/:id", authentication, getPlayer); // coach bhi, sirf apni team ka player
 router.put("/user/players/:id/update", superAdminOrClubAdminAuthentication, updatePlayer);
 router.delete("/user/players/:id/delete", superAdminOrClubAdminAuthentication, deletePlayer);
 

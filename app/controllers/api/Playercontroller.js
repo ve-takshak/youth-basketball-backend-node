@@ -857,19 +857,32 @@ const buildPlayerFilter = async (req, baseFilter = {}) => {
 };
 
 /**
- * GET /api/user/players?clubId=&teamId=&status=&gender=&playerType=&search=&page=1&limit=10   (superAdmin ya clubAdmin)
- * search: naam ya ID number.  teamId=none: jin players ki koi team nahi
+ * GET /api/user/players?clubId=&teamId=&status=&gender=&playerType=&search=&page=1&limit=10   (superAdmin, clubAdmin, coach)
+ * search: naam ya ID number.  teamId=none: jin players ki koi team nahi (coach ke liye nahi)
+ * coach: sirf apni teams ke players. teamId do toh coach ki apni team honi chahiye.
  */
 const listPlayers = async (req, res) => {
     try {
         const teamId = String(req.query.teamId || "").trim();
         const { page, limit, skip } = getPagination(req.query);
 
+        // superAdmin / clubAdmin / coach hi dekh sakte hain
+        const isCoach = req.user.role === ROLES.COACH;
+        if (!isCoach && ![ROLES.SUPER_ADMIN, ROLES.CLUB_ADMIN].includes(req.user.role)) {
+            return sendError(res, 403, "Access denied.");
+        }
+
         const built = await buildPlayerFilter(req);
         if (built.message) return sendError(res, built.status, built.message);
         const { filter } = built;
 
-        if (teamId === "none") filter.teamId = null;
+        if (isCoach) {
+            // Coach: sirf apne club + apni teams ke players
+            const teamIds = await getCoachTeamIds(req);
+            if (teamId && !teamIds.includes(teamId)) return sendError(res, 403, "This is not your team.");
+            filter.clubId = req.clubId;
+            filter.teamId = teamId ? teamId : { $in: teamIds };
+        } else if (teamId === "none") filter.teamId = null;
         else if (teamId && isValidId(teamId)) filter.teamId = teamId;
 
         const [players, total] = await Promise.all([
@@ -975,7 +988,7 @@ const listUnassignedPlayers = async (req, res) => {
 };
 
 /**
- * GET /api/user/players/:id   (superAdmin ya clubAdmin, :id = Player ki _id)
+ * GET /api/user/players/:id   (superAdmin, clubAdmin, ya coach sirf apni team ka player. :id = Player ki _id)
  * Detail page ke liye: player + club (logo, theme, primary admin) + team (category, capacity, counts) + coach + parents
  */
 const getPlayer = async (req, res) => {
@@ -983,8 +996,21 @@ const getPlayer = async (req, res) => {
         const { id } = req.params;
         if (!isValidId(id)) return sendError(res, 400, "Invalid player id.");
 
+        // superAdmin / clubAdmin / coach hi dekh sakte hain
+        const isCoach = req.user.role === ROLES.COACH;
+        if (!isCoach && ![ROLES.SUPER_ADMIN, ROLES.CLUB_ADMIN].includes(req.user.role)) {
+            return sendError(res, 403, "Access denied.");
+        }
+
         const player = await populatePlayerDetail(Player.findById(id));
         if (!player || !canAccess(req, player.clubId)) return sendError(res, 404, "Player not found.");
+
+        // Coach: sirf apni team ka player
+        if (isCoach) {
+            const teamIds = await getCoachTeamIds(req);
+            const playerTeamId = player.teamId?._id || player.teamId;
+            if (!playerTeamId || !teamIds.includes(String(playerTeamId))) return sendError(res, 404, "Player not found.");
+        }
 
         return res.status(200).json({
             error: false,
