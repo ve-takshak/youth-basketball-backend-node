@@ -4,6 +4,7 @@ const Coach = require("../../models/Coach");
 const Facility = require("../../models/Facility");
 const TeamCategory = require("../../models/TeamCategory");
 const Schedule = require("../../models/Schedule");
+const Player = require("../../models/Player");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, escapeRegex, getPagination } = require("../../helpers/common");
 const { parseSeason } = require("../../helpers/season");
@@ -498,12 +499,31 @@ const getTeam = async (req, res) => {
         const team = await populateTeam(Team.findById(id));
         if (!team || !canAccess(req, team.clubId)) return sendError(res, 404, "Team not found.");
 
+        // Is team ke saare players: id, naam, profile pic
+        const players = await Player.find({ teamId: team._id })
+            .select("userId shirtNumber status")
+            .populate("userId", "firstname lastname profile_image")
+            .sort({ createdAt: 1 })
+            .lean();
+
         return res.status(200).json({
             error: false,
             status: 200,
             message: "Team fetched successfully.",
             message_desc: "Team fetched successfully.",
-            data: formatTeam(team),
+            data: {
+                ...formatTeam(team),
+                players: players.map((p) => ({
+                    _id: p._id,
+                    userId: p.userId?._id || null,
+                    firstname: p.userId?.firstname || "",
+                    lastname: p.userId?.lastname || "",
+                    name: `${p.userId?.firstname || ""} ${p.userId?.lastname || ""}`.trim(),
+                    profile_image: p.userId?.profile_image || "",
+                    shirtNumber: p.shirtNumber ?? null,
+                    status: p.status,
+                })),
+            },
         });
     } catch (e) {
         return sendServerError(res, "Get team", e);
