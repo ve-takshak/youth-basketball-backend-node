@@ -34,6 +34,11 @@ const {
 } = require("../app/controllers/api/teamController");
 const {
     createPlayer,
+    createCoachPlayer,
+    listCoachPlayers,
+    getCoachPlayer,
+    updateCoachPlayer,
+    deleteCoachPlayer,
     listPlayers,
     getPlayer,
     updatePlayer,
@@ -156,6 +161,13 @@ router.get("/user/players", superAdminOrClubAdminAuthentication, listPlayers);
 router.get("/user/players/:id", superAdminOrClubAdminAuthentication, getPlayer);
 router.put("/user/players/:id/update", superAdminOrClubAdminAuthentication, updatePlayer);
 router.delete("/user/players/:id/delete", superAdminOrClubAdminAuthentication, deletePlayer);
+
+// ---------- Coach (mobile app): apni team ke players ka CRUD ----------
+router.post("/user/coach/players/create", authentication, createCoachPlayer);
+router.get("/user/coach/players", authentication, listCoachPlayers);
+router.get("/user/coach/players/:id", authentication, getCoachPlayer);
+router.put("/user/coach/players/:id/update", authentication, updateCoachPlayer);
+router.delete("/user/coach/players/:id/delete", authentication, deleteCoachPlayer);
 
 // Player ke parents (admin: link / unlink)
 router.post("/user/players/:id/parents/link", superAdminOrClubAdminAuthentication, linkParentToPlayer);

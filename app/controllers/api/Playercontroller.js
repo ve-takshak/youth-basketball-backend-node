@@ -7,6 +7,7 @@ const Team = require("../../models/Team");
 const Parent = require("../../models/Parent");
 const Player = require("../../models/Player");
 const ClubAdmin = require("../../models/ClubAdmin");
+const Coach = require("../../models/Coach");
 require("../../models/TeamCategory"); // getPlayer mein team.categoryId populate ke liye model register ho
 const { SHIRT_SIZES, WEAR_SIZE_FIELDS, PLAYER_STATUSES, PLAYER_TYPES, PARENT_RELATIONS } = require("../../models/Player");
 const { ROLES } = require("../../helpers/constants");
@@ -525,8 +526,16 @@ const formatPlayerDetail = async (player) => {
     };
 };
 
+// Coach ki apni teams ki ids (string), usi ke club mein
+const getCoachTeamIds = async (req) => {
+    const coach = await Coach.findOne({ userId: req.user._id }).select("_id");
+    if (!coach) return [];
+    const teams = await Team.find({ coachId: coach._id, clubId: req.clubId }).select("_id");
+    return teams.map((t) => String(t._id));
+};
+
 // Saare error responses ek jaise
-const sendError = (res, status, message, data = {}) =>
+const sendError =(res, status, message, data = {}) =>
     res.status(status).json({ error: true, status, message, message_desc: message, data });
 
 const sendServerError = (res, label, e) => {
@@ -585,13 +594,30 @@ const createPlayer = async (req, res) => {
         values.status = values.status || "active";
         values.playerType = playerType;
 
-        // clubAdmin apne club mein, superAdmin body se club chunega
-        const clubId = req.user.role === ROLES.CLUB_ADMIN ? String(req.clubId) : String(body.clubId || "").trim();
+        // clubAdmin / coach apne club mein, superAdmin body se club chunega
+        const isCoach = req.user.role === ROLES.COACH;
+        const clubId = [ROLES.CLUB_ADMIN, ROLES.COACH].includes(req.user.role)
+            ? String(req.clubId)
+            : String(body.clubId || "").trim();
         if (!isValidId(clubId) || !(await Club.exists({ _id: clubId }))) {
             return sendError(res, 400, "Please select a valid club.");
         }
 
-        const teamResult = await resolveTeam(body.teamId, clubId);
+        // Coach: player sirf apni team mein. Ek hi team ho aur teamId na bheja ho toh wahi team.
+        let teamIdInput = body.teamId;
+        if (isCoach) {
+            const myTeamIds = await getCoachTeamIds(req);
+            if (myTeamIds.length === 0) return sendError(res, 403, "You are not assigned to any team.");
+            if (!teamIdInput || !String(teamIdInput).trim()) {
+                if (myTeamIds.length > 1) return sendError(res, 400, "Please select a team.");
+                teamIdInput = myTeamIds[0];
+            }
+            if (!myTeamIds.includes(String(teamIdInput))) {
+                return sendError(res, 403, "You can add players only to your own team.");
+            }
+        }
+
+        const teamResult = await resolveTeam(teamIdInput, clubId);
         if (teamResult.message) return sendError(res, teamResult.status, teamResult.message);
 
         const ruleError = await checkTeamRules({
@@ -668,6 +694,128 @@ const createPlayer = async (req, res) => {
         await rollbackCreated(created);
         if (uploadedDoc) await removeIdDocument(uploadedDoc);
         return sendServerError(res, "Create player", e);
+    }
+};
+
+/**
+ * POST /api/user/coach/players/create   (sirf coach, mobile app)
+ * Body createPlayer jaisi hi (clubId nahi chahiye, coach ka apna club lagta hai).
+ * teamId: coach ki apni team. Coach ki ek hi team ho toh teamId optional.
+ */
+const createCoachPlayer = async (req, res) => {
+    if (req.user.role !== ROLES.COACH) return sendError(res, 403, "Access denied. Coach only.");
+    return createPlayer(req, res);
+};
+
+/**
+ * Coach ke get / update / delete ke liye: player coach ki apni kisi team mein hai?
+ * Galti ho toh { status, message }, warna { player, teamIds }
+ */
+const loadCoachPlayer = async (req) => {
+    if (req.user.role !== ROLES.COACH) return { status: 403, message: "Access denied. Coach only." };
+    const { id } = req.params;
+    if (!isValidId(id)) return { status: 400, message: "Invalid player id." };
+
+    const teamIds = await getCoachTeamIds(req);
+    const player = await Player.findById(id).select("teamId clubId createdBy");
+    // Dusri team / club ka player coach ke liye "hai hi nahi"
+    if (!player || !player.teamId || !teamIds.includes(String(player.teamId))) {
+        return { status: 404, message: "Player not found." };
+    }
+    return { player, teamIds };
+};
+
+/**
+ * GET /api/user/coach/players?teamId=&status=&gender=&playerType=&search=&page=1&limit=10   (sirf coach)
+ * Coach ki saari teams ke players. teamId do toh sirf us team ke (coach ki apni team honi chahiye).
+ */
+const listCoachPlayers = async (req, res) => {
+    try {
+        if (req.user.role !== ROLES.COACH) return sendError(res, 403, "Access denied. Coach only.");
+
+        const teamId = String(req.query.teamId || "").trim();
+        const { page, limit, skip } = getPagination(req.query);
+
+        const teamIds = await getCoachTeamIds(req);
+        if (teamId && !teamIds.includes(teamId)) return sendError(res, 403, "This is not your team.");
+
+        const built = await buildPlayerFilter(req);
+        if (built.message) return sendError(res, built.status, built.message);
+        const { filter } = built;
+        filter.clubId = req.clubId; // query ka clubId coach ke liye nahi chalega
+        filter.teamId = teamId ? teamId : { $in: teamIds };
+
+        const [players, total] = await Promise.all([
+            populatePlayer(Player.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit)),
+            Player.countDocuments(filter),
+        ]);
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Players fetched successfully.",
+            message_desc: "Players fetched successfully.",
+            data: {
+                players: players.map(formatPlayer),
+                pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
+            },
+        });
+    } catch (e) {
+        return sendServerError(res, "Coach list players", e);
+    }
+};
+
+/**
+ * GET /api/user/coach/players/:id   (sirf coach, apni team ka player)
+ * Response admin wale getPlayer jaisa (club, team, coach, parents ke saath)
+ */
+const getCoachPlayer = async (req, res) => {
+    try {
+        const check = await loadCoachPlayer(req);
+        if (check.message) return sendError(res, check.status, check.message);
+        return getPlayer(req, res);
+    } catch (e) {
+        return sendServerError(res, "Coach get player", e);
+    }
+};
+
+/**
+ * PUT /api/user/coach/players/:id/update   (sirf coach, apni team ka player)
+ * Body admin wale updatePlayer jaisi. teamId bhejo toh coach ki apni hi team honi chahiye
+ * (team se hatana "" coach nahi kar sakta, wo club admin karega).
+ */
+const updateCoachPlayer = async (req, res) => {
+    try {
+        const check = await loadCoachPlayer(req);
+        if (check.message) return sendError(res, check.status, check.message);
+
+        const body = req.body || {};
+        if (body.teamId !== undefined) {
+            const teamId = String(body.teamId || "").trim();
+            if (!teamId) return sendError(res, 400, "Coach cannot remove a player from the team. Please contact the club admin.");
+            if (!check.teamIds.includes(teamId)) return sendError(res, 403, "You can move players only to your own team.");
+        }
+        return updatePlayer(req, res);
+    } catch (e) {
+        return sendServerError(res, "Coach update player", e);
+    }
+};
+
+/**
+ * DELETE /api/user/coach/players/:id/delete   (sirf coach)
+ * Sirf wahi player jo is coach ne khud add kiya ho aur abhi bhi uski team mein ho.
+ * Parent / club admin ke registered players coach delete nahi kar sakta.
+ */
+const deleteCoachPlayer = async (req, res) => {
+    try {
+        const check = await loadCoachPlayer(req);
+        if (check.message) return sendError(res, check.status, check.message);
+        if (String(check.player.createdBy) !== String(req.user._id)) {
+            return sendError(res, 403, "You can delete only players you added. Please contact the club admin.");
+        }
+        return deletePlayer(req, res);
+    } catch (e) {
+        return sendServerError(res, "Coach delete player", e);
     }
 };
 
@@ -1305,6 +1453,11 @@ const removePlayerFromTeam = async (req, res) => {
 
 module.exports = {
     createPlayer,
+    createCoachPlayer,
+    listCoachPlayers,
+    getCoachPlayer,
+    updateCoachPlayer,
+    deleteCoachPlayer,
     listPlayers,
     listUnassignedPlayers,
     getPlayer,
