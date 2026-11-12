@@ -36,6 +36,15 @@ const ClubSchema = new mongoose.Schema(
         deductionFileNumber: { type: String, trim: true, default: "" }, // תיק ניכויים
         officialAddress: { type: String, trim: true, default: "" },
 
+        // Payments: har club apne hisaab se (club owner dashboard se badalta hai)
+        paymentSettings: {
+            // false = jersey ka paisa baaki ho toh parent app mein aage nahi ja sakta (sirf payment screen)
+            allowAppWithUnpaidJersey: { type: Boolean, default: true },
+            // Season fee Standing Order (har mahine) se bhi de sakte hain?
+            allowStandingOrder: { type: Boolean, default: true },
+            maxInstallments: { type: Number, min: 1, max: 12, default: 10 },
+        },
+
         // Soft-delete: archived club ke users login/API use nahi kar sakte, data bacha rehta hai
         isArchived: { type: Boolean, default: false, index: true },
         archivedAt: { type: Date, default: null },

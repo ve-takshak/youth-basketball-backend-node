@@ -88,6 +88,29 @@ const {
 } = require("../app/controllers/api/scheduleController");
 const { createNote, updateNote, deleteNote, listCoachNotes, listPlayerNotes, getNote } = require("../app/controllers/api/Notecontroller");
 
+const {
+    listPaymentProviders,
+    getPaymentGateway,
+    savePaymentGateway,
+    testPaymentGateway,
+    updatePaymentSettings,
+} = require("../app/controllers/api/paymentGatewayController");
+const {
+    issueCharges,
+    listCharges,
+    getPaymentsSummary,
+    getCharge,
+    updateCharge,
+    markChargePaid,
+    cancelCharge,
+    refundCharge,
+    getChargeReceipt,
+    getTeamPaymentStatus,
+} = require("../app/controllers/api/chargeController");
+const { listFeePlans, createFeePlan, getFeePlan, updateFeePlan, deleteFeePlan } = require("../app/controllers/api/feePlanController");
+const { listMyPayments, checkoutCharge, getMyReceipt } = require("../app/controllers/api/parentPaymentController");
+const { paymentWebhook, paymentReturn } = require("../app/controllers/api/paymentWebhookController");
+
 router.get("/test", (req, res) => res.send("API working"));
 
 // ---------- Auth (mobile + OTP) ----------
@@ -224,5 +247,41 @@ router.get("/user/notes/player", authentication, listPlayerNotes);
 router.get("/user/notes/:id", authentication, getNote);
 router.put("/user/notes/:id/update", authentication, updateNote);
 router.delete("/user/notes/:id/delete", authentication, deleteNote);
+
+// ---------- Payment gateway (club admin / super admin) ----------
+router.get("/user/payments/providers", superAdminOrClubAdminAuthentication, listPaymentProviders);
+router.get("/user/clubs/:id/payment-gateway", superAdminOrClubAdminAuthentication, getPaymentGateway);
+router.put("/user/clubs/:id/payment-gateway", superAdminOrClubAdminAuthentication, savePaymentGateway);
+router.post("/user/clubs/:id/payment-gateway/test", superAdminOrClubAdminAuthentication, testPaymentGateway); // test console, koi charge nahi
+router.put("/user/clubs/:id/payment-settings", superAdminOrClubAdminAuthentication, updatePaymentSettings);
+
+// ---------- Fee plans / price list (club admin / super admin) ----------
+router.get("/user/payments/fee-plans", superAdminOrClubAdminAuthentication, listFeePlans);
+router.post("/user/payments/fee-plans", superAdminOrClubAdminAuthentication, createFeePlan); // club admin price set karta hai
+router.get("/user/payments/fee-plans/:id", superAdminOrClubAdminAuthentication, getFeePlan); // + Standing Order preview
+router.put("/user/payments/fee-plans/:id", superAdminOrClubAdminAuthentication, updateFeePlan); // purane bills nahi badalte
+router.delete("/user/payments/fee-plans/:id", superAdminOrClubAdminAuthentication, deleteFeePlan); // bills bane hon toh sirf band
+
+// ---------- Payments (club admin / super admin) ----------
+// Fixed paths (issue, summary) ":id" se PEHLE
+router.post("/user/payments/charges/issue", superAdminOrClubAdminAuthentication, issueCharges);
+router.get("/user/payments/summary", superAdminOrClubAdminAuthentication, getPaymentsSummary);
+router.get("/user/payments/charges", superAdminOrClubAdminAuthentication, listCharges);
+router.get("/user/payments/charges/:id", superAdminOrClubAdminAuthentication, getCharge);
+router.put("/user/payments/charges/:id", superAdminOrClubAdminAuthentication, updateCharge); // ek player ki alag fee (pay se pehle)
+router.put("/user/payments/charges/:id/mark-paid", superAdminOrClubAdminAuthentication, markChargePaid);
+router.put("/user/payments/charges/:id/cancel", superAdminOrClubAdminAuthentication, cancelCharge);
+router.post("/user/payments/charges/:id/refund", superAdminOrClubAdminAuthentication, refundCharge);
+router.get("/user/payments/charges/:id/receipt", superAdminOrClubAdminAuthentication, getChargeReceipt);
+router.get("/user/teams/:id/payment-status", authentication, getTeamPaymentStatus); // roster badges, coach bhi
+
+// ---------- Payments (parent mobile app) ----------
+router.get("/user/parent/payments", authentication, listMyPayments);
+router.post("/user/parent/payments/:id/checkout", authentication, checkoutCharge); // Tranzila page ka URL deta hai
+router.get("/user/parent/payments/:id/receipt", authentication, getMyReceipt);
+
+// ---------- Payment gateway callbacks (bina token) ----------
+router.post("/payments/webhook/:gatewayId/:key", paymentWebhook); // Tranzila notify
+router.get("/payments/return", paymentReturn);
 
 module.exports = router;
