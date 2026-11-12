@@ -25,7 +25,7 @@ const addMonths = (date, months) => {
 };
 
 /**
- * Standing Order ka plan: pehli kisht mein upfront items (jersey, envelope) + mahine ki kisht.
+ * Standing Order ka plan: pehli kisht mein upfront items (jersey) + mahine ki kisht.
  * season fee / installments = monthlyAmount (paise ka farak aakhri kisht mein nahi, pehli mein).
  */
 const splitPlan = (items, installments) => {

@@ -5,6 +5,7 @@ const Player = require("../../models/Player");
 const Team = require("../../models/Team");
 const Coach = require("../../models/Coach");
 const FeePlan = require("../../models/FeePlan");
+const User = require("../../models/User");
 const { parseItems } = require("../../helpers/chargeItems");
 const { CHARGE_ITEM_TYPES, CURRENCIES, PAYMENT_METHODS, UPFRONT_ITEM_TYPES } = require("../../models/Charge");
 const { ROLES } = require("../../helpers/constants");
@@ -61,11 +62,13 @@ const findCharge = async (req, id, select = "") => {
 };
 
 /**
- * Season registration bill banana: ek player = ek bill (items: season fee, jersey, Athlete Services Envelope...).
+ * Season registration bill banana: ek player = ek bill (items: season fee, jersey...).
  * Do tarah se:
  *   feePlanId do  -> price / items / season / title / dueDate club ki price list (Fee Plan) se. teamId / playerIds
  *                    na do toh plan ki saari teams (plan "saari teams" ka ho toh teamId ya playerIds dena zaroori).
  *   items do      -> haath se price (purana tareeka).
+ * Age group wala plan: team / club ke sirf us birth year wale players (playerIds diye hon toh age check nahi).
+ *   Kuch na do toh club ke saare players us birth year ke (team na ho tab bhi).
  * teamId do toh poori team, playerIds do toh sirf wo. Jis player ka same plan (ya same season + title) ka bill pehle se hai, wo skip.
  * overrides: kisi player ki alag fee, [{ playerId, items: [{ type, name, amount }] }]. Baaki sab ko normal price.
  * body: { clubId?, feePlanId?, season?, title?, teamId?, playerIds?, items?: [{ type, name, amount }], overrides?, dueDate?, currency? }
@@ -129,10 +132,29 @@ const issueCharges = async (req, res) => {
             if (planTeamIds.length && !filter.teamId) filter.teamId = { $in: planTeamIds };
         }
         if (!filter.teamId && !filter._id && planTeamIds.length) filter.teamId = { $in: planTeamIds };
-        if (!filter.teamId && !filter._id) return sendError(res, 400, "Choose a team or players.");
 
-        const players = await Player.find(filter).select("_id season");
-        if (!players.length) return sendError(res, 404, "No players found.");
+        // Age group wala plan: team / poore club ke players mein se sirf us birth year wale.
+        // playerIds khud diye hon toh admin ki marzi (age check nahi), jaise U14 ka bachcha U16 mein khele.
+        const ageGroup = plan?.ageGroup?.birthYearFrom && plan?.ageGroup?.birthYearTo ? plan.ageGroup : null;
+        const checkAge = Boolean(ageGroup) && !filter._id;
+        if (!filter.teamId && !filter._id && !ageGroup) return sendError(res, 400, "Choose a team or players.");
+
+        let players = await Player.find(filter).select("_id season userId");
+        let otherAge = 0;
+        if (checkAge && players.length) {
+            // birthDate "YYYY-MM-DD" UTC midnight pe save hota hai, isliye UTC saal ki seema
+            const inRange = await User.find({
+                _id: { $in: players.map((p) => p.userId) },
+                birthDate: { $gte: new Date(Date.UTC(ageGroup.birthYearFrom, 0, 1)), $lt: new Date(Date.UTC(ageGroup.birthYearTo + 1, 0, 1)) },
+            }).distinct("_id");
+            const ok = new Set(inRange.map(String));
+            const before = players.length;
+            players = players.filter((p) => ok.has(String(p.userId)));
+            otherAge = before - players.length;
+        }
+        if (!players.length) {
+            return sendError(res, 404, ageGroup && checkAge ? `No players born ${ageGroup.birthYearFrom}-${ageGroup.birthYearTo} found.` : "No players found.");
+        }
 
         const existing = await Charge.find({
             clubId,
@@ -188,6 +210,7 @@ const issueCharges = async (req, res) => {
             created: created.length,
             skipped: players.length - created.length,
             customAmounts: [...overrides.keys()].filter((id) => !already.has(id)).length,
+            skippedOtherAge: otherAge, // team mein the par birth year is age group ka nahi
             chargeIds: created,
         });
     } catch (e) {

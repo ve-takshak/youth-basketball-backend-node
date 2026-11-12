@@ -4319,7 +4319,7 @@
     },
     "/user/payments/fee-plans": {
       "get": {
-        "description": "**Access:** Super admin or club admin\n\n```\nClub ki price list\nquery: clubId? (superAdmin), season?, teamId?, active? (true | false)\n```",
+        "description": "**Access:** Super admin or club admin\n\n```\nClub ki price list\nquery: clubId? (superAdmin), season?, teamId?, birthYear? (2013 -> U14 plan), active? (true | false)\n```",
         "parameters": [
           {
             "name": "clubId",
@@ -4348,6 +4348,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "birthYear",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4369,7 +4376,7 @@
         ]
       },
       "post": {
-        "description": "**Access:** Super admin or club admin\n\nclub admin price set karta hai\n\n```\nNaya price plan\nbody: { clubId?, name, season, items: [{ type, name, amount }], teamIds?, currency?, dueDate?, isActive? }\n```",
+        "description": "**Access:** Super admin or club admin\n\nclub admin price set karta hai\n\n```\nNaya price plan\nageGroup: { name: \"U14\", birthYearFrom: 2013, birthYearTo: 2014 } (player ki birth year se). Same season mein years overlap nahi.\nbody: { clubId?, name, season, items: [{ type, name, amount }], ageGroup?, teamIds?, currency?, dueDate?, isActive? }\n```",
         "responses": {
           "401": {
             "description": "Missing or invalid token"
@@ -4399,6 +4406,9 @@
                     "type": "string"
                   },
                   "items": {
+                    "type": "string"
+                  },
+                  "ageGroup": {
                     "type": "string"
                   },
                   "teamIds": {
@@ -4461,7 +4471,7 @@
         ]
       },
       "put": {
-        "description": "**Access:** Super admin or club admin\n\npurane bills nahi badalte\n\n```\nPlan badalna (jo field bhejo wahi badlega). Pehle bane bills nahi badalte, sirf naye bills naye price se.\nbody: { name?, season?, items?, teamIds?, currency?, dueDate?, isActive? }\n```",
+        "description": "**Access:** Super admin or club admin\n\npurane bills nahi badalte\n\n```\nPlan badalna (jo field bhejo wahi badlega). Pehle bane bills nahi badalte, sirf naye bills naye price se.\nbody: { name?, season?, items?, ageGroup? (null = hatao), teamIds?, currency?, dueDate?, isActive? }\n```",
         "parameters": [
           {
             "name": "id",
@@ -4503,6 +4513,9 @@
                     "type": "string"
                   },
                   "items": {
+                    "type": "string"
+                  },
+                  "ageGroup": {
                     "type": "string"
                   },
                   "teamIds": {
@@ -4556,7 +4569,7 @@
     },
     "/user/payments/charges/issue": {
       "post": {
-        "description": "**Access:** Super admin or club admin\n\n```\nSeason registration bill banana: ek player = ek bill (items: season fee, jersey, Athlete Services Envelope...).\nDo tarah se:\n  feePlanId do  -> price / items / season / title / dueDate club ki price list (Fee Plan) se. teamId / playerIds\n                   na do toh plan ki saari teams (plan \"saari teams\" ka ho toh teamId ya playerIds dena zaroori).\n  items do      -> haath se price (purana tareeka).\nteamId do toh poori team, playerIds do toh sirf wo. Jis player ka same plan (ya same season + title) ka bill pehle se hai, wo skip.\noverrides: kisi player ki alag fee, [{ playerId, items: [{ type, name, amount }] }]. Baaki sab ko normal price.\nbody: { clubId?, feePlanId?, season?, title?, teamId?, playerIds?, items?: [{ type, name, amount }], overrides?, dueDate?, currency? }\n```",
+        "description": "**Access:** Super admin or club admin\n\n```\nSeason registration bill banana: ek player = ek bill (items: season fee, jersey...).\nDo tarah se:\n  feePlanId do  -> price / items / season / title / dueDate club ki price list (Fee Plan) se. teamId / playerIds\n                   na do toh plan ki saari teams (plan \"saari teams\" ka ho toh teamId ya playerIds dena zaroori).\n  items do      -> haath se price (purana tareeka).\nAge group wala plan: team / club ke sirf us birth year wale players (playerIds diye hon toh age check nahi).\n  Kuch na do toh club ke saare players us birth year ke (team na ho tab bhi).\nteamId do toh poori team, playerIds do toh sirf wo. Jis player ka same plan (ya same season + title) ka bill pehle se hai, wo skip.\noverrides: kisi player ki alag fee, [{ playerId, items: [{ type, name, amount }] }]. Baaki sab ko normal price.\nbody: { clubId?, feePlanId?, season?, title?, teamId?, playerIds?, items?: [{ type, name, amount }], overrides?, dueDate?, currency? }\n```",
         "responses": {
           "401": {
             "description": "Missing or invalid token"
@@ -5023,7 +5036,7 @@
     },
     "/user/parent/payments/{id}/checkout": {
       "post": {
-        "description": "**Access:** Any logged-in user\n\nTranzila page ka URL deta hai\n\n```\nPay karna shuru. data.checkout.url app mein kholo (Tranzila ka page). Result webhook se aata hai.\nplan \"one_time\" = poora ek baar mein. plan \"standing_order\" = jersey/envelope + pehli kisht aaj, baaki har mahine.\nbody: { plan, installments?, language? }\n```",
+        "description": "**Access:** Any logged-in user\n\nTranzila page ka URL deta hai\n\n```\nPay karna shuru. data.checkout.url app mein kholo (Tranzila ka page). Result webhook se aata hai.\nplan \"one_time\" = poora ek baar mein. plan \"standing_order\" = jersey + pehli kisht aaj, baaki har mahine.\nbody: { plan, installments?, language? }\n```",
         "parameters": [
           {
             "name": "id",

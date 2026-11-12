@@ -112,7 +112,7 @@ const listMyPayments = async (req, res) => {
 
 /**
  * Pay karna shuru. data.checkout.url app mein kholo (Tranzila ka page). Result webhook se aata hai.
- * plan "one_time" = poora ek baar mein. plan "standing_order" = jersey/envelope + pehli kisht aaj, baaki har mahine.
+ * plan "one_time" = poora ek baar mein. plan "standing_order" = jersey + pehli kisht aaj, baaki har mahine.
  * body: { plan, installments?, language? }
  */
 const checkoutCharge = async (req, res) => {

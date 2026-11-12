@@ -41,6 +41,49 @@ const findPlan = async (req, id) => {
     return { plan };
 };
 
+const hasAgeGroup = (plan) => Boolean(plan.ageGroup && plan.ageGroup.birthYearFrom && plan.ageGroup.birthYearTo);
+
+// { name, birthYearFrom, birthYearTo } check. null / "" = age group hatao.
+const parseAgeGroup = (raw) => {
+    let value = raw;
+    if (typeof value === "string") {
+        if (!value.trim()) return { ageGroup: { name: "", birthYearFrom: null, birthYearTo: null } };
+        try {
+            value = JSON.parse(value);
+        } catch (e) {
+            return { message: "Age group must be an object: { name, birthYearFrom, birthYearTo }." };
+        }
+    }
+    if (value === null) return { ageGroup: { name: "", birthYearFrom: null, birthYearTo: null } };
+    if (typeof value !== "object" || Array.isArray(value)) return { message: "Age group must be an object: { name, birthYearFrom, birthYearTo }." };
+
+    const name = String(value.name || "").trim();
+    if (!name) return { message: "Age group name is required (for example U14)." };
+    if (name.length > 30) return { message: "Age group name must be 30 characters or less." };
+
+    const thisYear = new Date().getFullYear();
+    const from = Number(value.birthYearFrom);
+    const to = value.birthYearTo === undefined || value.birthYearTo === "" ? from : Number(value.birthYearTo);
+    const validYear = (y) => Number.isInteger(y) && y >= 1950 && y <= thisYear;
+    if (!validYear(from) || !validYear(to)) return { message: `Birth years must be between 1950 and ${thisYear}.` };
+    if (from > to) return { message: "birthYearFrom must be the same as or before birthYearTo." };
+    return { ageGroup: { name, birthYearFrom: from, birthYearTo: to } };
+};
+
+// Same club + season mein do chalu plans ke birth years ek doosre pe na chadhein (warna registration pe kaunsa?)
+const findAgeOverlap = (clubId, season, ageGroup, excludeId = null) =>
+    FeePlan.findOne({
+        clubId,
+        season,
+        isActive: true,
+        "ageGroup.birthYearFrom": { $ne: null, $lte: ageGroup.birthYearTo },
+        "ageGroup.birthYearTo": { $ne: null, $gte: ageGroup.birthYearFrom },
+        ...(excludeId ? { _id: { $ne: excludeId } } : {}),
+    }).select("name ageGroup");
+
+const overlapMessage = (other) =>
+    `"${other.name}" (${other.ageGroup.name}, born ${other.ageGroup.birthYearFrom}-${other.ageGroup.birthYearTo}) already covers these birth years for this season. Turn it off or change the years first.`;
+
 // Standing Order mein parent ko kitna dikhega (preview). Club setting ke maxInstallments tak.
 const installmentPreview = (plan, maxInstallments) => {
     const spreadTotal = plan.items.filter((i) => !UPFRONT_ITEM_TYPES.includes(i.type)).reduce((s, i) => s + i.amount, 0);
@@ -56,6 +99,9 @@ const formatPlan = (plan, { issuedCount, maxInstallments } = {}) => ({
     clubId: plan.clubId,
     name: plan.name,
     season: plan.season,
+    ageGroup: hasAgeGroup(plan)
+        ? { name: plan.ageGroup.name, birthYearFrom: plan.ageGroup.birthYearFrom, birthYearTo: plan.ageGroup.birthYearTo }
+        : null,
     teams: (plan.teamIds || []).map((t) => (t && t.name !== undefined ? { _id: t._id, name: t.name } : { _id: t, name: "" })),
     allTeams: !(plan.teamIds || []).length,
     items: plan.items.map((i) => ({ _id: i._id, type: i.type, name: i.name, amount: i.amount })),
@@ -116,13 +162,18 @@ const parseBody = async (body, clubId, { partial = false } = {}) => {
         }
         out.teamIds = ids;
     }
+    if (body.ageGroup !== undefined) {
+        const parsed = parseAgeGroup(body.ageGroup);
+        if (parsed.message) return { message: parsed.message };
+        out.ageGroup = parsed.ageGroup;
+    }
     if (body.isActive !== undefined) out.isActive = [true, "true", 1, "1"].includes(body.isActive);
     return { data: out };
 };
 
 /**
  * Club ki price list
- * query: clubId? (superAdmin), season?, teamId?, active? (true | false)
+ * query: clubId? (superAdmin), season?, teamId?, birthYear? (2013 -> U14 plan), active? (true | false)
  */
 const listFeePlans = async (req, res) => {
     try {
@@ -141,6 +192,13 @@ const listFeePlans = async (req, res) => {
             // Is team ke plan + "saari teams" wale plan
             filter.$or = [{ teamIds: req.query.teamId }, { teamIds: { $size: 0 } }];
         }
+        // Is birth year ka plan (registration screen: 2013 mein paida hua -> U14 plan)
+        if (req.query.birthYear) {
+            const year = Number(req.query.birthYear);
+            if (!Number.isInteger(year)) return sendError(res, 400, "birthYear must be a year, for example 2013.");
+            filter["ageGroup.birthYearFrom"] = { $lte: year };
+            filter["ageGroup.birthYearTo"] = { $gte: year };
+        }
 
         const plans = await FeePlan.find(filter).sort({ createdAt: -1 }).populate("teamIds", "name");
         const counts = await Charge.aggregate([
@@ -157,7 +215,8 @@ const listFeePlans = async (req, res) => {
 
 /**
  * Naya price plan
- * body: { clubId?, name, season, items: [{ type, name, amount }], teamIds?, currency?, dueDate?, isActive? }
+ * ageGroup: { name: "U14", birthYearFrom: 2013, birthYearTo: 2014 } (player ki birth year se). Same season mein years overlap nahi.
+ * body: { clubId?, name, season, items: [{ type, name, amount }], ageGroup?, teamIds?, currency?, dueDate?, isActive? }
  */
 const createFeePlan = async (req, res) => {
     try {
@@ -167,6 +226,12 @@ const createFeePlan = async (req, res) => {
 
         const parsed = await parseBody(body, clubId);
         if (parsed.message) return sendError(res, 400, parsed.message);
+
+        const data = parsed.data;
+        if (data.ageGroup?.birthYearFrom && data.isActive !== false) {
+            const other = await findAgeOverlap(clubId, data.season, data.ageGroup);
+            if (other) return sendError(res, 409, overlapMessage(other));
+        }
 
         const plan = await FeePlan.create({ ...parsed.data, clubId, createdBy: req.user._id });
         await plan.populate("teamIds", "name");
@@ -195,7 +260,7 @@ const getFeePlan = async (req, res) => {
 
 /**
  * Plan badalna (jo field bhejo wahi badlega). Pehle bane bills nahi badalte, sirf naye bills naye price se.
- * body: { name?, season?, items?, teamIds?, currency?, dueDate?, isActive? }
+ * body: { name?, season?, items?, ageGroup? (null = hatao), teamIds?, currency?, dueDate?, isActive? }
  */
 const updateFeePlan = async (req, res) => {
     try {
@@ -206,6 +271,10 @@ const updateFeePlan = async (req, res) => {
         if (parsed.message) return sendError(res, 400, parsed.message);
 
         Object.assign(plan, parsed.data, { updatedBy: req.user._id });
+        if (hasAgeGroup(plan) && plan.isActive) {
+            const other = await findAgeOverlap(plan.clubId, plan.season, plan.ageGroup, plan._id);
+            if (other) return sendError(res, 409, overlapMessage(other));
+        }
         await plan.save();
         await plan.populate("teamIds", "name");
         const issuedCount = await Charge.countDocuments({ feePlanId: plan._id, status: { $nin: ["cancelled"] } });

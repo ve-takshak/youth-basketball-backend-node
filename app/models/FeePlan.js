@@ -21,6 +21,13 @@ const FeePlanSchema = new mongoose.Schema(
         name: { type: String, trim: true, required: true }, // "Season registration 2026 / 2027" -> bill ka title bhi
         season: { type: String, trim: true, default: "" },
         teamIds: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Team" }], default: [] },
+        // Age group: player ki birth year (User.birthDate) se. U14 = 2013-2014. Khaali = koi age limit nahi.
+        // Registration ke waqt team nahi hoti, isliye fee birth year se milti hai.
+        ageGroup: {
+            name: { type: String, trim: true, default: "" }, // "U14"
+            birthYearFrom: { type: Number, default: null },
+            birthYearTo: { type: Number, default: null },
+        },
         items: { type: [FeePlanItemSchema], validate: (v) => v.length > 0 },
         amount: { type: Number, min: 0, required: true }, // items ka total
         currency: { type: String, enum: CURRENCIES, default: "ILS" },
@@ -33,5 +40,6 @@ const FeePlanSchema = new mongoose.Schema(
 );
 
 FeePlanSchema.index({ clubId: 1, season: 1, isActive: 1 });
+FeePlanSchema.index({ clubId: 1, season: 1, "ageGroup.birthYearFrom": 1, "ageGroup.birthYearTo": 1 });
 
 module.exports = mongoose.model("FeePlan", FeePlanSchema);

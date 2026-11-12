@@ -1,7 +1,7 @@
 const crypto = require("crypto");
 const mongoose = require("../../config/database");
 
-// Ek player ka ek bill (invoice): season registration + Athlete Services Envelope fee waghera.
+// Ek player ka ek bill (invoice): season registration + jersey waghera.
 // Parent mobile app se pay karta hai (gateway ka hosted page) ya admin cash / bank transfer mark karta hai.
 //
 // status DB mein:  unpaid | pending | paid | failed | refunded | cancelled
@@ -10,11 +10,11 @@ const mongoose = require("../../config/database");
 //
 // Do tarah se pay:
 //   plan "one_time"        -> poora amount ek baar mein
-//   plan "standing_order"  -> jersey / envelope jaise "upfront" items pehli kisht ke saath, season fee har mahine
+//   plan "standing_order"  -> jersey jaise "upfront" items pehli kisht ke saath, season fee har mahine
 //                             (Tranzila My Billing STO, token terminal pe). sto.* Tranzila se sync hota hai.
-const CHARGE_ITEM_TYPES = ["season_registration", "jersey", "athlete_envelope", "other"];
+const CHARGE_ITEM_TYPES = ["season_registration", "jersey", "other"];
 // Ye items Standing Order mein bhi pehli payment mein hi poore katte hain (kisht mein nahi bant-te)
-const UPFRONT_ITEM_TYPES = ["jersey", "athlete_envelope"];
+const UPFRONT_ITEM_TYPES = ["jersey"];
 const CHARGE_STATUSES = ["unpaid", "pending", "paid", "failed", "refunded", "cancelled"];
 const PAYMENT_PLANS = ["one_time", "standing_order"];
 const PAYMENT_METHODS = ["card", "saved_card", "standing_order", "cash", "bank_transfer", "check", "other", ""];
