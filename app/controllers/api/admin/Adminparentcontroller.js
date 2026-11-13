@@ -14,7 +14,8 @@ const { populatePlayer, formatPlayer, getCoachTeamIds } = require("../Playercont
 //   DELETE /user/parents/:id/delete                       -> parent delete (sirf jab koi bachcha linked na ho)
 //   POST   /user/players/:id/parents/link                 -> youth player se parent jodna
 //   DELETE /user/players/:id/parents/:parentId/unlink     -> youth player se parent hatana
-//   GET    /user/coach/parents                            -> coach: club ke parents (link ke liye)
+//   POST   /user/players/parents/link                     -> admin: playerId body mein (coach wali jaisi)
+//   GET    /user/coach/parents                          -> coach: club ke parents (link ke liye)
 //   POST   /user/coach/players/parents/link               -> coach: apni team ke youth se parent jodna (playerId body mein)
 // clubAdmin sirf apne club ke parents / players. superAdmin sab.
 
@@ -444,6 +445,26 @@ const unlinkParentFromPlayer = async (req, res) => {
     }
 };
 
+/**
+ * POST /api/user/players/parents/link   (superAdmin ya clubAdmin, playerId body mein - coach wali API jaisa)
+ * body: { playerId, parentId }                                                -> list se purana parent
+ *    ya { playerId, firstname, lastname, countryCode, mobileNumber, email? } -> naya parent
+ * relation hamesha "guardian", player ka pehla parent apne aap primary. clubAdmin sirf apne club ka player.
+ */
+const linkAdminParent = async (req, res) => {
+    try {
+        const body = req.body || {};
+        if (!body.playerId) return sendError(res, 400, "playerId is required.");
+        const found = await findYouthPlayerForAdmin(req, body.playerId);
+        if (found.message) return sendError(res, found.status, found.message);
+
+        const { relation, isPrimary, ...rest } = body;
+        return await linkParent(req, res, found.player, rest);
+    } catch (e) {
+        return sendServerError(res, "Admin link parent", e);
+    }
+};
+
 // ---------- Coach (mobile app) ----------
 
 /**
@@ -491,6 +512,7 @@ const linkCoachParent = async (req, res) => {
 };
 
 module.exports = {
+    linkAdminParent,
     listCoachParents,
     linkCoachParent,
     listParents,

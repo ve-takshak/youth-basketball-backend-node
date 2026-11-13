@@ -69,6 +69,7 @@ const {
     unlinkParentFromPlayer,
     listCoachParents,
     linkCoachParent,
+    linkAdminParent,
 } = require("../app/controllers/api/admin/Adminparentcontroller");
 const { createFacility, listFacilities, getFacility, deleteFacility, updateFacility } = require("../app/controllers/api/facilitysController");
 const { listClubTerms, getClubTermsVersion, createClubTerms, getCurrentTerms, acceptTerms } = require("../app/controllers/api/termsController");
@@ -197,6 +198,7 @@ router.get("/user/coach/parents", authentication, listCoachParents); // club ke 
 router.post("/user/coach/players/parents/link", authentication, linkCoachParent); // body: playerId + parentId ya naye parent ki details
 
 // Player ke parents (admin: link / unlink)
+router.post("/user/players/parents/link", superAdminOrClubAdminAuthentication, linkAdminParent); // playerId body mein
 router.post("/user/players/:id/parents/link", superAdminOrClubAdminAuthentication, linkParentToPlayer);
 router.delete("/user/players/:id/parents/:parentId/unlink", superAdminOrClubAdminAuthentication, unlinkParentFromPlayer);
 

@@ -2624,6 +2624,49 @@
         ]
       }
     },
+    "/user/players/parents/link": {
+      "post": {
+        "description": "**Access:** Super admin or club admin\n\nplayerId body mein\n\n```\nbody: { playerId, parentId }                                                -> list se purana parent\n   ya { playerId, firstname, lastname, countryCode, mobileNumber, email? } -> naya parent\nrelation hamesha \"guardian\", player ka pehla parent apne aap primary. clubAdmin sirf apne club ka player.\n```",
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "playerId",
+                  "parentId"
+                ],
+                "properties": {
+                  "playerId": {
+                    "type": "string"
+                  },
+                  "parentId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Coach (mobile app): apni team ke players ka CRUD"
+        ],
+        "summary": "Link admin parent",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/user/players/{id}/parents/link": {
       "post": {
         "description": "**Access:** Super admin or club admin\n\n```\nbody: { firstname, lastname, countryCode, mobileNumber, email?, relation?, isPrimary? }\nMobile se parent pehle se hai (isi club ka) toh wahi link hota hai, warna naya parent banta hai.\n```",
