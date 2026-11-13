@@ -889,7 +889,9 @@ const listPlayers = async (req, res) => {
             const teamIds = await getCoachTeamIds(req);
             if (teamId && !teamIds.includes(teamId)) return sendError(res, 403, "This is not your team.");
             filter.clubId = req.clubId;
-            filter.teamId = teamId ? teamId : { $in: teamIds };
+            if (teamId) filter.teamId = teamId;
+            // Coach ki teams ke players + jo bina team ke coach ne khud banaye
+            else filter.$or = [{ teamId: { $in: teamIds } }, { teamId: null, createdBy: req.user._id }];
         } else if (teamId === "none") filter.teamId = null;
         else if (teamId && isValidId(teamId)) filter.teamId = teamId;
 
@@ -1013,11 +1015,15 @@ const getPlayer = async (req, res) => {
         const player = await populatePlayerDetail(Player.findById(id));
         if (!player || !canAccess(req, player.clubId)) return sendError(res, 404, "Player not found.");
 
-        // Coach: sirf apni team ka player
+        // Coach: apni team ka player, ya bina team ka jo usne khud banaya
         if (isCoach) {
             const teamIds = await getCoachTeamIds(req);
-            const playerTeamId = player.teamId?._id || player.teamId;
-            if (!playerTeamId || !teamIds.includes(String(playerTeamId))) return sendError(res, 404, "Player not found.");
+            const ids = {
+                clubId: player.clubId?._id || player.clubId,
+                teamId: player.teamId?._id || player.teamId || null,
+                createdBy: player.createdBy,
+            };
+            if (!coachSeesPlayer(req, ids, teamIds)) return sendError(res, 404, "Player not found.");
         }
 
         return res.status(200).json({
