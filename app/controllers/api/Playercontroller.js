@@ -1503,4 +1503,5 @@ module.exports = {
     removeIdDocument,
     populatePlayer,
     formatPlayer,
+    getCoachTeamIds,
 };

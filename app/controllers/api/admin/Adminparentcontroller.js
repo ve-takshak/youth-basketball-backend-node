@@ -5,7 +5,7 @@ const { PARENT_RELATIONS } = require("../../../models/Player");
 const { ROLES } = require("../../../helpers/constants");
 const { isValidId, escapeRegex, getPagination } = require("../../../helpers/common");
 const { validatePersonInput } = require("../../../helpers/userHelper");
-const { populatePlayer, formatPlayer } = require("../Playercontroller");
+const { populatePlayer, formatPlayer, getCoachTeamIds } = require("../Playercontroller");
 
 // Admin panel (superAdmin / clubAdmin) ki parent APIs:
 //   GET    /user/parents                                  -> parents ki list (bachchon ke saath)
@@ -14,6 +14,8 @@ const { populatePlayer, formatPlayer } = require("../Playercontroller");
 //   DELETE /user/parents/:id/delete                       -> parent delete (sirf jab koi bachcha linked na ho)
 //   POST   /user/players/:id/parents/link                 -> youth player se parent jodna
 //   DELETE /user/players/:id/parents/:parentId/unlink     -> youth player se parent hatana
+//   GET    /user/coach/parents                            -> coach: club ke parents (link ke liye)
+//   POST   /user/coach/players/parents/link               -> coach: apni team ke youth se parent jodna (playerId body mein)
 // clubAdmin sirf apne club ke parents / players. superAdmin sab.
 
 const sendError = (res, status, message, data = {}) =>
@@ -97,7 +99,6 @@ const listParents = async (req, res) => {
 
         const search = String(req.query.search || "").trim();
         const clubId = String(req.query.clubId || "").trim();
-        const { page, limit, skip } = getPagination(req.query);
 
         const filter = {};
         if (req.user.role === ROLES.CLUB_ADMIN) {
@@ -108,6 +109,16 @@ const listParents = async (req, res) => {
             filter.clubId = clubId;
         }
 
+        return await sendParentList(req, res, filter, search);
+    } catch (e) {
+        return sendServerError(res, "List parents", e);
+    }
+};
+
+// Parents ki list (search + pagination + bachche). filter mein clubId pehle se.
+const sendParentList = async (req, res, filter, search) => {
+    const { page, limit, skip } = getPagination(req.query);
+    {
         // Naam / mobile / email User mein hain
         if (search) {
             const rx = new RegExp(escapeRegex(search), "i");
@@ -140,8 +151,6 @@ const listParents = async (req, res) => {
                 pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
             },
         });
-    } catch (e) {
-        return sendServerError(res, "List parents", e);
     }
 };
 
@@ -304,51 +313,66 @@ const findYouthPlayerForAdmin = async (req, id) => {
  * Mobile se parent pehle se hai (isi club ka) toh wahi link hota hai, warna naya parent banta hai.
  */
 const linkParentToPlayer = async (req, res) => {
+    const found = await findYouthPlayerForAdmin(req, req.params.id).catch((e) => ({ error: e }));
+    if (found.error) return sendServerError(res, "Link parent", found.error);
+    if (found.message) return sendError(res, found.status, found.message);
+    return linkParent(req, res, found.player, req.body || {});
+};
+
+/**
+ * Player (pehle se check kiya hua youth) se parent jodna. Admin aur coach dono yahi use karte hain.
+ * body: { parentId } (list se purana parent) ya { firstname, lastname, countryCode, mobileNumber, email? } (naya)
+ *       + relation?, isPrimary?
+ */
+const linkParent = async (req, res, player, body) => {
     let createdUserId = null;
     let createdParentId = null;
     try {
-        const found = await findYouthPlayerForAdmin(req, req.params.id);
-        if (found.message) return sendError(res, found.status, found.message);
-        const { player } = found;
-
-        const body = req.body || {};
-        const checked = validatePersonInput(body);
-        if (checked.message) return sendError(res, checked.status || 400, checked.message);
-        const person = checked.values;
-
         const relation = String(body.relation || "guardian").toLowerCase();
         if (!PARENT_RELATIONS.includes(relation)) {
             return sendError(res, 400, `Relation must be one of ${PARENT_RELATIONS.join(", ")}.`);
         }
 
-        // 1. Is mobile ka User
-        let user = await User.findOne({ countryCode: person.countryCode, mobileNumber: person.mobileNumber });
-        if (user && user.role !== ROLES.PARENT) {
-            return sendError(res, 409, `This mobile number belongs to a ${user.role} account.`);
-        }
-        if (!user) {
-            if (person.email && (await User.exists({ email: person.email }))) {
-                return sendError(res, 409, "This email is already registered.");
-            }
-            user = await User.create({
-                firstname: person.firstname,
-                lastname: person.lastname,
-                email: person.email || undefined,
-                countryCode: person.countryCode,
-                mobileNumber: person.mobileNumber,
-                role: ROLES.PARENT,
-            });
-            createdUserId = user._id;
-        }
+        let parent = null;
+        if (body.parentId) {
+            // List se chuna hua parent
+            if (!isValidId(body.parentId)) return sendError(res, 400, "Invalid parent id.");
+            parent = await Parent.findById(body.parentId);
+            if (!parent || String(parent.clubId) !== String(player.clubId)) return sendError(res, 404, "Parent not found.");
+        } else {
+            const checked = validatePersonInput(body);
+            if (checked.message) return sendError(res, checked.status || 400, checked.message);
+            const person = checked.values;
 
-        // 2. Parent record (ek parent ka ek hi club)
-        let parent = await Parent.findOne({ userId: user._id });
-        if (parent && String(parent.clubId) !== String(player.clubId)) {
-            return sendError(res, 409, "This parent belongs to another club.");
-        }
-        if (!parent) {
-            parent = await Parent.create({ userId: user._id, clubId: player.clubId, createdBy: req.user._id });
-            createdParentId = parent._id;
+            // 1. Is mobile ka User
+            let user = await User.findOne({ countryCode: person.countryCode, mobileNumber: person.mobileNumber });
+            if (user && user.role !== ROLES.PARENT) {
+                return sendError(res, 409, `This mobile number belongs to a ${user.role} account.`);
+            }
+            if (!user) {
+                if (person.email && (await User.exists({ email: person.email }))) {
+                    return sendError(res, 409, "This email is already registered.");
+                }
+                user = await User.create({
+                    firstname: person.firstname,
+                    lastname: person.lastname,
+                    email: person.email || undefined,
+                    countryCode: person.countryCode,
+                    mobileNumber: person.mobileNumber,
+                    role: ROLES.PARENT,
+                });
+                createdUserId = user._id;
+            }
+
+            // 2. Parent record (ek parent ka ek hi club)
+            parent = await Parent.findOne({ userId: user._id });
+            if (parent && String(parent.clubId) !== String(player.clubId)) {
+                return sendError(res, 409, "This parent belongs to another club.");
+            }
+            if (!parent) {
+                parent = await Parent.create({ userId: user._id, clubId: player.clubId, createdBy: req.user._id });
+                createdParentId = parent._id;
+            }
         }
 
         // 3. Pehle se linked?
@@ -420,7 +444,55 @@ const unlinkParentFromPlayer = async (req, res) => {
     }
 };
 
+// ---------- Coach (mobile app) ----------
+
+/**
+ * GET /api/user/coach/parents?search=&page=1&limit=20   (sirf coach)
+ * Coach ke club ke saare parents (bachchon ke saath), taaki youth player se link karne ke liye chun sake.
+ * search: parent ka naam, mobile ya email
+ */
+const listCoachParents = async (req, res) => {
+    try {
+        if (req.user.role !== ROLES.COACH) return sendError(res, 403, "Access denied. Coach only.");
+        if (!req.clubId) return sendError(res, 403, "Your account is not linked to any club.");
+        return await sendParentList(req, res, { clubId: req.clubId }, String(req.query.search || "").trim());
+    } catch (e) {
+        return sendServerError(res, "Coach list parents", e);
+    }
+};
+
+/**
+ * POST /api/user/coach/players/parents/link   (sirf coach, apni team ka youth player)
+ * body: { playerId, parentId }                                                -> list se purana parent
+ *    ya { playerId, firstname, lastname, countryCode, mobileNumber, email? } -> naya parent
+ * relation hamesha "guardian", player ka pehla parent apne aap primary.
+ * Naye parent ka mobile club mein pehle se hai toh wahi parent link hota hai (naya nahi banta).
+ */
+const linkCoachParent = async (req, res) => {
+    try {
+        if (req.user.role !== ROLES.COACH) return sendError(res, 403, "Access denied. Coach only.");
+        const body = req.body || {};
+        if (!body.playerId) return sendError(res, 400, "playerId is required.");
+        if (!isValidId(body.playerId)) return sendError(res, 400, "Invalid player id.");
+
+        const teamIds = await getCoachTeamIds(req);
+        const player = await Player.findById(body.playerId);
+        if (!player || !player.teamId || !teamIds.includes(String(player.teamId))) {
+            return sendError(res, 404, "Player not found.");
+        }
+        if (player.playerType !== "youth") return sendError(res, 400, "Only youth players have parents.");
+
+        // Coach relation / isPrimary nahi bhejta: relation "guardian", pehla parent apne aap primary
+        const { relation, isPrimary, ...rest } = body;
+        return await linkParent(req, res, player, rest);
+    } catch (e) {
+        return sendServerError(res, "Coach link parent", e);
+    }
+};
+
 module.exports = {
+    listCoachParents,
+    linkCoachParent,
     listParents,
     getParent,
     updateParent,
