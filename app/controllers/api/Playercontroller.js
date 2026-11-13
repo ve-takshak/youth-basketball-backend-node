@@ -14,6 +14,7 @@ const { ROLES } = require("../../helpers/constants");
 const { isValidId, cleanMobile, escapeRegex, getPagination } = require("../../helpers/common");
 const { validatePersonInput } = require("../../helpers/userHelper");
 const { upload_files, deleteFiles } = require("../../../utils/s3");
+const { withSubscriptions } = require("../../helpers/subscriptionStatus");
 
 // Player do tarah ke (playerType):
 //   senior -> User role "seniorPlayer": mobile zaroori (khud login), koi parent nahi
@@ -896,7 +897,7 @@ const listPlayers = async (req, res) => {
             message: "Players fetched successfully.",
             message_desc: "Players fetched successfully.",
             data: {
-                players: players.map(formatPlayer),
+                players: await withSubscriptions(players.map(formatPlayer)), // + subscription: active | inactive
                 pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
             },
         });
@@ -1017,7 +1018,7 @@ const getPlayer = async (req, res) => {
             status: 200,
             message: "Player fetched successfully.",
             message_desc: "Player fetched successfully.",
-            data: await formatPlayerDetail(player),
+            data: (await withSubscriptions([await formatPlayerDetail(player)]))[0],
         });
     } catch (e) {
         return sendServerError(res, "Get player", e);

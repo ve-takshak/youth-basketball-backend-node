@@ -19,4 +19,10 @@ const parseSeason = (input) => {
     return { value: `${start} / ${start + 1}` };
 };
 
-module.exports = { parseSeason, SEASON_ERROR };
+// Chalu season: July se naya season (Nov 2026 -> "2026 / 2027", Mar 2027 -> "2026 / 2027")
+const currentSeason = (date = new Date()) => {
+    const start = date.getMonth() >= 6 ? date.getFullYear() : date.getFullYear() - 1;
+    return `${start} / ${start + 1}`;
+};
+
+module.exports = { parseSeason, currentSeason, SEASON_ERROR };

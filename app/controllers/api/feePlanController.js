@@ -1,21 +1,24 @@
 const moment = require("moment");
+const mongoose = require("../../../config/database");
 const FeePlan = require("../../models/FeePlan");
+const { PRICING_MODES } = require("../../models/FeePlan");
 const Charge = require("../../models/Charge");
 const Team = require("../../models/Team");
+const TeamCategory = require("../../models/TeamCategory");
 const Club = require("../../models/Club");
-const { CURRENCIES, UPFRONT_ITEM_TYPES } = require("../../models/Charge");
+const { CURRENCIES } = require("../../models/Charge");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId } = require("../../helpers/common");
 const { parseSeason } = require("../../helpers/season");
-const { parseItems } = require("../../helpers/chargeItems");
-const { splitPlan } = require("../../helpers/paymentStatus");
+const { splitPlan, round } = require("../../helpers/paymentStatus");
 
-// Club ki price list (Fee Plans). Club admin price set karta hai, bill banate waqt feePlanId bhejta hai.
-//   GET    /user/payments/fee-plans
-//   POST   /user/payments/fee-plans
-//   GET    /user/payments/fee-plans/:id
+// Club ka saal ka Fee Plan (Subscription Plan screen). Ek club + season ka ek hi chalu plan.
+//   GET    /user/payments/fee-plans          list + saare age groups (naya plan banane ke liye)
+//   POST   /user/payments/fee-plans          ek call mein: same / har age group ki fee + jersey
+//   GET    /user/payments/fee-plans/:id      + monthly (Standing Order) preview
 //   PUT    /user/payments/fee-plans/:id
 //   DELETE /user/payments/fee-plans/:id
+// Age group = team category (U12 Minis, U14 Boys...). Player ka age group = uski team ki category.
 
 const sendError = (res, status, message, data = {}) =>
     res.status(status).json({ error: true, status, message, message_desc: message, data });
@@ -36,108 +39,136 @@ const resolveClubId = (req, value) => {
 
 const findPlan = async (req, id) => {
     if (!isValidId(id)) return { status: 400, message: "Invalid fee plan id." };
-    const plan = await FeePlan.findById(id).populate("teamIds", "name");
+    const plan = await FeePlan.findById(id);
     if (!plan || (!isSuperAdmin(req) && String(plan.clubId) !== String(req.clubId))) return { status: 404, message: "Fee plan not found." };
     return { plan };
 };
 
-const hasAgeGroup = (plan) => Boolean(plan.ageGroup && plan.ageGroup.birthYearFrom && plan.ageGroup.birthYearTo);
-
-// { name, birthYearFrom, birthYearTo } check. null / "" = age group hatao.
-const parseAgeGroup = (raw) => {
-    let value = raw;
-    if (typeof value === "string") {
-        if (!value.trim()) return { ageGroup: { name: "", birthYearFrom: null, birthYearTo: null } };
-        try {
-            value = JSON.parse(value);
-        } catch (e) {
-            return { message: "Age group must be an object: { name, birthYearFrom, birthYearTo }." };
-        }
-    }
-    if (value === null) return { ageGroup: { name: "", birthYearFrom: null, birthYearTo: null } };
-    if (typeof value !== "object" || Array.isArray(value)) return { message: "Age group must be an object: { name, birthYearFrom, birthYearTo }." };
-
-    const name = String(value.name || "").trim();
-    if (!name) return { message: "Age group name is required (for example U14)." };
-    if (name.length > 30) return { message: "Age group name must be 30 characters or less." };
-
-    const thisYear = new Date().getFullYear();
-    const from = Number(value.birthYearFrom);
-    const to = value.birthYearTo === undefined || value.birthYearTo === "" ? from : Number(value.birthYearTo);
-    const validYear = (y) => Number.isInteger(y) && y >= 1950 && y <= thisYear;
-    if (!validYear(from) || !validYear(to)) return { message: `Birth years must be between 1950 and ${thisYear}.` };
-    if (from > to) return { message: "birthYearFrom must be the same as or before birthYearTo." };
-    return { ageGroup: { name, birthYearFrom: from, birthYearTo: to } };
+// Saari age groups (team categories) + is club mein har group ki teams
+const clubAgeGroups = async (clubId) => {
+    const [categories, counts] = await Promise.all([
+        TeamCategory.find().select("name").collation({ locale: "en", numericOrdering: true }).sort({ name: 1 }),
+        Team.aggregate([
+            { $match: { clubId: new mongoose.Types.ObjectId(String(clubId)) } },
+            { $group: { _id: "$categoryId", n: { $sum: 1 } } },
+        ]),
+    ]);
+    const teams = new Map(counts.map((c) => [String(c._id), c.n]));
+    return categories.map((c) => ({ categoryId: c._id, name: c.name, teamsCount: teams.get(String(c._id)) || 0 }));
 };
 
-// Same club + season mein do chalu plans ke birth years ek doosre pe na chadhein (warna registration pe kaunsa?)
-const findAgeOverlap = (clubId, season, ageGroup, excludeId = null) =>
-    FeePlan.findOne({
-        clubId,
-        season,
-        isActive: true,
-        "ageGroup.birthYearFrom": { $ne: null, $lte: ageGroup.birthYearTo },
-        "ageGroup.birthYearTo": { $ne: null, $gte: ageGroup.birthYearFrom },
-        ...(excludeId ? { _id: { $ne: excludeId } } : {}),
-    }).select("name ageGroup");
-
-const overlapMessage = (other) =>
-    `"${other.name}" (${other.ageGroup.name}, born ${other.ageGroup.birthYearFrom}-${other.ageGroup.birthYearTo}) already covers these birth years for this season. Turn it off or change the years first.`;
-
-// Standing Order mein parent ko kitna dikhega (preview). Club setting ke maxInstallments tak.
-const installmentPreview = (plan, maxInstallments) => {
-    const spreadTotal = plan.items.filter((i) => !UPFRONT_ITEM_TYPES.includes(i.type)).reduce((s, i) => s + i.amount, 0);
-    if (!(spreadTotal > 0) || maxInstallments < 2) return [];
+// Monthly (Standing Order) mein pehli aur har mahine ki kisht. Club setting ke maxInstallments tak.
+const installmentPreview = (subscription, jersey, maxInstallments) => {
+    if (!(subscription > 0) || maxInstallments < 2) return [];
+    const items = [
+        { type: "season_registration", amount: subscription },
+        { type: "jersey", amount: jersey || 0 },
+    ];
     return Array.from({ length: maxInstallments - 1 }, (_, i) => i + 2).map((n) => {
-        const { firstAmount, monthlyAmount } = splitPlan(plan.items, n);
+        const { firstAmount, monthlyAmount } = splitPlan(items, n);
         return { installments: n, firstAmount, monthlyAmount };
     });
 };
 
-const formatPlan = (plan, { issuedCount, maxInstallments } = {}) => ({
-    _id: plan._id,
-    clubId: plan.clubId,
-    name: plan.name,
-    season: plan.season,
-    ageGroup: hasAgeGroup(plan)
-        ? { name: plan.ageGroup.name, birthYearFrom: plan.ageGroup.birthYearFrom, birthYearTo: plan.ageGroup.birthYearTo }
-        : null,
-    teams: (plan.teamIds || []).map((t) => (t && t.name !== undefined ? { _id: t._id, name: t.name } : { _id: t, name: "" })),
-    allTeams: !(plan.teamIds || []).length,
-    items: plan.items.map((i) => ({ _id: i._id, type: i.type, name: i.name, amount: i.amount })),
-    amount: plan.amount,
-    currency: plan.currency,
-    dueDate: plan.dueDate,
-    isActive: plan.isActive,
-    ...(issuedCount !== undefined ? { issuedCount } : {}),
-    ...(maxInstallments !== undefined ? { standingOrderPreview: installmentPreview(plan, maxInstallments) } : {}),
-    createdAt: plan.createdAt,
-    updatedAt: plan.updatedAt,
-});
+// groups = clubAgeGroups(). maxInstallments diya ho toh har fee ke saath monthly preview bhi.
+const formatPlan = (plan, { groups = [], issuedCount, maxInstallments } = {}) => {
+    const jersey = plan.jerseyAmount || 0;
+    const withTotal = (subscription) => ({
+        totalAmount: subscription > 0 ? round(subscription + jersey) : 0, // parent ka bill (subscription + jersey)
+        ...(maxInstallments !== undefined ? { standingOrderPreview: installmentPreview(subscription, jersey, maxInstallments) } : {}),
+    });
+    const stored = new Map((plan.ageGroups || []).map((g) => [String(g.categoryId), g.amount]));
+    // Saari age groups (screen ki list), jinki fee nahi unka amount 0. Purane / hata diye group bhi jo plan mein hain.
+    const listed = new Set(groups.map((g) => String(g.categoryId)));
+    const extra = (plan.ageGroups || []).filter((g) => !listed.has(String(g.categoryId))).map((g) => ({ categoryId: g.categoryId, name: "", teamsCount: 0 }));
 
-// body se name / season / teamIds / items / currency / dueDate / isActive check. partial = PUT (jo aaya wahi badlo)
-const parseBody = async (body, clubId, { partial = false } = {}) => {
+    return {
+        _id: plan._id,
+        clubId: plan.clubId,
+        name: plan.name,
+        season: plan.season,
+        pricingMode: plan.pricingMode, // same | per_age_group
+        subscriptionAmount: plan.subscriptionAmount || 0, // "same" mode ki fee
+        jerseyAmount: jersey,
+        ...(plan.pricingMode === "same" ? withTotal(plan.subscriptionAmount || 0) : {}),
+        ageGroups: [...groups, ...extra].map((g) => {
+            const amount = stored.get(String(g.categoryId)) || 0;
+            return { ...g, amount, ...(plan.pricingMode === "per_age_group" ? withTotal(amount) : {}) };
+        }),
+        currency: plan.currency,
+        dueDate: plan.dueDate,
+        isActive: plan.isActive,
+        ...(issuedCount !== undefined ? { issuedCount } : {}),
+        createdAt: plan.createdAt,
+        updatedAt: plan.updatedAt,
+    };
+};
+
+const parseAmount = (value, label) => {
+    const amount = Number(value);
+    if (value === "" || value === null || value === undefined || !Number.isFinite(amount) || amount < 0 || amount > 100000) {
+        return { message: `${label} must be a number from 0 to 100000.` };
+    }
+    return { value: round(amount) };
+};
+
+const parseList = (value) => {
+    if (typeof value !== "string") return value;
+    try {
+        return JSON.parse(value);
+    } catch (e) {
+        return null;
+    }
+};
+
+// body check. partial = PUT (jo aaya wahi badlo)
+const parseBody = async (body, { partial = false } = {}) => {
     const out = {};
 
-    if (!partial || body.name !== undefined) {
-        const name = String(body.name || "").trim();
-        if (!name) return { message: "Plan name is required." };
-        if (name.length > 120) return { message: "Plan name must be 120 characters or less." };
-        out.name = name;
-    }
     if (!partial || body.season !== undefined) {
         const season = parseSeason(body.season);
         if (season.message) return { message: season.message };
         if (!season.value) return { message: "Season is required." };
         out.season = season.value;
     }
-    if (!partial || body.items !== undefined) {
-        const parsed = parseItems(body.items);
-        if (parsed.message) return { message: parsed.message };
-        out.items = parsed.items;
-        out.amount = parsed.total;
+    if (body.name !== undefined) {
+        const name = String(body.name || "").trim();
+        if (name.length > 120) return { message: "Plan name must be 120 characters or less." };
+        if (name) out.name = name;
     }
-    if (!partial || body.currency !== undefined) {
+    if (!partial || body.pricingMode !== undefined) {
+        const mode = String(body.pricingMode || "").trim();
+        if (!PRICING_MODES.includes(mode)) return { message: `pricingMode must be one of: ${PRICING_MODES.join(", ")}.` };
+        out.pricingMode = mode;
+    }
+    if (body.subscriptionAmount !== undefined) {
+        const parsed = parseAmount(body.subscriptionAmount, "Annual fee");
+        if (parsed.message) return { message: parsed.message };
+        out.subscriptionAmount = parsed.value;
+    }
+    if (body.jerseyAmount !== undefined && body.jerseyAmount !== "") {
+        const parsed = parseAmount(body.jerseyAmount, "Jersey amount");
+        if (parsed.message) return { message: parsed.message };
+        out.jerseyAmount = parsed.value;
+    }
+    if (body.ageGroups !== undefined) {
+        const groups = parseList(body.ageGroups);
+        if (!Array.isArray(groups)) return { message: "ageGroups must be a list: [{ categoryId, amount }]." };
+        const ids = groups.map((g) => String(g?.categoryId || ""));
+        if (!ids.every(isValidId)) return { message: "Invalid age group id." };
+        if (new Set(ids).size !== ids.length) return { message: "Each age group can appear only once." };
+        const categories = await TeamCategory.find({ _id: { $in: ids } }).select("name");
+        if (categories.length !== ids.length) return { message: "Some age groups were not found." };
+        const nameOf = new Map(categories.map((c) => [String(c._id), c.name]));
+
+        out.ageGroups = [];
+        for (const g of groups) {
+            const parsed = parseAmount(g.amount, `Fee for ${nameOf.get(String(g.categoryId))}`);
+            if (parsed.message) return { message: parsed.message };
+            out.ageGroups.push({ categoryId: String(g.categoryId), amount: parsed.value });
+        }
+    }
+    if (body.currency !== undefined || !partial) {
         const currency = String(body.currency || "ILS").toUpperCase();
         if (!CURRENCIES.includes(currency)) return { message: `Currency must be one of: ${CURRENCIES.join(", ")}.` };
         out.currency = currency;
@@ -150,30 +181,31 @@ const parseBody = async (body, clubId, { partial = false } = {}) => {
             out.dueDate = m.endOf("day").toDate();
         }
     }
-    if (body.teamIds !== undefined) {
-        let ids = body.teamIds;
-        if (typeof ids === "string") ids = ids.split(",").map((s) => s.trim()).filter(Boolean);
-        if (!Array.isArray(ids)) return { message: "teamIds must be a list." };
-        ids = [...new Set(ids.map(String))];
-        if (!ids.every(isValidId)) return { message: "Invalid team id." };
-        if (ids.length) {
-            const found = await Team.countDocuments({ _id: { $in: ids }, clubId });
-            if (found !== ids.length) return { message: "Some teams were not found in this club." };
-        }
-        out.teamIds = ids;
-    }
-    if (body.ageGroup !== undefined) {
-        const parsed = parseAgeGroup(body.ageGroup);
-        if (parsed.message) return { message: parsed.message };
-        out.ageGroup = parsed.ageGroup;
-    }
     if (body.isActive !== undefined) out.isActive = [true, "true", 1, "1"].includes(body.isActive);
     return { data: out };
 };
 
+// Mode ke hisaab se fee bhari hai? (plan = save hone wala final roop)
+const checkFees = (plan) => {
+    if (plan.pricingMode === "same" && !(plan.subscriptionAmount > 0)) return "Enter the annual fee (more than 0).";
+    if (plan.pricingMode === "per_age_group" && !(plan.ageGroups || []).some((g) => g.amount > 0)) {
+        return "Enter a fee (more than 0) for at least one age group.";
+    }
+    return "";
+};
+
+const findDuplicate = (clubId, season, excludeId = null) =>
+    FeePlan.findOne({ clubId, season, isActive: true, ...(excludeId ? { _id: { $ne: excludeId } } : {}) }).select("name");
+
+const maxInstallmentsFor = async (clubId) => {
+    const club = await Club.findById(clubId).select("paymentSettings");
+    const settings = club?.paymentSettings || {};
+    return settings.allowStandingOrder === false ? 0 : settings.maxInstallments || 10;
+};
+
 /**
- * Club ki price list
- * query: clubId? (superAdmin), season?, teamId?, birthYear? (2013 -> U14 plan), active? (true | false)
+ * Club ke Fee Plans. data.ageGroups = saari age groups + teams ki ginti (plan na ho tab screen isi se banao).
+ * query: clubId? (superAdmin), season?, active? (true | false)
  */
 const listFeePlans = async (req, res) => {
     try {
@@ -187,36 +219,27 @@ const listFeePlans = async (req, res) => {
             filter.season = season.value;
         }
         if (req.query.active !== undefined && req.query.active !== "") filter.isActive = req.query.active === "true";
-        if (req.query.teamId) {
-            if (!isValidId(req.query.teamId)) return sendError(res, 400, "Invalid team id.");
-            // Is team ke plan + "saari teams" wale plan
-            filter.$or = [{ teamIds: req.query.teamId }, { teamIds: { $size: 0 } }];
-        }
-        // Is birth year ka plan (registration screen: 2013 mein paida hua -> U14 plan)
-        if (req.query.birthYear) {
-            const year = Number(req.query.birthYear);
-            if (!Number.isInteger(year)) return sendError(res, 400, "birthYear must be a year, for example 2013.");
-            filter["ageGroup.birthYearFrom"] = { $lte: year };
-            filter["ageGroup.birthYearTo"] = { $gte: year };
-        }
 
-        const plans = await FeePlan.find(filter).sort({ createdAt: -1 }).populate("teamIds", "name");
+        const [plans, groups] = await Promise.all([FeePlan.find(filter).sort({ isActive: -1, createdAt: -1 }), clubAgeGroups(clubId)]);
         const counts = await Charge.aggregate([
             { $match: { feePlanId: { $in: plans.map((p) => p._id) }, status: { $nin: ["cancelled"] } } },
             { $group: { _id: "$feePlanId", n: { $sum: 1 } } },
         ]);
         const byPlan = new Map(counts.map((c) => [String(c._id), c.n]));
 
-        return sendOk(res, "Fee plans.", { feePlans: plans.map((p) => formatPlan(p, { issuedCount: byPlan.get(String(p._id)) || 0 })) });
+        return sendOk(res, "Fee plans.", {
+            feePlans: plans.map((p) => formatPlan(p, { groups, issuedCount: byPlan.get(String(p._id)) || 0 })),
+            ageGroups: groups,
+        });
     } catch (e) {
         return sendServerError(res, "listFeePlans", e);
     }
 };
 
 /**
- * Naya price plan
- * ageGroup: { name: "U14", birthYearFrom: 2013, birthYearTo: 2014 } (player ki birth year se). Same season mein years overlap nahi.
- * body: { clubId?, name, season, items: [{ type, name, amount }], ageGroup?, teamIds?, currency?, dueDate?, isActive? }
+ * Season ka Fee Plan ek call mein (Subscription Plan screen ka Save).
+ * pricingMode "same": subscriptionAmount. "per_age_group": ageGroups [{ categoryId, amount }] (0 = is group ki fee nahi).
+ * body: { clubId?, season, pricingMode, subscriptionAmount?, ageGroups?, jerseyAmount?, name?, currency?, dueDate? }
  */
 const createFeePlan = async (req, res) => {
     try {
@@ -224,62 +247,70 @@ const createFeePlan = async (req, res) => {
         const { clubId, message } = resolveClubId(req, body.clubId);
         if (!clubId) return sendError(res, 400, message);
 
-        const parsed = await parseBody(body, clubId);
+        const parsed = await parseBody(body);
         if (parsed.message) return sendError(res, 400, parsed.message);
+        const data = { name: `Annual subscription ${parsed.data.season}`, ...parsed.data };
 
-        const data = parsed.data;
-        if (data.ageGroup?.birthYearFrom && data.isActive !== false) {
-            const other = await findAgeOverlap(clubId, data.season, data.ageGroup);
-            if (other) return sendError(res, 409, overlapMessage(other));
+        const feeError = checkFees(data);
+        if (feeError) return sendError(res, 400, feeError);
+
+        if (data.isActive !== false) {
+            const other = await findDuplicate(clubId, data.season);
+            if (other) return sendError(res, 409, `A fee plan for ${data.season} already exists. Edit it instead.`, { feePlanId: other._id });
         }
 
-        const plan = await FeePlan.create({ ...parsed.data, clubId, createdBy: req.user._id });
-        await plan.populate("teamIds", "name");
-        return sendOk(res, "Fee plan created.", { feePlan: formatPlan(plan, { issuedCount: 0 }) });
+        const plan = await FeePlan.create({ ...data, clubId, createdBy: req.user._id });
+        return sendOk(res, "Fee plan created.", { feePlan: formatPlan(plan, { groups: await clubAgeGroups(clubId), issuedCount: 0 }) });
     } catch (e) {
         return sendServerError(res, "createFeePlan", e);
     }
 };
 
-// Ek plan + Standing Order ka preview (har kisht ka amount)
+// Ek plan: har age group ki fee, total (subscription + jersey) aur monthly preview
 const getFeePlan = async (req, res) => {
     try {
         const { plan, status, message } = await findPlan(req, req.params.id);
         if (!plan) return sendError(res, status, message);
-        const [issuedCount, club] = await Promise.all([
+        const [issuedCount, groups, maxInstallments] = await Promise.all([
             Charge.countDocuments({ feePlanId: plan._id, status: { $nin: ["cancelled"] } }),
-            Club.findById(plan.clubId).select("paymentSettings"),
+            clubAgeGroups(plan.clubId),
+            maxInstallmentsFor(plan.clubId),
         ]);
-        const settings = club?.paymentSettings || {};
-        const maxInstallments = settings.allowStandingOrder === false ? 0 : settings.maxInstallments || 10;
-        return sendOk(res, "Fee plan.", { feePlan: formatPlan(plan, { issuedCount, maxInstallments }) });
+        return sendOk(res, "Fee plan.", { feePlan: formatPlan(plan, { groups, issuedCount, maxInstallments }) });
     } catch (e) {
         return sendServerError(res, "getFeePlan", e);
     }
 };
 
 /**
- * Plan badalna (jo field bhejo wahi badlega). Pehle bane bills nahi badalte, sirf naye bills naye price se.
- * body: { name?, season?, items?, ageGroup? (null = hatao), teamIds?, currency?, dueDate?, isActive? }
+ * Plan badalna (jo field bhejo wahi badlega). ageGroups bhejo toh poori list badal jaati hai.
+ * Pehle bane bills nahi badalte, sirf naye bills naye price se.
+ * body: { season?, pricingMode?, subscriptionAmount?, ageGroups?, jerseyAmount?, name?, currency?, dueDate?, isActive? }
  */
 const updateFeePlan = async (req, res) => {
     try {
         const { plan, status, message } = await findPlan(req, req.params.id);
         if (!plan) return sendError(res, status, message);
 
-        const parsed = await parseBody(req.body || {}, plan.clubId, { partial: true });
+        const parsed = await parseBody(req.body || {}, { partial: true });
         if (parsed.message) return sendError(res, 400, parsed.message);
 
         Object.assign(plan, parsed.data, { updatedBy: req.user._id });
-        if (hasAgeGroup(plan) && plan.isActive) {
-            const other = await findAgeOverlap(plan.clubId, plan.season, plan.ageGroup, plan._id);
-            if (other) return sendError(res, 409, overlapMessage(other));
+        const feeError = checkFees(plan);
+        if (feeError) return sendError(res, 400, feeError);
+
+        if (plan.isActive) {
+            const other = await findDuplicate(plan.clubId, plan.season, plan._id);
+            if (other) return sendError(res, 409, `Another active fee plan for ${plan.season} already exists.`, { feePlanId: other._id });
         }
         await plan.save();
-        await plan.populate("teamIds", "name");
-        const issuedCount = await Charge.countDocuments({ feePlanId: plan._id, status: { $nin: ["cancelled"] } });
+
+        const [issuedCount, groups] = await Promise.all([
+            Charge.countDocuments({ feePlanId: plan._id, status: { $nin: ["cancelled"] } }),
+            clubAgeGroups(plan.clubId),
+        ]);
         return sendOk(res, issuedCount ? "Fee plan updated. Bills already sent keep the old price." : "Fee plan updated.", {
-            feePlan: formatPlan(plan, { issuedCount }),
+            feePlan: formatPlan(plan, { groups, issuedCount }),
         });
     } catch (e) {
         return sendServerError(res, "updateFeePlan", e);

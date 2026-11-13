@@ -8,6 +8,7 @@ const { SHIRT_SIZES, WEAR_SIZE_FIELDS, PARENT_RELATIONS, PLAYER_STATUSES } = req
 const { ROLES } = require("../../helpers/constants");
 const { isValidId } = require("../../helpers/common");
 const { upload_files } = require("../../../utils/s3");
+const { withSubscriptions } = require("../../helpers/subscriptionStatus");
 // Ye functions playerController (isi folder) mein pehle se hain, wahin se le rahe hain
 const { removeIdDocument, populatePlayer, formatPlayer } = require("./Playercontroller");
 
@@ -440,7 +441,7 @@ const listMyYouthPlayers = async (req, res) => {
             message: "Players fetched successfully.",
             message_desc: "Players fetched successfully.",
             data: {
-                players: players.map(formatPlayer),
+                players: await withSubscriptions(players.map(formatPlayer)), // + subscription: active | inactive
                 total: players.length,
             },
         });
@@ -491,7 +492,7 @@ const getMyYouthPlayer = async (req, res) => {
             status: 200,
             message: "Player fetched successfully.",
             message_desc: "Player fetched successfully.",
-            data: formatPlayer(saved),
+            data: (await withSubscriptions([formatPlayer(saved)]))[0],
         });
     } catch (e) {
         console.error("Get my youth player error:", e);

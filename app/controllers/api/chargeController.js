@@ -5,7 +5,6 @@ const Player = require("../../models/Player");
 const Team = require("../../models/Team");
 const Coach = require("../../models/Coach");
 const FeePlan = require("../../models/FeePlan");
-const User = require("../../models/User");
 const { parseItems } = require("../../helpers/chargeItems");
 const { CHARGE_ITEM_TYPES, CURRENCIES, PAYMENT_METHODS, UPFRONT_ITEM_TYPES } = require("../../models/Charge");
 const { ROLES } = require("../../helpers/constants");
@@ -64,11 +63,10 @@ const findCharge = async (req, id, select = "") => {
 /**
  * Season registration bill banana: ek player = ek bill (items: season fee, jersey...).
  * Do tarah se:
- *   feePlanId do  -> price / items / season / title / dueDate club ki price list (Fee Plan) se. teamId / playerIds
- *                    na do toh plan ki saari teams (plan "saari teams" ka ho toh teamId ya playerIds dena zaroori).
- *   items do      -> haath se price (purana tareeka).
- * Age group wala plan: team / club ke sirf us birth year wale players (playerIds diye hon toh age check nahi).
- *   Kuch na do toh club ke saare players us birth year ke (team na ho tab bhi).
+ *   feePlanId do  -> season / title / dueDate Fee Plan se. Har player ki fee uski team ke age group (category) se:
+ *                    subscription + jersey. teamId / playerIds na do toh club ke saare players.
+ *                    Jiski fee nahi (team nahi, ya us group ki fee 0) wo skip ("noFee").
+ *   items do      -> haath se price, sabke liye same (purana tareeka). teamId ya playerIds zaroori.
  * teamId do toh poori team, playerIds do toh sirf wo. Jis player ka same plan (ya same season + title) ka bill pehle se hai, wo skip.
  * overrides: kisi player ki alag fee, [{ playerId, items: [{ type, name, amount }] }]. Baaki sab ko normal price.
  * body: { clubId?, feePlanId?, season?, title?, teamId?, playerIds?, items?: [{ type, name, amount }], overrides?, dueDate?, currency? }
@@ -91,12 +89,10 @@ const issueCharges = async (req, res) => {
         if (season.message) return sendError(res, 400, season.message);
         if (!season.value) return sendError(res, 400, "Season is required.");
 
-        let items;
-        let amount;
-        if (plan) {
-            items = plan.items.map((i) => ({ type: i.type, name: i.name, amount: i.amount }));
-            amount = plan.amount;
-        } else {
+        // Plan nahi: sabke liye body ke items. Plan hai: har player ke items uski team ke age group se (neeche).
+        let items = null;
+        let amount = 0;
+        if (!plan) {
             const parsed = parseItems(body.items);
             if (parsed.message) return sendError(res, 400, parsed.message);
             items = parsed.items;
@@ -115,13 +111,11 @@ const issueCharges = async (req, res) => {
         }
 
         const title = String(plan ? plan.name : body.title || `Season registration ${season.value}`).trim().slice(0, 120);
-        const planTeamIds = (plan?.teamIds || []).map(String);
 
         const filter = { clubId, status: { $nin: ["left", "inactive"] } };
         if (body.teamId) {
             if (!isValidId(body.teamId)) return sendError(res, 400, "Invalid team id.");
             if (!(await Team.exists({ _id: body.teamId, clubId }))) return sendError(res, 404, "Team not found.");
-            if (planTeamIds.length && !planTeamIds.includes(String(body.teamId))) return sendError(res, 400, "This fee plan is not for this team.");
             filter.teamId = body.teamId;
         }
         let playerIds = body.playerIds;
@@ -129,31 +123,27 @@ const issueCharges = async (req, res) => {
         if (Array.isArray(playerIds) && playerIds.length) {
             if (!playerIds.every(isValidId)) return sendError(res, 400, "Invalid player id.");
             filter._id = { $in: playerIds };
-            if (planTeamIds.length && !filter.teamId) filter.teamId = { $in: planTeamIds };
         }
-        if (!filter.teamId && !filter._id && planTeamIds.length) filter.teamId = { $in: planTeamIds };
+        // Plan ho aur kuch na chuna ho toh club ke saare players (jinki fee nahi bani wo neeche skip)
+        if (!filter.teamId && !filter._id && !plan) return sendError(res, 400, "Choose a team or players.");
 
-        // Age group wala plan: team / poore club ke players mein se sirf us birth year wale.
-        // playerIds khud diye hon toh admin ki marzi (age check nahi), jaise U14 ka bachcha U16 mein khele.
-        const ageGroup = plan?.ageGroup?.birthYearFrom && plan?.ageGroup?.birthYearTo ? plan.ageGroup : null;
-        const checkAge = Boolean(ageGroup) && !filter._id;
-        if (!filter.teamId && !filter._id && !ageGroup) return sendError(res, 400, "Choose a team or players.");
+        const players = await Player.find(filter)
+            .select("_id season teamId")
+            .populate({ path: "teamId", select: "categoryId", populate: { path: "categoryId", select: "name" } });
+        if (!players.length) return sendError(res, 404, "No players found.");
 
-        let players = await Player.find(filter).select("_id season userId");
-        let otherAge = 0;
-        if (checkAge && players.length) {
-            // birthDate "YYYY-MM-DD" UTC midnight pe save hota hai, isliye UTC saal ki seema
-            const inRange = await User.find({
-                _id: { $in: players.map((p) => p.userId) },
-                birthDate: { $gte: new Date(Date.UTC(ageGroup.birthYearFrom, 0, 1)), $lt: new Date(Date.UTC(ageGroup.birthYearTo + 1, 0, 1)) },
-            }).distinct("_id");
-            const ok = new Set(inRange.map(String));
-            const before = players.length;
-            players = players.filter((p) => ok.has(String(p.userId)));
-            otherAge = before - players.length;
-        }
-        if (!players.length) {
-            return sendError(res, 404, ageGroup && checkAge ? `No players born ${ageGroup.birthYearFrom}-${ageGroup.birthYearTo} found.` : "No players found.");
+        // Plan: har player ki fee uski team ke age group se. Fee nahi (team nahi / group ki fee 0) toh bill nahi.
+        const itemsByPlayer = new Map();
+        let noFee = 0;
+        players.forEach((player) => {
+            if (!plan) return itemsByPlayer.set(String(player._id), items);
+            const category = player.teamId?.categoryId;
+            const planItems = plan.itemsFor(category?._id, plan.pricingMode === "per_age_group" ? category?.name : "");
+            if (planItems) itemsByPlayer.set(String(player._id), planItems);
+            else noFee += 1;
+        });
+        if (!itemsByPlayer.size) {
+            return sendError(res, 404, "None of these players has a fee in this plan. Check the age group fees or the players' teams.");
         }
 
         const existing = await Charge.find({
@@ -188,8 +178,11 @@ const issueCharges = async (req, res) => {
 
         const created = [];
         for (const player of players) {
-            if (already.has(String(player._id))) continue;
-            const custom = overrides.get(String(player._id));
+            const key = String(player._id);
+            if (already.has(key)) continue;
+            const custom = overrides.get(key);
+            const playerItems = custom ? custom.items : itemsByPlayer.get(key);
+            if (!playerItems) continue; // is player ke age group ki fee nahi
             const charge = await Charge.create({
                 clubId,
                 playerId: player._id,
@@ -197,8 +190,8 @@ const issueCharges = async (req, res) => {
                 feePlanId: plan?._id || null,
                 customAmount: Boolean(custom),
                 title,
-                items: custom ? custom.items : items,
-                amount: custom ? custom.total : amount,
+                items: playerItems,
+                amount: custom ? custom.total : plan ? round(playerItems.reduce((s, i) => s + i.amount, 0)) : amount,
                 currency,
                 dueDate,
                 createdBy: req.user._id,
@@ -208,9 +201,9 @@ const issueCharges = async (req, res) => {
 
         return sendOk(res, `${created.length} charge(s) created.`, {
             created: created.length,
-            skipped: players.length - created.length,
+            alreadyBilled: players.filter((p) => already.has(String(p._id))).length,
+            noFee, // team nahi, ya us age group ki fee plan mein 0
             customAmounts: [...overrides.keys()].filter((id) => !already.has(id)).length,
-            skippedOtherAge: otherAge, // team mein the par birth year is age group ka nahi
             chargeIds: created,
         });
     } catch (e) {

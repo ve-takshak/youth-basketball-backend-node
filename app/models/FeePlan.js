@@ -1,35 +1,31 @@
 const mongoose = require("../../config/database");
-const { CHARGE_ITEM_TYPES, CURRENCIES } = require("./Charge");
+const { CURRENCIES } = require("./Charge");
 
-// Club ki price list. Club admin ek baar set karta hai: "Season 2026 / 2027 - U14" = season fee 2400 + jersey 400.
-// Bill banate waqt (POST /user/payments/charges/issue) sirf feePlanId bhejo, items / amount yahin se aate hain.
+// Club ka saal ka Fee Plan (Subscription Plan screen). Ek club + season ka ek hi chalu plan.
+//   pricingMode "same"          -> subscriptionAmount sab age groups ke liye
+//   pricingMode "per_age_group" -> ageGroups: har age group (team category) ki alag fee
+//   jerseyAmount                -> sabke liye (0 = jersey ka paisa nahi)
+// Bill banate waqt (POST /user/payments/charges/issue) player ki team ki category se uski fee nikalti hai.
 // Plan badalne se pehle bane bills nahi badalte (bill mein items copy hote hain).
-//
-// teamIds khaali = club ki saari teams ke liye.
-const FeePlanItemSchema = new mongoose.Schema(
+const PRICING_MODES = ["same", "per_age_group"];
+
+const AgeGroupFeeSchema = new mongoose.Schema(
     {
-        type: { type: String, enum: CHARGE_ITEM_TYPES, default: "other" },
-        name: { type: String, trim: true, required: true },
-        amount: { type: Number, min: 0, required: true },
+        categoryId: { type: mongoose.Schema.Types.ObjectId, ref: "TeamCategory", required: true },
+        amount: { type: Number, min: 0, default: 0 }, // saal ki subscription (0 = is group ki fee nahi)
     },
-    { _id: true }
+    { _id: false }
 );
 
 const FeePlanSchema = new mongoose.Schema(
     {
         clubId: { type: mongoose.Schema.Types.ObjectId, ref: "Club", required: true },
-        name: { type: String, trim: true, required: true }, // "Season registration 2026 / 2027" -> bill ka title bhi
+        name: { type: String, trim: true, required: true }, // "Annual subscription 2026 / 2027" -> bill ka title bhi
         season: { type: String, trim: true, default: "" },
-        teamIds: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Team" }], default: [] },
-        // Age group: player ki birth year (User.birthDate) se. U14 = 2013-2014. Khaali = koi age limit nahi.
-        // Registration ke waqt team nahi hoti, isliye fee birth year se milti hai.
-        ageGroup: {
-            name: { type: String, trim: true, default: "" }, // "U14"
-            birthYearFrom: { type: Number, default: null },
-            birthYearTo: { type: Number, default: null },
-        },
-        items: { type: [FeePlanItemSchema], validate: (v) => v.length > 0 },
-        amount: { type: Number, min: 0, required: true }, // items ka total
+        pricingMode: { type: String, enum: PRICING_MODES, default: "same" },
+        subscriptionAmount: { type: Number, min: 0, default: 0 }, // "same" mode ki fee
+        ageGroups: { type: [AgeGroupFeeSchema], default: [] }, // "per_age_group" mode ki fees
+        jerseyAmount: { type: Number, min: 0, default: 0 },
         currency: { type: String, enum: CURRENCIES, default: "ILS" },
         dueDate: { type: Date, default: null },
         isActive: { type: Boolean, default: true },
@@ -40,6 +36,24 @@ const FeePlanSchema = new mongoose.Schema(
 );
 
 FeePlanSchema.index({ clubId: 1, season: 1, isActive: 1 });
-FeePlanSchema.index({ clubId: 1, season: 1, "ageGroup.birthYearFrom": 1, "ageGroup.birthYearTo": 1 });
+
+// Is age group (category) ki saal ki fee. "same" mode mein sabki ek.
+FeePlanSchema.methods.subscriptionFor = function (categoryId) {
+    if (this.pricingMode === "same") return this.subscriptionAmount || 0;
+    if (!categoryId) return 0;
+    const group = (this.ageGroups || []).find((g) => String(g.categoryId) === String(categoryId));
+    return group ? group.amount : 0;
+};
+
+// Bill ke items is age group ke liye. null = is group ki fee set nahi (bill nahi banega).
+FeePlanSchema.methods.itemsFor = function (categoryId, categoryName = "") {
+    const fee = this.subscriptionFor(categoryId);
+    if (!(fee > 0)) return null;
+    return [
+        { type: "season_registration", name: categoryName ? `Annual subscription - ${categoryName}` : "Annual subscription", amount: fee },
+        ...(this.jerseyAmount > 0 ? [{ type: "jersey", name: "Jersey", amount: this.jerseyAmount }] : []),
+    ];
+};
 
 module.exports = mongoose.model("FeePlan", FeePlanSchema);
+module.exports.PRICING_MODES = PRICING_MODES;
