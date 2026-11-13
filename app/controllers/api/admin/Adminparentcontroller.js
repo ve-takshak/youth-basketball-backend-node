@@ -5,7 +5,7 @@ const { PARENT_RELATIONS } = require("../../../models/Player");
 const { ROLES } = require("../../../helpers/constants");
 const { isValidId, escapeRegex, getPagination } = require("../../../helpers/common");
 const { validatePersonInput } = require("../../../helpers/userHelper");
-const { populatePlayer, formatPlayer, getCoachTeamIds } = require("../Playercontroller");
+const { populatePlayer, formatPlayer, getCoachTeamIds, coachSeesPlayer } = require("../Playercontroller");
 
 // Admin panel (superAdmin / clubAdmin) ki parent APIs:
 //   GET    /user/parents                                  -> parents ki list (bachchon ke saath)
@@ -498,9 +498,7 @@ const linkCoachParent = async (req, res) => {
 
         const teamIds = await getCoachTeamIds(req);
         const player = await Player.findById(body.playerId);
-        if (!player || !player.teamId || !teamIds.includes(String(player.teamId))) {
-            return sendError(res, 404, "Player not found.");
-        }
+        if (!coachSeesPlayer(req, player, teamIds)) return sendError(res, 404, "Player not found.");
         if (player.playerType !== "youth") return sendError(res, 400, "Only youth players have parents.");
 
         // Coach relation / isPrimary nahi bhejta: relation "guardian", pehla parent apne aap primary

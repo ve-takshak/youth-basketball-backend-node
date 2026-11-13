@@ -530,6 +530,13 @@ const formatPlayerDetail = async (player) => {
 };
 
 // Coach ki apni teams ki ids (string), usi ke club mein
+// Coach is player ko dekh / badal sakta hai? Apni team ka, ya bina team ka jo usne khud banaya.
+const coachSeesPlayer = (req, player, teamIds) => {
+    if (!player || String(player.clubId) !== String(req.clubId)) return false;
+    if (player.teamId) return teamIds.includes(String(player.teamId));
+    return String(player.createdBy) === String(req.user._id);
+};
+
 const getCoachTeamIds = async (req) => {
     const coach = await Coach.findOne({ userId: req.user._id }).select("_id");
     if (!coach) return [];
@@ -606,15 +613,10 @@ const createPlayer = async (req, res) => {
             return sendError(res, 400, "Please select a valid club.");
         }
 
-        // Coach: player sirf apni team mein. Ek hi team ho aur teamId na bheja ho toh wahi team.
-        let teamIdInput = body.teamId;
-        if (isCoach) {
+        // Coach: team optional. teamId bheja toh coach ki apni team honi chahiye, na bheja toh player bina team ke.
+        const teamIdInput = body.teamId;
+        if (isCoach && teamIdInput && String(teamIdInput).trim()) {
             const myTeamIds = await getCoachTeamIds(req);
-            if (myTeamIds.length === 0) return sendError(res, 403, "You are not assigned to any team.");
-            if (!teamIdInput || !String(teamIdInput).trim()) {
-                if (myTeamIds.length > 1) return sendError(res, 400, "Please select a team.");
-                teamIdInput = myTeamIds[0];
-            }
             if (!myTeamIds.includes(String(teamIdInput))) {
                 return sendError(res, 403, "You can add players only to your own team.");
             }
@@ -703,7 +705,8 @@ const createPlayer = async (req, res) => {
 /**
  * POST /api/user/coach/players/create   (sirf coach, mobile app)
  * Body createPlayer jaisi hi (clubId nahi chahiye, coach ka apna club lagta hai).
- * teamId: coach ki apni team. Coach ki ek hi team ho toh teamId optional.
+ * teamId (optional): coach ki apni team. Na bhejo toh player bina team ke banta hai
+ * (coach ki list mein phir bhi dikhta hai, kyunki usne banaya hai - coachSeesPlayer).
  */
 const createCoachPlayer = async (req, res) => {
     if (req.user.role !== ROLES.COACH) return sendError(res, 403, "Access denied. Coach only.");
@@ -722,7 +725,7 @@ const loadCoachPlayer = async (req) => {
     const teamIds = await getCoachTeamIds(req);
     const player = await Player.findById(id).select("teamId clubId createdBy");
     // Dusri team / club ka player coach ke liye "hai hi nahi"
-    if (!player || !player.teamId || !teamIds.includes(String(player.teamId))) {
+    if (!coachSeesPlayer(req, player, teamIds)) {
         return { status: 404, message: "Player not found." };
     }
     return { player, teamIds };
@@ -746,7 +749,9 @@ const listCoachPlayers = async (req, res) => {
         if (built.message) return sendError(res, built.status, built.message);
         const { filter } = built;
         filter.clubId = req.clubId; // query ka clubId coach ke liye nahi chalega
-        filter.teamId = teamId ? teamId : { $in: teamIds };
+        if (teamId) filter.teamId = teamId;
+        // Coach ki teams ke players + jo bina team ke coach ne khud banaye
+        else filter.$or = [{ teamId: { $in: teamIds } }, { teamId: null, createdBy: req.user._id }];
 
         const [players, total] = await Promise.all([
             populatePlayer(Player.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit)),
@@ -1504,4 +1509,5 @@ module.exports = {
     populatePlayer,
     formatPlayer,
     getCoachTeamIds,
+    coachSeesPlayer,
 };

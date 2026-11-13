@@ -2389,7 +2389,7 @@
     },
     "/user/coach/players/create": {
       "post": {
-        "description": "**Access:** Any logged-in user\n\n```\nBody createPlayer jaisi hi (clubId nahi chahiye, coach ka apna club lagta hai).\nteamId: coach ki apni team. Coach ki ek hi team ho toh teamId optional.\n```",
+        "description": "**Access:** Any logged-in user\n\n```\nBody createPlayer jaisi hi (clubId nahi chahiye, coach ka apna club lagta hai).\nteamId (optional): coach ki apni team. Na bhejo toh player bina team ke banta hai\n(coach ki list mein phir bhi dikhta hai, kyunki usne banaya hai - coachSeesPlayer).\n```",
         "responses": {
           "401": {
             "description": "Missing or invalid token"
