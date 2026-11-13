@@ -4,6 +4,7 @@ const FeePlan = require("../../models/FeePlan");
 const { PRICING_MODES } = require("../../models/FeePlan");
 const Charge = require("../../models/Charge");
 const Team = require("../../models/Team");
+const Player = require("../../models/Player");
 const TeamCategory = require("../../models/TeamCategory");
 const Club = require("../../models/Club");
 const { CURRENCIES } = require("../../models/Charge");
@@ -18,6 +19,7 @@ const { splitPlan, round } = require("../../helpers/paymentStatus");
 //   GET    /user/payments/fee-plans/:id      + monthly (Standing Order) preview
 //   PUT    /user/payments/fee-plans/:id
 //   DELETE /user/payments/fee-plans/:id
+//   GET    /user/payments/fee-plans/:id/quote   join date se kitna dena (bache mahine)
 // Age group = team category (U12 Minis, U14 Boys...). Player ka age group = uski team ki category.
 
 const sendError = (res, status, message, data = {}) =>
@@ -90,6 +92,7 @@ const formatPlan = (plan, { groups = [], issuedCount, maxInstallments } = {}) =>
         pricingMode: plan.pricingMode, // same | per_age_group
         subscriptionAmount: plan.subscriptionAmount || 0, // "same" mode ki fee
         jerseyAmount: jersey,
+        proRate: plan.proRate !== false, // true = beech season join par bache mahino ki fee
         ...(plan.pricingMode === "same" ? withTotal(plan.subscriptionAmount || 0) : {}),
         ageGroups: [...groups, ...extra].map((g) => {
             const amount = stored.get(String(g.categoryId)) || 0;
@@ -182,6 +185,7 @@ const parseBody = async (body, { partial = false } = {}) => {
         }
     }
     if (body.isActive !== undefined) out.isActive = [true, "true", 1, "1"].includes(body.isActive);
+    if (body.proRate !== undefined) out.proRate = [true, "true", 1, "1"].includes(body.proRate);
     return { data: out };
 };
 
@@ -239,7 +243,8 @@ const listFeePlans = async (req, res) => {
 /**
  * Season ka Fee Plan ek call mein (Subscription Plan screen ka Save).
  * pricingMode "same": subscriptionAmount. "per_age_group": ageGroups [{ categoryId, amount }] (0 = is group ki fee nahi).
- * body: { clubId?, season, pricingMode, subscriptionAmount?, ageGroups?, jerseyAmount?, name?, currency?, dueDate? }
+ * proRate (default true): season (Aug-Jul) ke beech join kare toh bache mahino ki fee. false = hamesha poore saal ki.
+ * body: { clubId?, season, pricingMode, subscriptionAmount?, ageGroups?, jerseyAmount?, proRate?, name?, currency?, dueDate? }
  */
 const createFeePlan = async (req, res) => {
     try {
@@ -285,7 +290,7 @@ const getFeePlan = async (req, res) => {
 /**
  * Plan badalna (jo field bhejo wahi badlega). ageGroups bhejo toh poori list badal jaati hai.
  * Pehle bane bills nahi badalte, sirf naye bills naye price se.
- * body: { season?, pricingMode?, subscriptionAmount?, ageGroups?, jerseyAmount?, name?, currency?, dueDate?, isActive? }
+ * body: { season?, pricingMode?, subscriptionAmount?, ageGroups?, jerseyAmount?, proRate?, name?, currency?, dueDate?, isActive? }
  */
 const updateFeePlan = async (req, res) => {
     try {
@@ -317,6 +322,66 @@ const updateFeePlan = async (req, res) => {
     }
 };
 
+/**
+ * Kisi player / age group ko kitna dena hoga (join date ke hisaab se bache mahine). Kuch save nahi hota.
+ * query: playerId? (uski team ka age group + registration date) ya categoryId?, date? (YYYY-MM-DD, default aaj)
+ * Saal 1200, date 2026-11-10, season "2026 / 2027" -> months 9, subscription 900 (+ jersey).
+ */
+const quoteFeePlan = async (req, res) => {
+    try {
+        const { plan, status, message } = await findPlan(req, req.params.id);
+        if (!plan) return sendError(res, status, message);
+        const query = req.query || {};
+
+        let categoryId = null;
+        let categoryName = "";
+        let joinDate = null;
+        let player = null;
+        if (query.playerId) {
+            if (!isValidId(query.playerId)) return sendError(res, 400, "Invalid player id.");
+            player = await Player.findOne({ _id: query.playerId, clubId: plan.clubId })
+                .select("teamId createdAt")
+                .populate({ path: "teamId", select: "name categoryId", populate: { path: "categoryId", select: "name" } });
+            if (!player) return sendError(res, 404, "Player not found.");
+            categoryId = player.teamId?.categoryId?._id || null;
+            categoryName = player.teamId?.categoryId?.name || "";
+            joinDate = player.createdAt;
+        }
+        if (query.categoryId) {
+            if (!isValidId(query.categoryId)) return sendError(res, 400, "Invalid age group id.");
+            const category = await TeamCategory.findById(query.categoryId).select("name");
+            if (!category) return sendError(res, 404, "Age group not found.");
+            categoryId = category._id;
+            categoryName = category.name;
+        }
+        if (query.date) {
+            const m = moment(query.date, ["YYYY-MM-DD", moment.ISO_8601], true);
+            if (!m.isValid()) return sendError(res, 400, "Date must be YYYY-MM-DD.");
+            joinDate = m.toDate();
+        }
+        if (plan.pricingMode === "per_age_group" && !categoryId) {
+            return sendError(res, 400, player ? "This player has no team, so no age group fee." : "Send playerId or categoryId.");
+        }
+        joinDate = joinDate || new Date();
+
+        const quote = plan.quoteFor(categoryId, joinDate);
+        return sendOk(res, quote.annualFee > 0 ? "Fee quote." : "No fee set for this age group.", {
+            feePlanId: plan._id,
+            season: plan.season,
+            proRate: plan.proRate !== false,
+            playerId: player?._id || null,
+            categoryId,
+            ageGroup: categoryName,
+            joinDate: moment(joinDate).format("YYYY-MM-DD"),
+            currency: plan.currency,
+            ...quote,
+            items: plan.itemsFor(categoryId, plan.pricingMode === "per_age_group" ? categoryName : "", joinDate) || [],
+        });
+    } catch (e) {
+        return sendServerError(res, "quoteFeePlan", e);
+    }
+};
+
 // Bill nahi bane toh delete, bane hain toh sirf band (isActive false) taaki history rahe
 const deleteFeePlan = async (req, res) => {
     try {
@@ -337,4 +402,4 @@ const deleteFeePlan = async (req, res) => {
     }
 };
 
-module.exports = { listFeePlans, createFeePlan, getFeePlan, updateFeePlan, deleteFeePlan };
+module.exports = { listFeePlans, createFeePlan, getFeePlan, updateFeePlan, deleteFeePlan, quoteFeePlan };

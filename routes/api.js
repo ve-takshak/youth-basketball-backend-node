@@ -107,7 +107,7 @@ const {
     getChargeReceipt,
     getTeamPaymentStatus,
 } = require("../app/controllers/api/chargeController");
-const { listFeePlans, createFeePlan, getFeePlan, updateFeePlan, deleteFeePlan } = require("../app/controllers/api/feePlanController");
+const { listFeePlans, createFeePlan, getFeePlan, updateFeePlan, deleteFeePlan, quoteFeePlan } = require("../app/controllers/api/feePlanController");
 const { listMyPayments, checkoutCharge, getMyReceipt } = require("../app/controllers/api/parentPaymentController");
 const { paymentWebhook, paymentReturn } = require("../app/controllers/api/paymentWebhookController");
 
@@ -258,6 +258,7 @@ router.put("/user/clubs/:id/payment-settings", superAdminOrClubAdminAuthenticati
 // ---------- Fee plans / price list (club admin / super admin) ----------
 router.get("/user/payments/fee-plans", superAdminOrClubAdminAuthentication, listFeePlans);
 router.post("/user/payments/fee-plans", superAdminOrClubAdminAuthentication, createFeePlan); // club admin price set karta hai
+router.get("/user/payments/fee-plans/:id/quote", superAdminOrClubAdminAuthentication, quoteFeePlan); // join date se kitna dena
 router.get("/user/payments/fee-plans/:id", superAdminOrClubAdminAuthentication, getFeePlan); // + Standing Order preview
 router.put("/user/payments/fee-plans/:id", superAdminOrClubAdminAuthentication, updateFeePlan); // purane bills nahi badalte
 router.delete("/user/payments/fee-plans/:id", superAdminOrClubAdminAuthentication, deleteFeePlan); // bills bane hon toh sirf band

@@ -1,5 +1,8 @@
 const mongoose = require("../../config/database");
 const { CURRENCIES } = require("./Charge");
+const { monthsLeftInSeason, SEASON_MONTHS } = require("../helpers/season");
+
+const round = (n) => Math.round(n * 100) / 100;
 
 // Club ka saal ka Fee Plan (Subscription Plan screen). Ek club + season ka ek hi chalu plan.
 //   pricingMode "same"          -> subscriptionAmount sab age groups ke liye
@@ -26,6 +29,8 @@ const FeePlanSchema = new mongoose.Schema(
         subscriptionAmount: { type: Number, min: 0, default: 0 }, // "same" mode ki fee
         ageGroups: { type: [AgeGroupFeeSchema], default: [] }, // "per_age_group" mode ki fees
         jerseyAmount: { type: Number, min: 0, default: 0 },
+        // true: season ke beech mein join kare toh bache mahino ki fee (1200 saal, Nov mein join -> 9 mahine -> 900). Jersey poori.
+        proRate: { type: Boolean, default: true },
         currency: { type: String, enum: CURRENCIES, default: "ILS" },
         dueDate: { type: Date, default: null },
         isActive: { type: Boolean, default: true },
@@ -45,13 +50,32 @@ FeePlanSchema.methods.subscriptionFor = function (categoryId) {
     return group ? group.amount : 0;
 };
 
+// Is age group + join date ka hisaab. proRate on: saal ki fee / 12 x bache mahine (join wala mahina bhi).
+// Saal 1200, Nov 2026 mein join ("2026 / 2027") -> 9 mahine x 100 = 900. Jersey hamesha poori.
+FeePlanSchema.methods.quoteFor = function (categoryId, joinDate = new Date()) {
+    const annualFee = this.subscriptionFor(categoryId) || 0;
+    const months = this.proRate === false ? SEASON_MONTHS : monthsLeftInSeason(this.season, joinDate);
+    const subscription = months < SEASON_MONTHS ? round((annualFee * months) / SEASON_MONTHS) : annualFee;
+    const jersey = annualFee > 0 ? this.jerseyAmount || 0 : 0;
+    return {
+        annualFee,
+        monthlyRate: round(annualFee / SEASON_MONTHS),
+        months, // kitne mahine ka paisa (12 = poora saal)
+        proRated: months < SEASON_MONTHS,
+        subscription,
+        jersey,
+        total: annualFee > 0 ? round(subscription + jersey) : 0,
+    };
+};
+
 // Bill ke items is age group ke liye. null = is group ki fee set nahi (bill nahi banega).
-FeePlanSchema.methods.itemsFor = function (categoryId, categoryName = "") {
-    const fee = this.subscriptionFor(categoryId);
-    if (!(fee > 0)) return null;
+FeePlanSchema.methods.itemsFor = function (categoryId, categoryName = "", joinDate = new Date()) {
+    const quote = this.quoteFor(categoryId, joinDate);
+    if (!(quote.annualFee > 0)) return null;
+    const name = categoryName ? `Annual subscription - ${categoryName}` : "Annual subscription";
     return [
-        { type: "season_registration", name: categoryName ? `Annual subscription - ${categoryName}` : "Annual subscription", amount: fee },
-        ...(this.jerseyAmount > 0 ? [{ type: "jersey", name: "Jersey", amount: this.jerseyAmount }] : []),
+        { type: "season_registration", name: quote.proRated ? `${name} (${quote.months} of ${SEASON_MONTHS} months)` : name, amount: quote.subscription },
+        ...(quote.jersey > 0 ? [{ type: "jersey", name: "Jersey", amount: quote.jersey }] : []),
     ];
 };
 

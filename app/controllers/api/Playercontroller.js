@@ -377,6 +377,7 @@ const populatePlayer = (query) =>
 // User + Player ek flat object mein (frontend ke liye aasaan)
 const formatPlayer = (player) => {
     const user = player.userId || {};
+    const linkedParents = (player.parents || []).filter((link) => link.parentId); // delete ho chuke parent nahi gine
     return {
         _id: player._id,
         userId: user._id || null,
@@ -417,8 +418,9 @@ const formatPlayer = (player) => {
                     mobileNumber: player.teamId.coachId.userId?.mobileNumber || "",
                 }
                 : null,
-        parents: (player.parents || [])
-            .filter((link) => link.parentId)
+        // Sirf youth: koi parent linked hai? Senior ke parents hote hi nahi, isliye null.
+        hasParents: player.playerType === "senior" ? null : linkedParents.length > 0,
+        parents: linkedParents
             .map((link) => ({
                 parentId: link.parentId._id || link.parentId,
                 userId: link.parentId.userId?._id || null,

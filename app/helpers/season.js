@@ -19,10 +19,24 @@ const parseSeason = (input) => {
     return { value: `${start} / ${start + 1}` };
 };
 
-// Chalu season: July se naya season (Nov 2026 -> "2026 / 2027", Mar 2027 -> "2026 / 2027")
+// Season = August se July tak, 12 mahine ("2026 / 2027" = Aug 2026 ... Jul 2027)
+const SEASON_START_MONTH = 7; // August (0 = January)
+const SEASON_MONTHS = 12;
+
+// Chalu season (Nov 2026 -> "2026 / 2027", Mar 2027 -> "2026 / 2027", Aug 2027 -> "2027 / 2028")
 const currentSeason = (date = new Date()) => {
-    const start = date.getMonth() >= 6 ? date.getFullYear() : date.getFullYear() - 1;
+    const start = date.getMonth() >= SEASON_START_MONTH ? date.getFullYear() : date.getFullYear() - 1;
     return `${start} / ${start + 1}`;
 };
 
-module.exports = { parseSeason, currentSeason, SEASON_ERROR };
+// Is date se season khatam (July) tak kitne mahine bache, join wala mahina bhi gina jaata hai.
+// "2026 / 2027": Aug 2026 ya pehle -> 12, Nov 2026 -> 9 (Nov..Jul), Jul 2027 -> 1. Season ke baad bhi 1.
+const monthsLeftInSeason = (season, date = new Date()) => {
+    const match = String(season || "").match(/^(\d{4})/);
+    const d = new Date(date);
+    if (!match || Number.isNaN(d.getTime())) return SEASON_MONTHS;
+    const passed = (d.getFullYear() - Number(match[1])) * 12 + (d.getMonth() - SEASON_START_MONTH);
+    return Math.min(SEASON_MONTHS, Math.max(1, SEASON_MONTHS - passed));
+};
+
+module.exports = { parseSeason, currentSeason, monthsLeftInSeason, SEASON_MONTHS, SEASON_ERROR };

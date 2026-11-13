@@ -69,7 +69,8 @@ const findCharge = async (req, id, select = "") => {
  *   items do      -> haath se price, sabke liye same (purana tareeka). teamId ya playerIds zaroori.
  * teamId do toh poori team, playerIds do toh sirf wo. Jis player ka same plan (ya same season + title) ka bill pehle se hai, wo skip.
  * overrides: kisi player ki alag fee, [{ playerId, items: [{ type, name, amount }] }]. Baaki sab ko normal price.
- * body: { clubId?, feePlanId?, season?, title?, teamId?, playerIds?, items?: [{ type, name, amount }], overrides?, dueDate?, currency? }
+ * Plan ka proRate on: season (Aug-Jul) ke beech join kiya toh bache mahino ki fee. Join date = joinDate ya player ki registration date.
+ * body: { clubId?, feePlanId?, season?, title?, teamId?, playerIds?, items?: [{ type, name, amount }], overrides?, dueDate?, currency?, joinDate? }
  */
 const issueCharges = async (req, res) => {
     try {
@@ -127,8 +128,16 @@ const issueCharges = async (req, res) => {
         // Plan ho aur kuch na chuna ho toh club ke saare players (jinki fee nahi bani wo neeche skip)
         if (!filter.teamId && !filter._id && !plan) return sendError(res, 400, "Choose a team or players.");
 
+        // Join date: body.joinDate (sabke liye) warna player ki registration date (createdAt). Isse bache mahine nikalte hain.
+        let joinDate = null;
+        if (body.joinDate) {
+            const m = moment(body.joinDate, ["YYYY-MM-DD", moment.ISO_8601], true);
+            if (!m.isValid()) return sendError(res, 400, "Join date must be YYYY-MM-DD.");
+            joinDate = m.toDate();
+        }
+
         const players = await Player.find(filter)
-            .select("_id season teamId")
+            .select("_id season teamId createdAt")
             .populate({ path: "teamId", select: "categoryId", populate: { path: "categoryId", select: "name" } });
         if (!players.length) return sendError(res, 404, "No players found.");
 
@@ -138,7 +147,11 @@ const issueCharges = async (req, res) => {
         players.forEach((player) => {
             if (!plan) return itemsByPlayer.set(String(player._id), items);
             const category = player.teamId?.categoryId;
-            const planItems = plan.itemsFor(category?._id, plan.pricingMode === "per_age_group" ? category?.name : "");
+            const planItems = plan.itemsFor(
+                category?._id,
+                plan.pricingMode === "per_age_group" ? category?.name : "",
+                joinDate || player.createdAt || new Date()
+            );
             if (planItems) itemsByPlayer.set(String(player._id), planItems);
             else noFee += 1;
         });
