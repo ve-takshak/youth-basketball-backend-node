@@ -15,6 +15,7 @@ const { isValidId, cleanMobile, escapeRegex, getPagination } = require("../../he
 const { validatePersonInput } = require("../../helpers/userHelper");
 const { upload_files, deleteFiles } = require("../../../utils/s3");
 const { withSubscriptions } = require("../../helpers/subscriptionStatus");
+const { billPlayersQuietly } = require("../../helpers/autoBill");
 
 // Player do tarah ke (playerType):
 //   senior -> User role "seniorPlayer": mobile zaroori (khud login), koi parent nahi
@@ -683,6 +684,7 @@ const createPlayer = async (req, res) => {
             idDocument: uploadedDoc,
             createdBy: req.user._id,
         });
+        await billPlayersQuietly([player._id]); // season ka Fee Plan hai toh bill abhi
 
         const saved = await populatePlayer(Player.findById(player._id));
 
@@ -1139,6 +1141,7 @@ const updatePlayer = async (req, res) => {
         Object.assign(player, values);
         if (body.teamId !== undefined) player.teamId = team ? team._id : null;
         await player.save();
+        if (body.teamId !== undefined) await billPlayersQuietly([player._id]); // team mili toh age group ki fee ka bill
 
         // 15. Purani file hatao (agar change hui)
         if (docChanged && oldDoc) await removeIdDocument(oldDoc);
@@ -1420,6 +1423,7 @@ const assignPlayerToTeam = async (req, res) => {
             player.teamId = team._id;
             if (!player.season) player.season = team.season || "";
             await player.save();
+            await billPlayersQuietly([player._id]); // team mili toh age group ki fee ka bill
 
             const saved = await populatePlayer(Player.findById(player._id));
             assigned.push(formatPlayer(saved));

@@ -6,6 +6,8 @@ const { ROLES } = require("../../../helpers/constants");
 const { isValidId, escapeRegex, getPagination } = require("../../../helpers/common");
 const { validatePersonInput } = require("../../../helpers/userHelper");
 const { populatePlayer, formatPlayer, getCoachTeamIds, coachSeesPlayer } = require("../Playercontroller");
+const { billPlayersQuietly } = require("../../../helpers/autoBill");
+const { withSubscriptions } = require("../../../helpers/subscriptionStatus");
 
 // Admin panel (superAdmin / clubAdmin) ki parent APIs:
 //   GET    /user/parents                                  -> parents ki list (bachchon ke saath)
@@ -390,6 +392,7 @@ const linkParent = async (req, res, player, body) => {
         if (makePrimary) player.parents.forEach((link) => (link.isPrimary = false));
         player.parents.push({ parentId: parent._id, relation, isPrimary: makePrimary });
         await player.save();
+        await billPlayersQuietly([player._id]); // season ka Fee Plan hai toh bill abhi (subscription "inactive" + amount dikhega)
 
         const saved = await populatePlayer(Player.findById(player._id));
 
@@ -398,7 +401,7 @@ const linkParent = async (req, res, player, body) => {
             status: 200,
             message: "Parent linked successfully.",
             message_desc: "Parent linked successfully.",
-            data: formatPlayer(saved),
+            data: (await withSubscriptions([formatPlayer(saved)]))[0], // + subscription (naya bill)
         });
     } catch (e) {
         // Is request mein bane naye records hata do

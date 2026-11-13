@@ -95,4 +95,13 @@ const ensureSeasonCharges = async (playerIds, season = currentSeason()) => {
     return result;
 };
 
-module.exports = { ensureSeasonCharges };
+// Player bana / parent link hua / team mili: bill ab bana do. Bill na ban paaye toh bhi asli kaam fail nahi hona chahiye.
+const billPlayersQuietly = async (playerIds) => {
+    try {
+        await ensureSeasonCharges(playerIds.filter(Boolean));
+    } catch (e) {
+        console.error("Auto bill error:", e.message);
+    }
+};
+
+module.exports = { ensureSeasonCharges, billPlayersQuietly };
