@@ -8,9 +8,12 @@ const { chargeBadge, amounts, splitPlan, round } = require("../../helpers/paymen
 const { formatCharge, PLAYER_POPULATE } = require("../../helpers/chargeFormat");
 const { providerForClub, returnUrls, addEvent, syncStandingOrder, planDates, latestReceipt } = require("../../payments/service");
 const { PaymentError } = require("../../payments");
+const { ensureSeasonCharges } = require("../../helpers/autoBill");
+const { parseSeason, currentSeason } = require("../../helpers/season");
 
 // Parent (mobile app): apne bachchon ke bills dekhna aur pay karna. Senior player apna khud.
 //   GET  /user/parent/payments
+//   GET  /user/parent/payments/children   har bachche ka season ka hisaab (bill nahi toh Fee Plan se apne aap)
 //   POST /user/parent/payments/:id/checkout
 //   GET  /user/parent/payments/:id/receipt
 //
@@ -67,46 +70,122 @@ const listMyPayments = async (req, res) => {
         const ids = await myPlayerIds(req.user);
         if (ids === null) return sendError(res, 403, "Only parents and senior players can see payments.");
 
+        await ensureSeasonCharges(ids); // is season ka bill nahi bana toh Fee Plan se ab ban jaayega
+
         const filter = { playerId: { $in: ids }, status: { $ne: "cancelled" } };
         if (req.query.season) filter.season = String(req.query.season);
         const charges = await Charge.find(filter).sort({ createdAt: -1 }).populate(PLAYER_POPULATE);
-
-        // Standing Order wale bills Tranzila se refresh (ghante mein ek baar)
-        await Promise.all(charges.filter((c) => c.plan === "standing_order").map((c) => syncStandingOrder(c)));
-
-        const clubIds = [...new Set(charges.map((c) => String(c.clubId)))];
-        const clubs = await Club.find({ _id: { $in: clubIds } }).select("paymentSettings");
-        const settingsByClub = new Map(clubs.map((c) => [String(c._id), c.paymentSettings || {}]));
-
-        const list = charges.map((charge) => {
-            const out = formatCharge(charge);
-            const settings = settingsByClub.get(String(charge.clubId)) || {};
-            const canPay = ["unpaid", "overdue", "pending"].includes(out.badge) || charge.status === "failed";
-            const max = settings.maxInstallments || 10;
-            out.options = canPay
-                ? {
-                      oneTime: { amount: charge.amount },
-                      standingOrder:
-                          settings.allowStandingOrder !== false && max >= 2
-                              ? {
-                                    maxInstallments: max,
-                                    // App dropdown ke liye: har option pe pehli aur mahine ki kisht
-                                    choices: Array.from({ length: max - 1 }, (_, i) => {
-                                        const n = i + 2;
-                                        const split = splitPlan(charge.items, n);
-                                        return { installments: n, firstAmount: split.firstAmount, monthlyAmount: split.monthlyAmount };
-                                    }),
-                                }
-                              : null,
-                  }
-                : null;
-            return out;
-        });
+        const list = await withPayOptions(charges);
 
         const outstanding = round(charges.reduce((s, c) => s + amounts(c).outstanding, 0));
         return sendOk(res, "My payments.", { charges: list, totalOutstanding: outstanding });
     } catch (e) {
         return sendServerError(res, "listMyPayments", e);
+    }
+};
+
+// Bills formatted + har bill ke pay options (ek baar / Standing Order ki kishton ki list)
+const withPayOptions = async (charges) => {
+    // Standing Order wale bills Tranzila se refresh (ghante mein ek baar)
+    await Promise.all(charges.filter((c) => c.plan === "standing_order").map((c) => syncStandingOrder(c)));
+
+    const clubIds = [...new Set(charges.map((c) => String(c.clubId)))];
+    const clubs = await Club.find({ _id: { $in: clubIds } }).select("paymentSettings");
+    const settingsByClub = new Map(clubs.map((c) => [String(c._id), c.paymentSettings || {}]));
+
+    return charges.map((charge) => {
+        const out = formatCharge(charge);
+        const settings = settingsByClub.get(String(charge.clubId)) || {};
+        const canPay = ["unpaid", "overdue", "pending"].includes(out.badge) || charge.status === "failed";
+        const max = settings.maxInstallments || 10;
+        out.options = canPay
+            ? {
+                  oneTime: { amount: charge.amount },
+                  standingOrder:
+                      settings.allowStandingOrder !== false && max >= 2
+                          ? {
+                                maxInstallments: max,
+                                // App dropdown ke liye: har option pe pehli aur mahine ki kisht
+                                choices: Array.from({ length: max - 1 }, (_, i) => {
+                                    const n = i + 2;
+                                    const split = splitPlan(charge.items, n);
+                                    return { installments: n, firstAmount: split.firstAmount, monthlyAmount: split.monthlyAmount };
+                                }),
+                            }
+                          : null,
+              }
+            : null;
+        return out;
+    });
+};
+
+const NO_BILL_MESSAGES = {
+    no_plan: "The club hasn't set the fees for this season yet.",
+    no_team: "Your child isn't in a team yet. The fee will show once the club adds them to a team.",
+    no_fee: "There is no fee for your child's age group.",
+    inactive: "This player is not active.",
+};
+
+/**
+ * GET /api/user/parent/payments/children?season=   (parent; senior player apna khud)
+ * Har bachche ka is season ka hisaab: kitna dena hai, kitna diya, baaki, pay options.
+ * Bill nahi bana toh Fee Plan se ab ban jaata hai (fee = team ka age group, registration date se pro-rated, + jersey).
+ * paymentRequired true = subscription + jersey abhi poora nahi diya (app dashboard band rakhe).
+ */
+const listMyChildrenPayments = async (req, res) => {
+    try {
+        const ids = await myPlayerIds(req.user);
+        if (ids === null) return sendError(res, 403, "Only parents and senior players can see payments.");
+
+        const season = req.query.season ? parseSeason(req.query.season) : { value: currentSeason() };
+        if (season.message) return sendError(res, 400, season.message);
+
+        const reasons = await ensureSeasonCharges(ids, season.value);
+        const [players, charges] = await Promise.all([
+            Player.find({ _id: { $in: ids } })
+                .select("userId teamId playerType status")
+                .populate("userId", "firstname lastname profile_image")
+                .populate({ path: "teamId", select: "name categoryId", populate: { path: "categoryId", select: "name" } }),
+            Charge.find({ playerId: { $in: ids }, season: season.value, status: { $ne: "cancelled" } })
+                .sort({ createdAt: -1 })
+                .populate(PLAYER_POPULATE),
+        ]);
+        const formatted = await withPayOptions(charges);
+
+        const children = players.map((player) => {
+            const key = String(player._id);
+            const bills = formatted.filter((c) => String(c.player?._id) === key);
+            const subscriptionBill = bills.find((c) => (c.items || []).some((i) => i.type === "season_registration")) || null;
+            const reason = reasons.get(key) || "no_plan";
+            const totalAmount = round(bills.reduce((s, c) => s + (c.amount || 0), 0));
+            const outstanding = round(charges.filter((c) => String(c.playerId?._id || c.playerId) === key).reduce((s, c) => s + amounts(c).outstanding, 0));
+            return {
+                playerId: player._id,
+                firstname: player.userId?.firstname || "",
+                lastname: player.userId?.lastname || "",
+                profile_image: player.userId?.profile_image || "",
+                playerType: player.playerType,
+                team: player.teamId?._id ? { _id: player.teamId._id, name: player.teamId.name } : null,
+                ageGroup: player.teamId?.categoryId?.name || "",
+                season: season.value,
+                subscriptionStatus: subscriptionBill?.badge === "paid" ? "active" : "inactive",
+                paymentRequired: Boolean(subscriptionBill) && subscriptionBill.badge !== "paid",
+                totalAmount, // is season ke saare bills
+                paidAmount: round(totalAmount - outstanding),
+                outstandingAmount: outstanding,
+                message: subscriptionBill ? "" : NO_BILL_MESSAGES[reason] || "",
+                noBillReason: subscriptionBill ? null : reason, // no_plan | no_team | no_fee | inactive
+                bills, // har bill: items, badge, options (pay once / monthly)
+            };
+        });
+
+        return sendOk(res, "My children's payments.", {
+            season: season.value,
+            children,
+            totalOutstanding: round(children.reduce((s, c) => s + c.outstandingAmount, 0)),
+        });
+    } catch (e) {
+        return sendServerError(res, "listMyChildrenPayments", e);
     }
 };
 
@@ -234,4 +313,4 @@ const getMyReceipt = async (req, res) => {
     }
 };
 
-module.exports = { listMyPayments, checkoutCharge, getMyReceipt };
+module.exports = { listMyPayments, listMyChildrenPayments, checkoutCharge, getMyReceipt };

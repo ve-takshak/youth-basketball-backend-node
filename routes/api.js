@@ -111,7 +111,7 @@ const {
     getTeamPaymentStatus,
 } = require("../app/controllers/api/chargeController");
 const { listFeePlans, createFeePlan, getFeePlan, updateFeePlan, deleteFeePlan, quoteFeePlan } = require("../app/controllers/api/feePlanController");
-const { listMyPayments, checkoutCharge, getMyReceipt } = require("../app/controllers/api/parentPaymentController");
+const { listMyPayments, listMyChildrenPayments, checkoutCharge, getMyReceipt } = require("../app/controllers/api/parentPaymentController");
 const { paymentWebhook, paymentReturn } = require("../app/controllers/api/paymentWebhookController");
 
 router.get("/test", (req, res) => res.send("API working"));
@@ -284,6 +284,7 @@ router.get("/user/teams/:id/payment-status", authentication, getTeamPaymentStatu
 
 // ---------- Payments (parent mobile app) ----------
 router.get("/user/parent/payments", authentication, listMyPayments);
+router.get("/user/parent/payments/children", authentication, listMyChildrenPayments); // har bachche ka kitna dena / diya
 router.post("/user/parent/payments/:id/checkout", authentication, checkoutCharge); // Tranzila page ka URL deta hai
 router.get("/user/parent/payments/:id/receipt", authentication, getMyReceipt);
 

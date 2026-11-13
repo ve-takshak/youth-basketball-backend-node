@@ -5201,6 +5201,37 @@
         ]
       }
     },
+    "/user/parent/payments/children": {
+      "get": {
+        "description": "**Access:** Any logged-in user\n\nhar bachche ka kitna dena / diya\n\n```\nHar bachche ka is season ka hisaab: kitna dena hai, kitna diya, baaki, pay options.\nBill nahi bana toh Fee Plan se ab ban jaata hai (fee = team ka age group, registration date se pro-rated, + jersey).\npaymentRequired true = subscription + jersey abhi poora nahi diya (app dashboard band rakhe).\n```",
+        "parameters": [
+          {
+            "name": "season",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Payments"
+        ],
+        "summary": "List my children payments",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/user/parent/payments/{id}/checkout": {
       "post": {
         "description": "**Access:** Any logged-in user\n\nTranzila page ka URL deta hai\n\n```\nPay karna shuru. data.checkout.url app mein kholo (Tranzila ka page). Result webhook se aata hai.\nplan \"one_time\" = poora ek baar mein. plan \"standing_order\" = jersey + pehli kisht aaj, baaki har mahine.\nbody: { plan, installments?, language? }\n```",
