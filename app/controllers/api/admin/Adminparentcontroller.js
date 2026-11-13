@@ -14,9 +14,7 @@ const { populatePlayer, formatPlayer, getCoachTeamIds, coachSeesPlayer } = requi
 //   DELETE /user/parents/:id/delete                       -> parent delete (sirf jab koi bachcha linked na ho)
 //   POST   /user/players/:id/parents/link                 -> youth player se parent jodna
 //   DELETE /user/players/:id/parents/:parentId/unlink     -> youth player se parent hatana
-//   POST   /user/players/parents/link                     -> admin: playerId body mein (coach wali jaisi)
-//   GET    /user/coach/parents                          -> coach: club ke parents (link ke liye)
-//   POST   /user/coach/players/parents/link               -> coach: apni team ke youth se parent jodna (playerId body mein)
+//   POST   /user/players/parents/link                     -> admin + coach: playerId body mein
 // clubAdmin sirf apne club ke parents / players. superAdmin sab.
 
 const sendError = (res, status, message, data = {}) =>
@@ -60,8 +58,8 @@ const formatParent = (parent, children = []) => {
     };
 };
 
-// Parents ke bachche ek query mein: { parentId: [child, ...] }
-const childrenByParent = async (parentIds) => {
+// Parents ke bachche ek query mein: { parentId: [child, ...] }. brief = sirf playerId, firstname, lastname (list ke liye)
+const childrenByParent = async (parentIds, { brief = false } = {}) => {
     const map = {};
     if (!parentIds.length) return map;
 
@@ -75,6 +73,10 @@ const childrenByParent = async (parentIds) => {
             const key = String(link.parentId);
             if (!parentIds.some((id) => String(id) === key)) return;
             if (!map[key]) map[key] = [];
+            if (brief) {
+                map[key].push({ playerId: player._id, firstname: player.userId?.firstname || "", lastname: player.userId?.lastname || "" });
+                return;
+            }
             map[key].push({
                 playerId: player._id,
                 firstname: player.userId?.firstname || "",
@@ -91,18 +93,20 @@ const childrenByParent = async (parentIds) => {
 };
 
 /**
- * GET /api/user/parents?clubId=&search=&page=1&limit=20   (superAdmin ya clubAdmin)
+ * GET /api/user/parents?clubId=&search=&page=1&limit=20   (superAdmin, clubAdmin, coach - coach / clubAdmin ko apne club ke)
  * search: parent ka naam, mobile ya email
  */
 const listParents = async (req, res) => {
     try {
-        if (!isAdmin(req)) return sendError(res, 403, "Only admins can view parents.");
+        const isCoach = req.user.role === ROLES.COACH;
+        if (!isAdmin(req) && !isCoach) return sendError(res, 403, "Access denied.");
 
         const search = String(req.query.search || "").trim();
         const clubId = String(req.query.clubId || "").trim();
 
         const filter = {};
-        if (req.user.role === ROLES.CLUB_ADMIN) {
+        // clubAdmin / coach: apne club ke parents. superAdmin: ?clubId= (na do toh sab)
+        if (req.user.role === ROLES.CLUB_ADMIN || isCoach) {
             if (!req.clubId) return sendError(res, 403, "Your account is not linked to any club.");
             filter.clubId = req.clubId;
         } else if (clubId) {
@@ -140,7 +144,7 @@ const sendParentList = async (req, res, filter, search) => {
             Parent.countDocuments(filter),
         ]);
 
-        const childMap = await childrenByParent(parents.map((p) => p._id));
+        const childMap = await childrenByParent(parents.map((p) => p._id), { brief: true });
 
         return res.status(200).json({
             error: false,
@@ -446,7 +450,8 @@ const unlinkParentFromPlayer = async (req, res) => {
 };
 
 /**
- * POST /api/user/players/parents/link   (superAdmin ya clubAdmin, playerId body mein - coach wali API jaisa)
+ * POST /api/user/players/parents/link   (superAdmin, clubAdmin, coach - playerId body mein)
+ * coach: sirf apni team ka youth player (ya bina team ka jo usne banaya)
  * body: { playerId, parentId }                                                -> list se purana parent
  *    ya { playerId, firstname, lastname, countryCode, mobileNumber, email? } -> naya parent
  * relation hamesha "guardian", player ka pehla parent apne aap primary. clubAdmin sirf apne club ka player.
@@ -455,64 +460,29 @@ const linkAdminParent = async (req, res) => {
     try {
         const body = req.body || {};
         if (!body.playerId) return sendError(res, 400, "playerId is required.");
-        const found = await findYouthPlayerForAdmin(req, body.playerId);
-        if (found.message) return sendError(res, found.status, found.message);
+
+        let player;
+        if (req.user.role === ROLES.COACH) {
+            // Coach: apni team ka player, ya bina team ka jo usne khud banaya
+            if (!isValidId(body.playerId)) return sendError(res, 400, "Invalid player id.");
+            player = await Player.findById(body.playerId);
+            if (!coachSeesPlayer(req, player, await getCoachTeamIds(req))) return sendError(res, 404, "Player not found.");
+            if (player.playerType !== "youth") return sendError(res, 400, "Only youth players have parents.");
+        } else {
+            const found = await findYouthPlayerForAdmin(req, body.playerId);
+            if (found.message) return sendError(res, found.status, found.message);
+            player = found.player;
+        }
 
         const { relation, isPrimary, ...rest } = body;
-        return await linkParent(req, res, found.player, rest);
+        return await linkParent(req, res, player, rest);
     } catch (e) {
         return sendServerError(res, "Admin link parent", e);
     }
 };
 
-// ---------- Coach (mobile app) ----------
-
-/**
- * GET /api/user/coach/parents?search=&page=1&limit=20   (sirf coach)
- * Coach ke club ke saare parents (bachchon ke saath), taaki youth player se link karne ke liye chun sake.
- * search: parent ka naam, mobile ya email
- */
-const listCoachParents = async (req, res) => {
-    try {
-        if (req.user.role !== ROLES.COACH) return sendError(res, 403, "Access denied. Coach only.");
-        if (!req.clubId) return sendError(res, 403, "Your account is not linked to any club.");
-        return await sendParentList(req, res, { clubId: req.clubId }, String(req.query.search || "").trim());
-    } catch (e) {
-        return sendServerError(res, "Coach list parents", e);
-    }
-};
-
-/**
- * POST /api/user/coach/players/parents/link   (sirf coach, apni team ka youth player)
- * body: { playerId, parentId }                                                -> list se purana parent
- *    ya { playerId, firstname, lastname, countryCode, mobileNumber, email? } -> naya parent
- * relation hamesha "guardian", player ka pehla parent apne aap primary.
- * Naye parent ka mobile club mein pehle se hai toh wahi parent link hota hai (naya nahi banta).
- */
-const linkCoachParent = async (req, res) => {
-    try {
-        if (req.user.role !== ROLES.COACH) return sendError(res, 403, "Access denied. Coach only.");
-        const body = req.body || {};
-        if (!body.playerId) return sendError(res, 400, "playerId is required.");
-        if (!isValidId(body.playerId)) return sendError(res, 400, "Invalid player id.");
-
-        const teamIds = await getCoachTeamIds(req);
-        const player = await Player.findById(body.playerId);
-        if (!coachSeesPlayer(req, player, teamIds)) return sendError(res, 404, "Player not found.");
-        if (player.playerType !== "youth") return sendError(res, 400, "Only youth players have parents.");
-
-        // Coach relation / isPrimary nahi bhejta: relation "guardian", pehla parent apne aap primary
-        const { relation, isPrimary, ...rest } = body;
-        return await linkParent(req, res, player, rest);
-    } catch (e) {
-        return sendServerError(res, "Coach link parent", e);
-    }
-};
-
 module.exports = {
     linkAdminParent,
-    listCoachParents,
-    linkCoachParent,
     listParents,
     getParent,
     updateParent,

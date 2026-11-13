@@ -67,8 +67,6 @@ const {
     deleteParent,
     linkParentToPlayer,
     unlinkParentFromPlayer,
-    listCoachParents,
-    linkCoachParent,
     linkAdminParent,
 } = require("../app/controllers/api/admin/Adminparentcontroller");
 const { createFacility, listFacilities, getFacility, deleteFacility, updateFacility } = require("../app/controllers/api/facilitysController");
@@ -194,16 +192,14 @@ router.get("/user/coach/players", authentication, listCoachPlayers);
 router.get("/user/coach/players/:id", authentication, getCoachPlayer);
 router.put("/user/coach/players/:id/update", authentication, updateCoachPlayer);
 router.delete("/user/coach/players/:id/delete", authentication, deleteCoachPlayer);
-router.get("/user/coach/parents", authentication, listCoachParents); // club ke parents (link ke liye chunne)
-router.post("/user/coach/players/parents/link", authentication, linkCoachParent); // body: playerId + parentId ya naye parent ki details
 
 // Player ke parents (admin: link / unlink)
-router.post("/user/players/parents/link", superAdminOrClubAdminAuthentication, linkAdminParent); // playerId body mein
+router.post("/user/players/parents/link", authentication, linkAdminParent); // admin + coach, playerId body mein
 router.post("/user/players/:id/parents/link", superAdminOrClubAdminAuthentication, linkParentToPlayer);
 router.delete("/user/players/:id/parents/:parentId/unlink", superAdminOrClubAdminAuthentication, unlinkParentFromPlayer);
 
 // ---------- Parents (admin panel) ----------
-router.get("/user/parents", superAdminOrClubAdminAuthentication, listParents);
+router.get("/user/parents", authentication, listParents); // admin + coach (apne club ke parents)
 router.get("/user/parents/:id", superAdminOrClubAdminAuthentication, getParent);
 router.put("/user/parents/:id/update", superAdminOrClubAdminAuthentication, updateParent);
 router.delete("/user/parents/:id/delete", superAdminOrClubAdminAuthentication, deleteParent);

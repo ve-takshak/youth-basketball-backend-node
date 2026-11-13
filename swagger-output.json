@@ -2550,83 +2550,9 @@
         ]
       }
     },
-    "/user/coach/parents": {
-      "get": {
-        "description": "**Access:** Any logged-in user\n\nclub ke parents (link ke liye chunne)\n\n```\nCoach ke club ke saare parents (bachchon ke saath), taaki youth player se link karne ke liye chun sake.\nsearch: parent ka naam, mobile ya email\n```",
-        "parameters": [
-          {
-            "name": "search",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "401": {
-            "description": "Missing or invalid token"
-          },
-          "default": {
-            "description": ""
-          }
-        },
-        "tags": [
-          "Coach (mobile app): apni team ke players ka CRUD"
-        ],
-        "summary": "List coach parents",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
-      }
-    },
-    "/user/coach/players/parents/link": {
-      "post": {
-        "description": "**Access:** Any logged-in user\n\nbody: playerId + parentId ya naye parent ki details\n\n```\nbody: { playerId, parentId }                                                -> list se purana parent\n   ya { playerId, firstname, lastname, countryCode, mobileNumber, email? } -> naya parent\nrelation hamesha \"guardian\", player ka pehla parent apne aap primary.\nNaye parent ka mobile club mein pehle se hai toh wahi parent link hota hai (naya nahi banta).\n```",
-        "responses": {
-          "401": {
-            "description": "Missing or invalid token"
-          },
-          "default": {
-            "description": ""
-          }
-        },
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "playerId",
-                  "parentId"
-                ],
-                "properties": {
-                  "playerId": {
-                    "type": "string"
-                  },
-                  "parentId": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Coach (mobile app): apni team ke players ka CRUD"
-        ],
-        "summary": "Link coach parent",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
-      }
-    },
     "/user/players/parents/link": {
       "post": {
-        "description": "**Access:** Super admin or club admin\n\nplayerId body mein\n\n```\nbody: { playerId, parentId }                                                -> list se purana parent\n   ya { playerId, firstname, lastname, countryCode, mobileNumber, email? } -> naya parent\nrelation hamesha \"guardian\", player ka pehla parent apne aap primary. clubAdmin sirf apne club ka player.\n```",
+        "description": "**Access:** Any logged-in user\n\nadmin + coach, playerId body mein\n\n```\ncoach: sirf apni team ka youth player (ya bina team ka jo usne banaya)\nbody: { playerId, parentId }                                                -> list se purana parent\n   ya { playerId, firstname, lastname, countryCode, mobileNumber, email? } -> naya parent\nrelation hamesha \"guardian\", player ka pehla parent apne aap primary. clubAdmin sirf apne club ka player.\n```",
         "responses": {
           "401": {
             "description": "Missing or invalid token"
@@ -2779,7 +2705,7 @@
     },
     "/user/parents": {
       "get": {
-        "description": "**Access:** Super admin or club admin\n\n```\nsearch: parent ka naam, mobile ya email\n```",
+        "description": "**Access:** Any logged-in user\n\nadmin + coach (apne club ke parents)\n\n```\nsearch: parent ka naam, mobile ya email\n```",
         "parameters": [
           {
             "name": "search",
