@@ -7,27 +7,34 @@ const Club = require("../models/Club");
 const { ROLES } = require("../helpers/constants");
 const { getRequiredTerms, hasAcceptedRequired } = require("../helpers/termsHelper");
 
-const sendError = (res, status, message) =>
-    res.status(status).json({ error: true, status, message, message_desc: message, data: {} });
+const sendError = (res, status, message, data = {}) =>
+    res.status(status).json({ error: true, status, message, message_desc: message, data });
 
-// Token check karke user return karta hai. Problem ho toh error message.
+// 401 ke saath data.code: TOKEN_EXPIRED = app POST /user/refresh-token kare, baaki = login screen
+const sendAuthError = (res, { error, code }) => sendError(res, 401, error, { code });
+
+// Token check karke user return karta hai. Problem ho toh { error, code }.
+// Sirf access token (type "access", 15 min) chalta hai. Purane 180 din wale token ab nahi chalte.
 const getUserFromToken = async (req) => {
     const header = req.header("Authorization") || "";
     const [type, token] = header.split(" ");
 
-    if (!token || type.toLowerCase() !== "bearer") return { error: "Token is required." };
+    if (!token || type.toLowerCase() !== "bearer") return { error: "Token is required.", code: "TOKEN_REQUIRED" };
 
+    let decoded;
     try {
-        const decoded = jwt.verify(token, process.env.JWTKEY);
-        const user = await User.findById(decoded.id);
-
-        if (!user) return { error: "User no longer exists." };
-        if (!user.is_verify) return { error: "Please verify your account." };
-
-        return { user };
+        decoded = jwt.verify(token, process.env.JWTKEY, { algorithms: ["HS256"] });
     } catch (e) {
-        return { error: "Invalid or expired token." };
+        if (e.name === "TokenExpiredError") return { error: "Token expired.", code: "TOKEN_EXPIRED" };
+        return { error: "Invalid token.", code: "TOKEN_INVALID" };
     }
+    if (decoded.type !== "access") return { error: "Invalid token. Please log in again.", code: "TOKEN_INVALID" };
+
+    const user = await User.findById(decoded.id);
+    if (!user) return { error: "User no longer exists.", code: "TOKEN_INVALID" };
+    if (!user.is_verify) return { error: "Please verify your account.", code: "TOKEN_INVALID" };
+
+    return { user };
 };
 
 // clubAdmin aur coach ka club nikal ke req.clubId mein daalna (superAdmin ke liye null)
@@ -65,8 +72,9 @@ const attachClub = async (req) => {
  */
 const authentication = async (req, res, next) => {
     try {
-        const { user, error } = await getUserFromToken(req);
-        if (error) return sendError(res, 401, error);
+        const auth = await getUserFromToken(req);
+        const { user, error } = auth;
+        if (error) return sendAuthError(res, auth);
 
         req.user = user;
         const clubError = await attachClub(req);
@@ -84,8 +92,9 @@ const authentication = async (req, res, next) => {
  */
 const superAdminAuthentication = async (req, res, next) => {
     try {
-        const { user, error } = await getUserFromToken(req);
-        if (error) return sendError(res, 401, error);
+        const auth = await getUserFromToken(req);
+        const { user, error } = auth;
+        if (error) return sendAuthError(res, auth);
         if (user.role !== ROLES.SUPER_ADMIN) return sendError(res, 403, "Access denied. Super admin only.");
 
         req.user = user;
@@ -103,8 +112,9 @@ const superAdminAuthentication = async (req, res, next) => {
  */
 const superAdminOrClubAdminAuthentication = async (req, res, next) => {
     try {
-        const { user, error } = await getUserFromToken(req);
-        if (error) return sendError(res, 401, error);
+        const auth = await getUserFromToken(req);
+        const { user, error } = auth;
+        if (error) return sendAuthError(res, auth);
         if (![ROLES.SUPER_ADMIN, ROLES.CLUB_ADMIN].includes(user.role)) {
             return sendError(res, 403, "Access denied. Super admin or club admin only.");
         }

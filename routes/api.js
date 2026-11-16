@@ -8,7 +8,7 @@ const {
     requireTermsAccepted,
 } = require("../app/middleware/authentication");
 
-const { register, login, verifyOtp, getProfile, resendOtp, registerParent, updateParentProfile, updateProfile } = require("../app/controllers/api/userController");
+const { register, login, verifyOtp, getProfile, resendOtp, registerParent, updateParentProfile, updateProfile, refreshToken, logout } = require("../app/controllers/api/userController");
 const { createClub, listClubs, getClub, getDashboardSummary, updateClub, deleteClub, restoreClub, clubOptions } = require("../app/controllers/api/clubController");
 const {
     createClubAdmin,
@@ -117,7 +117,9 @@ router.get("/test", (req, res) => res.send("API working"));
 // ---------- Auth (mobile + OTP) ----------
 router.post("/user/register", register);            // sirf superAdmin signup
 router.post("/user/login", login);                  // sab roles
-router.post("/user/verify-otp", verifyOtp);         // sab roles, token yahin milta hai
+router.post("/user/verify-otp", verifyOtp);         // sab roles, token (15 min) + refreshToken (30 din) yahin milta hai
+router.post("/user/refresh-token", refreshToken);  // body: { refreshToken } -> naya token + naya refreshToken
+router.post("/user/logout", logout);               // body: { refreshToken, allDevices? }
 router.post("/user/resend-otp", resendOtp);
 router.get("/user/profile", authentication, getProfile);
 router.put("/user/profile", superAdminOrClubAdminAuthentication, updateProfile); // web panel: apni profile edit

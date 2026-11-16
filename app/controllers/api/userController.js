@@ -1,4 +1,3 @@
-const jwt = require("jsonwebtoken");
 const validator = require("validator");
 const User = require("../../models/User");
 const {
@@ -18,16 +17,13 @@ const Club = require("../../models/Club");
 const ClubAdmin = require("../../models/ClubAdmin");
 const Coach = require("../../models/Coach");
 const Player = require("../../models/Player");
+const { issueTokens, rotateTokens, revokeTokens } = require("../../helpers/authTokens");
 
 
 // Abhi OTP hamesha 0000. SMS lagane pe yahan random OTP banake SMS bhejna.
 const generateOtp = () => STATIC_OTP;
 
-const createToken = (user) =>
-    jwt.sign({ id: user._id, role: user.role }, process.env.JWTKEY, {
-        algorithm: "HS256",
-        expiresIn: "180d",
-    });
+// Access token 15 min + refresh token 30 din (helpers/authTokens)
 
 // ---- OTP rate limit / lockout (per user, DB mein, isliye server restart pe bhi rehta hai) ----
 const minutesLeft = (until) => Math.max(1, Math.ceil((new Date(until).getTime() - Date.now()) / 60000));
@@ -687,6 +683,7 @@ const verifyOtp = async (req, res) => {
 
         // Club details (id, code, name, theme) har role ke liye same format mein
         const roleData = await buildRoleData(user);
+        const tokens = await issueTokens(user, { device_type: user.device_type, req });
 
         return res.status(200).json({
             error: false,
@@ -696,7 +693,7 @@ const verifyOtp = async (req, res) => {
             data: {
                 ...publicUser(user),
                 ...roleData,
-                token: createToken(user),
+                ...tokens, // token (15 min), tokenType, expiresIn, refreshToken (30 din), refreshTokenExpiresAt
             },
         });
     } catch (e) {
@@ -864,4 +861,63 @@ const updateProfile = async (req, res) => {
     }
 };
 
-module.exports = { register, login, verifyOtp, getProfile, updateProfile, resendOtp, registerParent, updateParentProfile };
+/**
+ * POST /api/user/refresh-token   (token nahi chahiye)
+ * Access token (15 min) expire ho jaaye toh isse naya. Har baar naya refreshToken bhi milta hai - purana ab nahi chalega, naya save karo.
+ * body: { refreshToken }
+ */
+const refreshToken = async (req, res) => {
+    try {
+        const raw = String((req.body || {}).refreshToken || "").trim();
+        const result = await rotateTokens(
+            raw,
+            async (userId) => {
+                const user = await User.findById(userId);
+                return user && user.is_verify ? user : null;
+            },
+            req
+        );
+        if (!result.tokens) {
+            return res.status(result.status).json({
+                error: true,
+                status: result.status,
+                message: result.message,
+                message_desc: result.message,
+                data: { code: "REFRESH_TOKEN_INVALID" }, // app: login screen pe bhejo
+            });
+        }
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Token refreshed.",
+            message_desc: "Token refreshed.",
+            data: result.tokens,
+        });
+    } catch (e) {
+        console.error("Refresh token error:", e);
+        return res.status(500).json({ error: true, status: 500, message: "Something went wrong.", message_desc: e.message, data: {} });
+    }
+};
+
+/**
+ * POST /api/user/logout   (token nahi chahiye, refreshToken se)
+ * Is device ka session band. allDevices: true = user ke saare devices se logout.
+ * body: { refreshToken, allDevices? }
+ */
+const logout = async (req, res) => {
+    try {
+        const body = req.body || {};
+        const raw = String(body.refreshToken || "").trim();
+        if (!raw) {
+            return res.status(400).json({ error: true, status: 400, message: "Refresh token is required.", message_desc: "Refresh token is required.", data: {} });
+        }
+        await revokeTokens(raw, { allDevices: [true, "true"].includes(body.allDevices) });
+        // Token galat / pehle se band ho tab bhi success (app ko bas logout karna hai)
+        return res.status(200).json({ error: false, status: 200, message: "Logged out.", message_desc: "Logged out.", data: {} });
+    } catch (e) {
+        console.error("Logout error:", e);
+        return res.status(500).json({ error: true, status: 500, message: "Something went wrong.", message_desc: e.message, data: {} });
+    }
+};
+
+module.exports = { register, login, verifyOtp, getProfile, updateProfile, resendOtp, registerParent, updateParentProfile, refreshToken, logout };

@@ -137,7 +137,7 @@
     },
     "/user/verify-otp": {
       "post": {
-        "description": "**Access:** Public (no token)\n\nsab roles, token yahin milta hai\n\n```\nbody: { countryCode, mobileNumber, otp, device_type?, device_token? }\nSahi OTP pe token milta hai, saath mein club { _id, clubCode, name, theme } (har role ke liye, superAdmin ko null).\n```",
+        "description": "**Access:** Public (no token)\n\nsab roles, token (15 min) + refreshToken (30 din) yahin milta hai\n\n```\nbody: { countryCode, mobileNumber, otp, device_type?, device_token? }\nSahi OTP pe token milta hai, saath mein club { _id, clubCode, name, theme } (har role ke liye, superAdmin ko null).\n```",
         "responses": {
           "200": {
             "description": "OK"
@@ -190,6 +190,80 @@
           "Auth"
         ],
         "summary": "Verify otp"
+      }
+    },
+    "/user/refresh-token": {
+      "post": {
+        "description": "**Access:** Public (no token)\n\nbody: { refreshToken } -> naya token + naya refreshToken\n\n```\nAccess token (15 min) expire ho jaaye toh isse naya. Har baar naya refreshToken bhi milta hai - purana ab nahi chalega, naya save karo.\nbody: { refreshToken }\n```",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Refresh token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "refreshToken"
+                ],
+                "properties": {
+                  "refreshToken": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/user/logout": {
+      "post": {
+        "description": "**Access:** Public (no token)\n\nbody: { refreshToken, allDevices? }\n\n```\nIs device ka session band. allDevices: true = user ke saare devices se logout.\nbody: { refreshToken, allDevices? }\n```",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "refreshToken"
+                ],
+                "properties": {
+                  "refreshToken": {
+                    "type": "string"
+                  },
+                  "allDevices": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Logout"
       }
     },
     "/user/resend-otp": {
