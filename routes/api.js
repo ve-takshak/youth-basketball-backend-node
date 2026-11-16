@@ -283,6 +283,7 @@ router.get("/user/teams/:id/payment-status", authentication, getTeamPaymentStatu
 // ---------- Payments (parent mobile app) ----------
 router.get("/user/parent/payments", authentication, listMyPayments);
 router.get("/user/parent/payments/children", authentication, listMyChildrenPayments); // har bachche ka kitna dena / diya
+router.get("/user/parent/payments/children/:playerId", authentication, listMyChildrenPayments); // sirf ek bachcha
 router.post("/user/parent/payments/:id/checkout", authentication, checkoutCharge); // Tranzila page ka URL deta hai
 router.get("/user/parent/payments/:id/receipt", authentication, getMyReceipt);
 

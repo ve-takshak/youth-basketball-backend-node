@@ -5203,8 +5203,47 @@
     },
     "/user/parent/payments/children": {
       "get": {
-        "description": "**Access:** Any logged-in user\n\nhar bachche ka kitna dena / diya\n\n```\nHar bachche ka is season ka hisaab: kitna dena hai, kitna diya, baaki, pay options.\nBill nahi bana toh Fee Plan se ab ban jaata hai (fee = team ka age group, registration date se pro-rated, + jersey).\npaymentRequired true = subscription + jersey abhi poora nahi diya (app dashboard band rakhe).\n```",
+        "description": "**Access:** Any logged-in user\n\nhar bachche ka kitna dena / diya\n\n```\nGET /api/user/parent/payments/children/:playerId?season=  sirf us bachche ka: data.child (apna bachcha nahi = 404)\nHar bachche ka is season ka hisaab: kitna dena hai, kitna diya, baaki, pay options.\nBill nahi bana toh Fee Plan se ab ban jaata hai (fee = team ka age group, registration date se pro-rated, + jersey).\npaymentRequired true = subscription + jersey abhi poora nahi diya (app dashboard band rakhe).\n```",
         "parameters": [
+          {
+            "name": "season",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Payments"
+        ],
+        "summary": "List my children payments",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/parent/payments/children/{playerId}": {
+      "get": {
+        "description": "**Access:** Any logged-in user\n\nsirf ek bachcha\n\n```\nGET /api/user/parent/payments/children/:playerId?season=  sirf us bachche ka: data.child (apna bachcha nahi = 404)\nHar bachche ka is season ka hisaab: kitna dena hai, kitna diya, baaki, pay options.\nBill nahi bana toh Fee Plan se ab ban jaata hai (fee = team ka age group, registration date se pro-rated, + jersey).\npaymentRequired true = subscription + jersey abhi poora nahi diya (app dashboard band rakhe).\n```",
+        "parameters": [
+          {
+            "name": "playerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "season",
             "in": "query",

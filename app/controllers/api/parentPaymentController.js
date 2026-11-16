@@ -128,17 +128,26 @@ const NO_BILL_MESSAGES = {
 
 /**
  * GET /api/user/parent/payments/children?season=   (parent; senior player apna khud)
+ * GET /api/user/parent/payments/children/:playerId?season=  sirf us bachche ka: data.child (apna bachcha nahi = 404)
  * Har bachche ka is season ka hisaab: kitna dena hai, kitna diya, baaki, pay options.
  * Bill nahi bana toh Fee Plan se ab ban jaata hai (fee = team ka age group, registration date se pro-rated, + jersey).
  * paymentRequired true = subscription + jersey abhi poora nahi diya (app dashboard band rakhe).
  */
 const listMyChildrenPayments = async (req, res) => {
     try {
-        const ids = await myPlayerIds(req.user);
+        let ids = await myPlayerIds(req.user);
         if (ids === null) return sendError(res, 403, "Only parents and senior players can see payments.");
 
         const season = req.query.season ? parseSeason(req.query.season) : { value: currentSeason() };
         if (season.message) return sendError(res, 400, season.message);
+
+        // /children/:playerId : sirf ek bachcha (apna hi hona chahiye)
+        const playerId = req.params?.playerId ? String(req.params.playerId).trim() : "";
+        if (playerId) {
+            if (!isValidId(playerId)) return sendError(res, 400, "Invalid player id.");
+            ids = ids.filter((id) => String(id) === playerId);
+            if (!ids.length) return sendError(res, 404, "Player not found.");
+        }
 
         const reasons = await ensureSeasonCharges(ids, season.value);
         const [players, charges] = await Promise.all([
@@ -178,6 +187,11 @@ const listMyChildrenPayments = async (req, res) => {
                 bills, // har bill: items, badge, options (pay once / monthly)
             };
         });
+
+        if (playerId) {
+            if (!children.length) return sendError(res, 404, "Player not found.");
+            return sendOk(res, "Player payment details.", { season: season.value, child: children[0] });
+        }
 
         return sendOk(res, "My children's payments.", {
             season: season.value,
