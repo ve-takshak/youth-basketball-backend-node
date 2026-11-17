@@ -2,7 +2,7 @@ const PaymentGateway = require("../models/PaymentGateway");
 const Charge = require("../models/Charge");
 const { buildProvider, PaymentError } = require("./index");
 const { encrypt, decrypt } = require("../helpers/secretBox");
-const { round, addMonths, startOfDay } = require("../helpers/paymentStatus");
+const { round, addMonths, startOfDay, amounts } = require("../helpers/paymentStatus");
 
 // Controllers aur gateway adapters ke beech ki layer: club ka gateway, URLs, webhook apply, STO sync, receipt.
 
@@ -171,7 +171,80 @@ const latestReceipt = async (charge, { email } = {}) => {
     return receipt;
 };
 
+/**
+ * Bill ka Standing Order Tranzila mein band (aage ki kisht nahi kategi). Jo kat chuki wo paid rehti hain.
+ * Sirf isi bill ka STO: jersey ka bill alag hai, uska STO chalta rehta hai.
+ * return true = band kiya, false = band karne ko kuch nahi tha
+ */
+const stopStandingOrder = async (charge, { reason = "", userId = null } = {}) => {
+    const so = charge.standingOrder;
+    if (charge.status !== "paid" || charge.plan !== "standing_order" || !so?.stoId) return false;
+    if (so.stoStatus !== "inactive") {
+        const { provider } = await providerForClub(charge.clubId, { requireActive: false });
+        await provider.cancelStandingOrder({ stoId: so.stoId, terminal: so.terminal });
+        so.stoStatus = "inactive";
+        charge.markModified("standingOrder");
+    }
+    charge.stopped = { at: new Date(), by: userId, reason };
+    addEvent(charge, { kind: "manual", success: true, message: `Standing order stopped by admin. ${reason}`.trim() });
+    return true;
+};
+
+/**
+ * Refund (pura ya aadha). charge "+paymentToken +tokenExpMonth +tokenExpYear +events" ke saath load ho.
+ * manual = paisa gateway ke bahar lauta diya (sirf record). Card / STO ka gateway (Tranzila credit) se.
+ * Standing Order mein gateway se sirf pehli kisht tak (baaki kisht alag transactions hain).
+ * return { ok, message, amount, refundable }
+ */
+const executeRefund = async (charge, { amount, reason = "", manual = false, userId = null } = {}) => {
+    if (charge.status !== "paid") return { ok: false, status: 409, message: "Only paid charges can be refunded." };
+    const isManual = Boolean(manual) || !["card", "standing_order"].includes(charge.method);
+    const already = charge.refundedAmount || 0;
+    let ceiling;
+    if (isManual) {
+        // amounts() paid mein se refund pehle hi ghata deta hai
+        ceiling = amounts(charge).paid + already;
+    } else {
+        ceiling = charge.plan === "standing_order" ? charge.standingOrder?.firstAmount || 0 : charge.amount;
+    }
+    const refundable = round(ceiling - already);
+
+    const value = amount === undefined || amount === null || amount === "" ? refundable : round(Number(amount));
+    if (!(value > 0)) return { ok: false, status: 400, message: "Refund amount must be more than 0.", refundable };
+    if (value > refundable) return { ok: false, status: 400, message: `You can refund up to ${refundable}.`, refundable };
+
+    let providerTxnId = "";
+    if (!isManual) {
+        const { provider } = await providerForClub(charge.clubId, { requireActive: false });
+        const token = charge.paymentToken ? { token: decrypt(charge.paymentToken), expMonth: charge.tokenExpMonth, expYear: charge.tokenExpYear } : null;
+        const result = await provider.refund({
+            amount: value,
+            currency: charge.currency,
+            providerTxnId: charge.providerTxnId,
+            authNumber: charge.authNumber,
+            token,
+            reason: reason || `Refund ${charge.invoiceNumber}`,
+        });
+        addEvent(charge, { kind: "refund", success: result.success, message: result.message, raw: result.raw });
+        if (!result.success) {
+            await charge.save();
+            return { ok: false, status: 402, message: `Refund failed: ${result.message}`, refundable };
+        }
+        providerTxnId = result.providerTxnId;
+    } else {
+        addEvent(charge, { kind: "refund", success: true, message: `Manual refund recorded by admin. ${reason}`.trim() });
+    }
+
+    charge.refunds.push({ amount: value, reason, providerTxnId, manual: isManual, by: userId });
+    charge.refundedAmount = round(already + value);
+    if (charge.plan === "one_time" && charge.refundedAmount >= charge.amount) charge.status = "refunded";
+    await charge.save();
+    return { ok: true, message: "Refund done.", amount: value, manual: isManual, providerTxnId, refundable: round(refundable - value) };
+};
+
 module.exports = {
+    stopStandingOrder,
+    executeRefund,
     publicBase,
     webhookUrl,
     returnUrls,

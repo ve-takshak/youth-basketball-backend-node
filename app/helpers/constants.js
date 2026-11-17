@@ -15,6 +15,13 @@ const USE_STATIC_OTP = process.env.SMS_OTP_ENABLED !== "true";
 const STATIC_OTP = "000000";
 // SMS mode mein bhi "000000" chalne do (ek hi server pe testing). .env ALLOW_TEST_OTP=true. LIVE SE PEHLE HATANA: koi bhi kisi ka account khol sakta hai.
 const ALLOW_TEST_OTP = process.env.ALLOW_TEST_OTP === "true";
+// Testing ke number (jaise admin ka 1234567890): SMS nahi jaata, OTP "000000". .env TEST_MOBILE_NUMBERS=1234567890,9999999999
+// Sirf yahi number, baaki sabko asli SMS. LIVE SE PEHLE KHALI KARNA.
+const TEST_MOBILE_NUMBERS = String(process.env.TEST_MOBILE_NUMBERS || "")
+    .split(",")
+    .map((n) => n.replace(/D/g, ""))
+    .filter(Boolean);
+const isTestMobile = (mobileNumber) => TEST_MOBILE_NUMBERS.includes(String(mobileNumber || "").replace(/D/g, ""));
 const OTP_VALID_MINUTES = 10;
 
 // OTP ka misuse rokna (SMS bomb / brute force), per user
@@ -28,6 +35,8 @@ module.exports = {
     USE_STATIC_OTP,
     STATIC_OTP,
     ALLOW_TEST_OTP,
+    TEST_MOBILE_NUMBERS,
+    isTestMobile,
     OTP_VALID_MINUTES,
     OTP_MAX_REQUESTS,
     OTP_REQUEST_WINDOW_MINUTES,

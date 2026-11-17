@@ -105,11 +105,26 @@ const {
     markChargePaid,
     cancelCharge,
     refundCharge,
+    getRefundQuote,
+    stopPlayerSubscription,
     getChargeReceipt,
     getTeamPaymentStatus,
 } = require("../app/controllers/api/chargeController");
 const { listFeePlans, createFeePlan, getFeePlan, updateFeePlan, deleteFeePlan, quoteFeePlan } = require("../app/controllers/api/feePlanController");
-const { listMyPayments, listMyChildrenPayments, checkoutCharge, getMyReceipt } = require("../app/controllers/api/parentPaymentController");
+const {
+    listMyPayments,
+    listMyChildrenPayments,
+    checkoutCharge,
+    getMyReceipt,
+    requestRefund,
+    listMyRefundRequests,
+} = require("../app/controllers/api/parentPaymentController");
+const {
+    listRefundRequests,
+    getRefundRequest,
+    approveRefundRequest,
+    rejectRefundRequest,
+} = require("../app/controllers/api/refundRequestController");
 const { paymentWebhook, paymentReturn } = require("../app/controllers/api/paymentWebhookController");
 
 router.get("/test", (req, res) => res.send("API working"));
@@ -276,7 +291,13 @@ router.get("/user/payments/charges/:id", superAdminOrClubAdminAuthentication, ge
 router.put("/user/payments/charges/:id", superAdminOrClubAdminAuthentication, updateCharge); // ek player ki alag fee (pay se pehle)
 router.put("/user/payments/charges/:id/mark-paid", superAdminOrClubAdminAuthentication, markChargePaid);
 router.put("/user/payments/charges/:id/cancel", superAdminOrClubAdminAuthentication, cancelCharge);
-router.post("/user/payments/charges/:id/refund", superAdminOrClubAdminAuthentication, refundCharge);
+router.post("/user/payments/charges/:id/refund", superAdminOrClubAdminAuthentication, refundCharge); // pura / aadha, Tranzila se
+router.get("/user/payments/charges/:id/refund-quote", superAdminOrClubAdminAuthentication, getRefundQuote); // bache mahine / din ka hisaab
+router.post("/user/payments/players/:playerId/stop-subscription", superAdminOrClubAdminAuthentication, stopPlayerSubscription); // jersey chalta rahe
+router.get("/user/payments/refund-requests", superAdminOrClubAdminAuthentication, listRefundRequests);
+router.get("/user/payments/refund-requests/:id", superAdminOrClubAdminAuthentication, getRefundRequest);
+router.put("/user/payments/refund-requests/:id/approve", superAdminOrClubAdminAuthentication, approveRefundRequest); // gateway se refund
+router.put("/user/payments/refund-requests/:id/reject", superAdminOrClubAdminAuthentication, rejectRefundRequest);
 router.get("/user/payments/charges/:id/receipt", superAdminOrClubAdminAuthentication, getChargeReceipt);
 router.get("/user/teams/:id/payment-status", authentication, getTeamPaymentStatus); // roster badges, coach bhi
 
@@ -286,9 +307,12 @@ router.get("/user/parent/payments/children", authentication, listMyChildrenPayme
 router.get("/user/parent/payments/children/:playerId", authentication, listMyChildrenPayments); // sirf ek bachcha
 router.post("/user/parent/payments/:id/checkout", authentication, checkoutCharge); // Tranzila page ka URL deta hai
 router.get("/user/parent/payments/:id/receipt", authentication, getMyReceipt);
+router.post("/user/parent/payments/:id/refund-request", authentication, requestRefund); // club owner review karega
+router.get("/user/parent/refund-requests", authentication, listMyRefundRequests);
 
 // ---------- Payment gateway callbacks (bina token) ----------
 router.post("/payments/webhook/:gatewayId/:key", paymentWebhook); // Tranzila notify
 router.get("/payments/return", paymentReturn);
+router.post("/payments/return", paymentReturn); // Tranzila success / fail page pe POST karta hai
 
 module.exports = router;

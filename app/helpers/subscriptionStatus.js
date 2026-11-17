@@ -1,10 +1,13 @@
 // Player ka saal ka subscription active hai ya nahi + kitna dena hai (player list / detail ke liye).
 // Subscription = "season_registration" item wala bill. Sabse naye season ka bill dekhte hain.
+// Jersey ab alag bill hai: us season ke jersey bills ka paisa bhi amount / jerseyAmount mein jodte hain.
 //   active   = bill paid (Standing Order mein pehli kisht aa gayi aur koi kisht chhooti nahi)
 //   inactive = bill nahi bana / unpaid / pending / overdue / refunded
 // Bill nahi bana toh amount chalu season ke Fee Plan se (source "plan") - sirf dikhane ke liye, bill nahi banta.
 const Charge = require("../models/Charge");
 const FeePlan = require("../models/FeePlan");
+const { allowedMethods, SUBSCRIPTION_PRODUCTS } = require("../models/FeePlan");
+const Club = require("../models/Club");
 const Player = require("../models/Player");
 const { chargeBadge, amounts } = require("./paymentStatus");
 const { currentSeason } = require("./season");
@@ -27,6 +30,7 @@ const NO_SUBSCRIPTION = {
     plan: "",
     paidAt: null,
     noBillReason: null, // bill nahi: no_plan | no_team | no_fee
+    paymentOptions: "both", // parent kaise pay kar sakta hai: one_time | standing_order | both
 };
 
 const sumOf = (items, type) => round((items || []).filter((i) => i.type === type).reduce((s, i) => s + (i.amount || 0), 0));
@@ -64,13 +68,18 @@ const plannedFor = async (playerIds) => {
     const players = await Player.find({ _id: { $in: playerIds } })
         .select("clubId teamId createdAt")
         .populate({ path: "teamId", select: "categoryId" });
-    const plans = await FeePlan.find({ clubId: { $in: [...new Set(players.map((p) => String(p.clubId)))] }, season, isActive: true }).sort({ createdAt: -1 });
+    const plans = await FeePlan.find({
+        clubId: { $in: [...new Set(players.map((p) => String(p.clubId)))] },
+        season,
+        isActive: true,
+        productType: { $in: [...SUBSCRIPTION_PRODUCTS, null] }, // camp subscription nahi
+    }).sort({ createdAt: -1 });
     const planByClub = new Map();
     plans.forEach((p) => !planByClub.has(String(p.clubId)) && planByClub.set(String(p.clubId), p));
 
     players.forEach((player) => {
         const plan = planByClub.get(String(player.clubId));
-        const base = { ...NO_SUBSCRIPTION, season };
+        const base = { ...NO_SUBSCRIPTION, season, _clubId: String(player.clubId), _planOptions: plan?.paymentOptions }; // _ wale subscriptionsFor hata deta hai
         if (!plan) return map.set(String(player._id), { ...base, noBillReason: "no_plan" });
         const categoryId = player.teamId?.categoryId || null;
         if (plan.pricingMode === "per_age_group" && !categoryId) {
@@ -92,6 +101,17 @@ const plannedFor = async (playerIds) => {
     return map;
 };
 
+// subscriptions (Map playerId -> sub, sub._clubId, sub._planOptions) mein paymentOptions bharna (plan + club setting)
+const fillPaymentOptions = async (entries) => {
+    const clubIds = [...new Set(entries.map((e) => e.clubId).filter(Boolean))];
+    if (!clubIds.length) return;
+    const clubs = await Club.find({ _id: { $in: clubIds } }).select("paymentSettings");
+    const settingsByClub = new Map(clubs.map((c) => [String(c._id), c.paymentSettings || {}]));
+    entries.forEach((e) => {
+        e.sub.paymentOptions = allowedMethods(e.planOptions, settingsByClub.get(e.clubId) || {}).paymentOptions;
+    });
+};
+
 // playerIds -> Map(playerId string -> subscription)
 const subscriptionsFor = async (playerIds) => {
     const map = new Map();
@@ -102,12 +122,45 @@ const subscriptionsFor = async (playerIds) => {
         status: { $ne: "cancelled" },
     }).sort({ season: -1, createdAt: -1 });
     // Har player ka sabse naye season ka (sort ki wajah se pehla wala)
+    const latest = [];
     charges.forEach((c) => {
         const key = String(c.playerId);
-        if (!map.has(key)) map.set(key, formatSubscription(c));
+        if (map.has(key)) return;
+        map.set(key, formatSubscription(c));
+        latest.push(c);
     });
+    const planIds = [...new Set(latest.map((c) => c.feePlanId && String(c.feePlanId)).filter(Boolean))];
+    const plans = planIds.length ? await FeePlan.find({ _id: { $in: planIds } }).select("paymentOptions") : [];
+    const optionsByPlan = new Map(plans.map((p) => [String(p._id), p.paymentOptions]));
+    const entries = latest.map((c) => ({ sub: map.get(String(c.playerId)), clubId: String(c.clubId), planOptions: optionsByPlan.get(String(c.feePlanId)) }));
+
+    // Alag jersey bills (same player + season): paisa subscription ke saath dikhana
+    if (latest.length) {
+        const jerseyBills = await Charge.find({
+            playerId: { $in: latest.map((c) => c.playerId) },
+            status: { $nin: ["cancelled", "refunded"] },
+            $or: [{ category: "jersey" }, { category: "other", items: { $not: { $elemMatch: { type: { $ne: "jersey" } } } } }],
+        });
+        jerseyBills.forEach((j) => {
+            const sub = map.get(String(j.playerId));
+            if (!sub || sub.season !== j.season) return;
+            const { outstanding } = amounts(j);
+            sub.amount = round(sub.amount + j.amount);
+            sub.jerseyAmount = round(sub.jerseyAmount + j.amount);
+            sub.paidAmount = round(sub.paidAmount + j.amount - outstanding);
+            sub.outstandingAmount = round(sub.outstandingAmount + outstanding);
+            sub.jerseyChargeId = j._id;
+            sub.jerseyBadge = chargeBadge(j); // jersey ka apna badge (subscription band ho toh bhi chalta)
+        });
+    }
+
     const missing = playerIds.filter((id) => !map.has(String(id)));
-    (await plannedFor(missing)).forEach((value, key) => map.set(key, value));
+    (await plannedFor(missing)).forEach((value, key) => {
+        const { _clubId, _planOptions, ...sub } = value;
+        map.set(key, sub);
+        entries.push({ sub, clubId: _clubId, planOptions: _planOptions });
+    });
+    await fillPaymentOptions(entries);
     return map;
 };
 

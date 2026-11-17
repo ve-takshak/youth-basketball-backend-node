@@ -6,6 +6,7 @@ const {
     USE_STATIC_OTP,
     ALLOW_TEST_OTP,
     STATIC_OTP,
+    isTestMobile,
     OTP_VALID_MINUTES,
     OTP_MAX_REQUESTS,
     OTP_REQUEST_WINDOW_MINUTES,
@@ -27,8 +28,9 @@ const { sendSms } = require("../../helpers/sms");
 const generateOtp = () => (USE_STATIC_OTP ? STATIC_OTP : String(crypto.randomInt(100000, 1000000)));
 
 // OTP ka SMS. Static mode mein kuch nahi bhejte. Fail = false (caller 502 de).
+// Test number (TEST_MOBILE_NUMBERS) pe bhi SMS nahi, woh "000000" se login karta hai.
 const sendOtpSms = async (user) => {
-    if (USE_STATIC_OTP) return true;
+    if (USE_STATIC_OTP || isTestMobile(user.mobileNumber)) return true;
     const result = await sendSms({
         countryCode: user.countryCode,
         mobileNumber: user.mobileNumber,
@@ -41,10 +43,13 @@ const sendOtpSms = async (user) => {
 };
 
 // Response mein: OTP kaise gaya. otpChannel "sms" = asli SMS gaya, "static" = testing mode, OTP 000000 (koi SMS nahi)
-const otpDelivery = (user) => ({
-    otpChannel: USE_STATIC_OTP ? "static" : "sms",
-    otpSentTo: USE_STATIC_OTP ? "" : `${user.countryCode} ***${String(user.mobileNumber || "").slice(-4)}`,
-});
+const otpDelivery = (user) => {
+    const isStatic = USE_STATIC_OTP || isTestMobile(user.mobileNumber);
+    return {
+        otpChannel: isStatic ? "static" : "sms",
+        otpSentTo: isStatic ? "" : `${user.countryCode} ***${String(user.mobileNumber || "").slice(-4)}`,
+    };
+};
 
 const otpSmsFailed = (res) =>
     res.status(502).json({
@@ -688,7 +693,7 @@ const verifyOtp = async (req, res) => {
                 if (await recordFailedOtp(user)) return tooManyAttempts(res, OTP_LOCK_MINUTES);
                 return invalidOtp(res, user);
             }
-        } else if (!(ALLOW_TEST_OTP && otp === STATIC_OTP)) {
+        } else if (!((ALLOW_TEST_OTP || isTestMobile(user.mobileNumber)) && otp === STATIC_OTP)) {
             // Asli SMS wala flow: DB wala OTP match + expiry
             // (ALLOW_TEST_OTP=true ho toh "000000" bhi chalta hai, testing ke liye. Live se pehle band karna.)
             if (!user.otp || user.otp !== otp) {

@@ -39,4 +39,14 @@ const monthsLeftInSeason = (season, date = new Date()) => {
     return Math.min(SEASON_MONTHS, Math.max(1, SEASON_MONTHS - passed));
 };
 
-module.exports = { parseSeason, currentSeason, monthsLeftInSeason, SEASON_MONTHS, SEASON_ERROR };
+// Season ka pehla din (1 Aug) aur aakhri din (31 Jul). Galat season = null.
+const seasonStart = (season) => {
+    const match = String(season || "").match(/^(\d{4})/);
+    return match ? new Date(Number(match[1]), SEASON_START_MONTH, 1) : null;
+};
+const seasonEnd = (season) => {
+    const start = seasonStart(season);
+    return start ? new Date(start.getFullYear() + 1, SEASON_START_MONTH, 0, 23, 59, 59, 999) : null;
+};
+
+module.exports = { parseSeason, currentSeason, monthsLeftInSeason, seasonStart, seasonEnd, SEASON_MONTHS, SEASON_ERROR };

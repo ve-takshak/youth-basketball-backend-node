@@ -1,4 +1,5 @@
 const { chargeBadge, jerseyPaid, amounts, buildSchedule } = require("./paymentStatus");
+const { chargeCategory } = require("../models/Charge");
 
 // Charge ko admin / parent / coach sab jagah ek hi shape mein bhejna.
 
@@ -38,6 +39,11 @@ const formatCharge = (charge, options = {}) => {
         season: charge.season,
         feePlanId: charge.feePlanId || null,
         customAmount: Boolean(charge.customAmount),
+        category: chargeCategory(charge), // subscription | jersey | camp | other (subscription aur jersey alag bills)
+        linkedChargeId: charge.linkedChargeId || null, // jersey bill -> uska subscription bill
+        servicePeriod: charge.servicePeriod?.start
+            ? { unit: charge.servicePeriod.unit, start: charge.servicePeriod.start, end: charge.servicePeriod.end, units: charge.servicePeriod.units }
+            : null,
         player: playerSummary(charge.playerId),
         items: charge.items.map((i) => ({ _id: i._id, type: i.type, name: i.name, amount: i.amount })),
         amount: charge.amount,
@@ -69,6 +75,8 @@ const formatCharge = (charge, options = {}) => {
         paidAt: charge.paidAt,
         method: charge.method,
         card: charge.card?.last4 ? { last4: charge.card.last4, brand: charge.card.brand } : null,
+        // Club owner ne band kiya (subscription stop / cancel)
+        stopped: charge.stopped?.at ? { at: charge.stopped.at, reason: charge.stopped.reason || "" } : null,
         refundedAmount: charge.refundedAmount || 0,
         refunds: (charge.refunds || []).map((r) => ({ amount: r.amount, reason: r.reason, manual: r.manual, at: r.at })),
         receiptAvailable: charge.status === "paid" || charge.status === "refunded",

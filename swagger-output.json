@@ -4458,6 +4458,13 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "productType",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4479,7 +4486,7 @@
         ]
       },
       "post": {
-        "description": "**Access:** Super admin or club admin\n\nclub admin price set karta hai\n\n```\nSeason ka Fee Plan ek call mein (Subscription Plan screen ka Save).\npricingMode \"same\": subscriptionAmount. \"per_age_group\": ageGroups [{ categoryId, amount }] (0 = is group ki fee nahi).\nproRate (default true): season (Aug-Jul) ke beech join kare toh bache mahino ki fee. false = hamesha poore saal ki.\nbody: { clubId?, season, pricingMode, subscriptionAmount?, ageGroups?, jerseyAmount?, proRate?, name?, currency?, dueDate? }\n```",
+        "description": "**Access:** Super admin or club admin\n\nclub admin price set karta hai\n\n```\nSeason ka Fee Plan ek call mein (Subscription Plan screen ka Save).\npricingMode \"same\": subscriptionAmount + jerseyAmount (sabke liye).\n\"per_age_group\": ageGroups [{ categoryId, amount, jerseyAmount }] -> har group ki apni fee aur apni jersey (0 = nahi).\n  group ki jerseyAmount na bhejo toh plan ki jerseyAmount lagti hai.\nproRate (default true): season (Aug-Jul) ke beech join kare toh bache mahino ki fee. false = hamesha poore saal ki.\npaymentOptions (default \"both\"): one_time = sirf ek baar | standing_order = sirf har mahine | both\nproductType (default \"yearly\"): yearly | seasonal (paymentOptions apne aap standing_order) | camp (one_time, jersey / pro-rate nahi)\n  camp: subscriptionAmount = camp ki fee, campStartDate (YYYY-MM-DD), campDays (default 7)\nbody: { clubId?, season, productType?, pricingMode, subscriptionAmount?, ageGroups?, jerseyAmount?, proRate?, paymentOptions?, campStartDate?, campDays?, name?, currency?, dueDate? }\n```",
         "responses": {
           "401": {
             "description": "Missing or invalid token"
@@ -4504,6 +4511,9 @@
                   "season": {
                     "type": "string"
                   },
+                  "productType": {
+                    "type": "string"
+                  },
                   "pricingMode": {
                     "type": "string"
                   },
@@ -4517,6 +4527,15 @@
                     "type": "string"
                   },
                   "proRate": {
+                    "type": "string"
+                  },
+                  "paymentOptions": {
+                    "type": "string"
+                  },
+                  "campStartDate": {
+                    "type": "string"
+                  },
+                  "campDays": {
                     "type": "string"
                   },
                   "name": {
@@ -4629,7 +4648,7 @@
         ]
       },
       "put": {
-        "description": "**Access:** Super admin or club admin\n\npurane bills nahi badalte\n\n```\nPlan badalna (jo field bhejo wahi badlega). ageGroups bhejo toh poori list badal jaati hai.\nPehle bane bills nahi badalte, sirf naye bills naye price se.\nbody: { season?, pricingMode?, subscriptionAmount?, ageGroups?, jerseyAmount?, proRate?, name?, currency?, dueDate?, isActive? }\n```",
+        "description": "**Access:** Super admin or club admin\n\npurane bills nahi badalte\n\n```\nPlan badalna (jo field bhejo wahi badlega). ageGroups bhejo toh poori list badal jaati hai.\nPehle bane bills nahi badalte, sirf naye bills naye price se.\nproductType bills bane hon toh nahi badalta.\nbody: { season?, productType?, pricingMode?, subscriptionAmount?, ageGroups?, jerseyAmount?, proRate?, paymentOptions?, campStartDate?, campDays?, name?, currency?, dueDate?, isActive? }\n```",
         "parameters": [
           {
             "name": "id",
@@ -4667,6 +4686,9 @@
                   "season": {
                     "type": "string"
                   },
+                  "productType": {
+                    "type": "string"
+                  },
                   "pricingMode": {
                     "type": "string"
                   },
@@ -4680,6 +4702,15 @@
                     "type": "string"
                   },
                   "proRate": {
+                    "type": "string"
+                  },
+                  "paymentOptions": {
+                    "type": "string"
+                  },
+                  "campStartDate": {
+                    "type": "string"
+                  },
+                  "campDays": {
                     "type": "string"
                   },
                   "name": {
@@ -4733,7 +4764,7 @@
     },
     "/user/payments/charges/issue": {
       "post": {
-        "description": "**Access:** Super admin or club admin\n\n```\nSeason registration bill banana: ek player = ek bill (items: season fee, jersey...).\nDo tarah se:\n  feePlanId do  -> season / title / dueDate Fee Plan se. Har player ki fee uski team ke age group (category) se:\n                   subscription + jersey. teamId / playerIds na do toh club ke saare players.\n                   Jiski fee nahi (team nahi, ya us group ki fee 0) wo skip (\"noFee\").\n  items do      -> haath se price, sabke liye same (purana tareeka). teamId ya playerIds zaroori.\nteamId do toh poori team, playerIds do toh sirf wo. Jis player ka same plan (ya same season + title) ka bill pehle se hai, wo skip.\noverrides: kisi player ki alag fee, [{ playerId, items: [{ type, name, amount }] }]. Baaki sab ko normal price.\nPlan ka proRate on: season (Aug-Jul) ke beech join kiya toh bache mahino ki fee. Join date = joinDate ya player ki registration date.\nbody: { clubId?, feePlanId?, season?, title?, teamId?, playerIds?, items?: [{ type, name, amount }], overrides?, dueDate?, currency?, joinDate? }\n```",
+        "description": "**Access:** Super admin or club admin\n\n```\nSeason registration bill banana: ek player = ek bill (items: season fee, jersey...).\nDo tarah se:\n  feePlanId do  -> season / title / dueDate Fee Plan se. Har player ki fee uski team ke age group (category) se:\n                   subscription + jersey. teamId / playerIds na do toh club ke saare players.\n                   Jiski fee nahi (team nahi, ya us group ki fee 0) wo skip (\"noFee\").\n  items do      -> haath se price, sabke liye same (purana tareeka). teamId ya playerIds zaroori.\nSubscription aur jersey ke ALAG bill bante hain (club owner subscription band kare toh jersey ki kisht chalti rahe).\nCamp plan (productType \"camp\") bhi yahin se: chune hue players ko camp ka bill.\nteamId do toh poori team, playerIds do toh sirf wo. Jis player ka same plan (ya same season + title) ka bill pehle se hai, wo skip.\noverrides: kisi player ki alag fee, [{ playerId, items: [{ type, name, amount }] }]. Baaki sab ko normal price.\nPlan ka proRate on: season (Aug-Jul) ke beech join kiya toh bache mahino ki fee. Join date = joinDate ya player ki registration date.\nbody: { clubId?, feePlanId?, season?, title?, teamId?, playerIds?, items?: [{ type, name, amount }], overrides?, dueDate?, currency?, joinDate? }\n```",
         "responses": {
           "401": {
             "description": "Missing or invalid token"
@@ -4994,7 +5025,7 @@
     },
     "/user/payments/charges/{id}/cancel": {
       "put": {
-        "description": "**Access:** Super admin or club admin\n\n```\nBill cancel. Standing Order chal raha ho toh Tranzila mein bhi band hota hai (aage ki kisht nahi kategi).\nPaid one-time bill cancel nahi hota, uska refund karo.\nbody: { reason? }\n```",
+        "description": "**Access:** Super admin or club admin\n\n```\nBill cancel. Standing Order chal raha ho toh Tranzila mein bhi band hota hai (aage ki kisht nahi kategi).\nSirf YAHI bill band hota hai: subscription ka STO band karne se jersey ka bill (alag) chalta rehta hai.\nJersey bhi band karni ho toh jersey wale bill ko alag se cancel karo.\nPaid one-time bill cancel nahi hota, uska refund karo.\nbody: { reason? }\n```",
         "parameters": [
           {
             "name": "id",
@@ -5041,7 +5072,7 @@
     },
     "/user/payments/charges/{id}/refund": {
       "post": {
-        "description": "**Access:** Super admin or club admin\n\n```\nRefund (pura ya aadha). manual = true: paisa gateway ke bahar lauta diya (sirf record).\nStanding Order ka refund sirf pehli kisht ka hota hai (baaki kisht My Tranzila se).\nbody: { amount?, reason?, manual? }\n```",
+        "description": "**Access:** Super admin or club admin\n\npura / aadha, Tranzila se\n\n```\nRefund (pura ya aadha) gateway (Tranzila) se. manual = true: paisa gateway ke bahar lauta diya (sirf record).\nStanding Order ka gateway refund sirf pehli kisht tak (baaki kisht My Tranzila se).\nKitna banta hai dekhne ke liye pehle GET .../refund-quote.\nbody: { amount?, reason?, manual? }   amount na do = jitna bacha sab\n```",
         "parameters": [
           {
             "name": "id",
@@ -5090,6 +5121,265 @@
             "bearerAuth": []
           }
         ]
+      }
+    },
+    "/user/payments/charges/{id}/refund-quote": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\nbache mahine / din ka hisaab\n\n```\nRefund kitna banta hai (kuch nahi badalta). Yearly: bache mahine, camp: bache din. Jersey nahi.\nquery: date? (YYYY-MM-DD, player ka aakhri din, default aaj)\n7 din camp 700, 4th din aakhri -> remainingUnits 3, suggestedAmount 300.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "date",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Payments"
+        ],
+        "summary": "Get refund quote",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/payments/players/{playerId}/stop-subscription": {
+      "post": {
+        "description": "**Access:** Super admin or club admin\n\njersey chalta rahe\n\n```\nPlayer ne chhod diya: club owner uski SUBSCRIPTION band karta hai. Jersey ke bills ko haath nahi lagta.\n  monthly (Standing Order) chal raha  -> Tranzila mein band, aage ki kisht nahi kategi (jo kati wo paid)\n  abhi pay nahi hua                   -> cancel\n  poora ek baar mein pay ho chuka     -> kuch nahi badalta, \"refundable\" mein aata hai (refund-quote / refund se lautao)\n  parent abhi pay kar raha            -> skip (thodi der baad dobara)\nbody: { season?, reason? }   season na do toh saare khule subscription bills\n```",
+        "parameters": [
+          {
+            "name": "playerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [],
+                "properties": {
+                  "season": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Payments"
+        ],
+        "summary": "Stop player subscription",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/payments/refund-requests": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\n```\nClub ke refund requests, naye pehle.\nquery: clubId? (superAdmin), status? (pending | processing | refunded | rejected | failed), page?, limit?\n```",
+        "parameters": [
+          {
+            "name": "clubId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Payments"
+        ],
+        "summary": "List refund requests",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/payments/refund-requests/{id}": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\n```\nEk request: bill, request ke waqt ka hisaab, aur aaj ka hisaab (currentQuote: tab se kuch aur refund hua ho toh).\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Payments"
+        ],
+        "summary": "Get refund request",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/payments/refund-requests/{id}/approve": {
+      "put": {
+        "description": "**Access:** Super admin or club admin\n\ngateway se refund\n\n```\nApprove = isi waqt refund. Gateway (Tranzila credit) se, ya manual = true (cash / bank se lauta diya, sirf record).\namount na do = suggestedAmount (bache mahine / din ka). Pura refund: amount = bill ka bacha hua.\nGateway fail ho toh request \"failed\" (wajah ke saath), dobara approve kar sakte hain.\nbody: { amount?, manual?, note? }\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [],
+                "properties": {
+                  "amount": {
+                    "type": "string"
+                  },
+                  "manual": {
+                    "type": "string"
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Payments"
+        ],
+        "summary": "Approve refund request",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/payments/refund-requests/{id}/reject": {
+      "put": {
+        "description": "**Access:** Super admin or club admin\n\n```\nMana karna. Parent ko reviewNote dikhta hai.\nbody: { note? }\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Payments"
+        ],
+        "summary": "Reject refund request",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [],
+                "properties": {
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/user/payments/charges/{id}/receipt": {
@@ -5351,6 +5641,78 @@
           "Payments"
         ],
         "summary": "Get my receipt",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/parent/payments/{id}/refund-request": {
+      "post": {
+        "description": "**Access:** Any logged-in user\n\nclub owner review karega\n\n```\nRefund maangna (player ne chhod diya). Sirf ek baar mein pay hua subscription / camp. Club owner review karke Tranzila se lautata hai.\nYearly: bache mahine, camp: bache din ka hisaab (data.quote). Jersey ka refund nahi.\nbody: { reason?, lastDay? (YYYY-MM-DD, player ka aakhri din, default aaj) }\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [],
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  },
+                  "lastDay": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Payments"
+        ],
+        "summary": "Request refund",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/parent/refund-requests": {
+      "get": {
+        "description": "**Access:** Any logged-in user",
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Payments"
+        ],
+        "summary": "List my refund requests",
         "security": [
           {
             "bearerAuth": []

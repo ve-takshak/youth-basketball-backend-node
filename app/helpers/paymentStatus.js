@@ -24,13 +24,18 @@ const addMonths = (date, months) => {
     return d;
 };
 
+// Kaunse items pehli kisht mein poore katenge. Purane mixed bill (fee + jersey): jersey upfront.
+// Sirf-jersey bill (naya, alag): kuch upfront nahi, jersey bhi kisht mein.
+const upfrontTypes = (items = []) => (items.some((i) => !UPFRONT_ITEM_TYPES.includes(i.type)) ? UPFRONT_ITEM_TYPES : []);
+
 /**
- * Standing Order ka plan: pehli kisht mein upfront items (jersey) + mahine ki kisht.
- * season fee / installments = monthlyAmount (paise ka farak aakhri kisht mein nahi, pehli mein).
+ * Standing Order ka plan: pehli kisht mein upfront items (sirf purane mixed bill) + mahine ki kisht.
+ * spread / installments = monthlyAmount (paise ka farak aakhri kisht mein nahi, pehli mein).
  */
 const splitPlan = (items, installments) => {
-    const upfront = round(items.filter((i) => UPFRONT_ITEM_TYPES.includes(i.type)).reduce((s, i) => s + i.amount, 0));
-    const spread = round(items.filter((i) => !UPFRONT_ITEM_TYPES.includes(i.type)).reduce((s, i) => s + i.amount, 0));
+    const upfrontList = upfrontTypes(items);
+    const upfront = round(items.filter((i) => upfrontList.includes(i.type)).reduce((s, i) => s + i.amount, 0));
+    const spread = round(items.filter((i) => !upfrontList.includes(i.type)).reduce((s, i) => s + i.amount, 0));
     const monthly = Math.floor((spread / installments) * 100) / 100;
     const remainder = round(spread - monthly * installments);
     return { upfront, spread, monthlyAmount: monthly, firstAmount: round(upfront + monthly + remainder) };
@@ -103,11 +108,13 @@ const playerBadge = (charges = []) => {
     return "paid";
 };
 
-// Jersey ka paisa aa gaya? (Standing Order mein pehli kisht ke saath hi aata hai)
-// null = is bill mein jersey hai hi nahi
+// Jersey ka paisa aa gaya? null = is bill mein jersey hai hi nahi.
+// Purana mixed bill: jersey pehli kisht mein aa jaata hai. Alag jersey bill kisht mein: koi kisht chhooti nahi tabhi paid.
 const jerseyPaid = (charge) => {
     if (!charge.items.some((i) => i.type === "jersey")) return null;
-    return charge.status === "paid";
+    if (charge.status !== "paid") return false;
+    if (charge.plan === "standing_order" && !upfrontTypes(charge.items).includes("jersey")) return chargeBadge(charge) === "paid";
+    return true;
 };
 
 // Kitna paisa aa chuka / kitna baaki
@@ -131,6 +138,7 @@ module.exports = {
     jerseyPaid,
     amounts,
     splitPlan,
+    upfrontTypes,
     buildSchedule,
     addMonths,
     startOfDay,

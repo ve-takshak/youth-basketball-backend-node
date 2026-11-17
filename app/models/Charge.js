@@ -12,8 +12,17 @@ const mongoose = require("../../config/database");
 //   plan "one_time"        -> poora amount ek baar mein
 //   plan "standing_order"  -> jersey jaise "upfront" items pehli kisht ke saath, season fee har mahine
 //                             (Tranzila My Billing STO, token terminal pe). sto.* Tranzila se sync hota hai.
-const CHARGE_ITEM_TYPES = ["season_registration", "jersey", "other"];
-// Ye items Standing Order mein bhi pehli payment mein hi poore katte hain (kisht mein nahi bant-te)
+//
+// category: subscription aur jersey ALAG bills hain (alag checkout, alag Standing Order).
+// Isliye club owner subscription ki monthly band kare toh jersey ki kisht chalti rehti hai.
+//   subscription  season fee (yearly / seasonal monthly)
+//   jersey        jersey (ek baar ya apni kisht mein)
+//   camp          camp (jaise 7 din), sirf ek baar
+//   other         haath ke baaki items
+const CHARGE_ITEM_TYPES = ["season_registration", "jersey", "camp", "other"];
+const CHARGE_CATEGORIES = ["subscription", "jersey", "camp", "other"];
+// Purane (mixed) bills mein ye items Standing Order ki pehli payment mein hi poore katte hain.
+// Sirf-jersey wale bill mein jersey bhi kisht mein bant-ta hai (helpers/paymentStatus upfrontTypes).
 const UPFRONT_ITEM_TYPES = ["jersey"];
 const CHARGE_STATUSES = ["unpaid", "pending", "paid", "failed", "refunded", "cancelled"];
 const PAYMENT_PLANS = ["one_time", "standing_order"];
@@ -49,6 +58,17 @@ const StandingOrderSchema = new mongoose.Schema(
     { _id: false }
 );
 
+// Bill kis period ki service ka hai (refund ka hisaab isi se): yearly = mahine, camp = din
+const ServicePeriodSchema = new mongoose.Schema(
+    {
+        unit: { type: String, enum: ["month", "day"], default: "month" },
+        start: { type: Date, default: null },
+        end: { type: Date, default: null },
+        units: { type: Number, min: 1, default: 1 }, // kul mahine / din
+    },
+    { _id: false }
+);
+
 const RefundSchema = new mongoose.Schema(
     {
         amount: { type: Number, min: 0, required: true },
@@ -80,6 +100,10 @@ const ChargeSchema = new mongoose.Schema(
         season: { type: String, trim: true, default: "" },
         feePlanId: { type: mongoose.Schema.Types.ObjectId, ref: "FeePlan", default: null }, // kis price plan se bana (khaali = haath se items)
         customAmount: { type: Boolean, default: false }, // is player ki fee plan se alag rakhi gayi
+        category: { type: String, enum: CHARGE_CATEGORIES, default: "other" },
+        // Jersey bill -> uska subscription bill (sirf dikhane ke liye, dono alag pay / band hote hain)
+        linkedChargeId: { type: mongoose.Schema.Types.ObjectId, ref: "Charge", default: null },
+        servicePeriod: { type: ServicePeriodSchema, default: null },
 
         invoiceNumber: { type: String, unique: true },
         title: { type: String, trim: true, default: "" }, // "Season registration 2026 / 2027"
@@ -122,6 +146,13 @@ const ChargeSchema = new mongoose.Schema(
         tokenExpMonth: { type: Number, default: null, select: false },
         tokenExpYear: { type: Number, default: null, select: false },
 
+        // Club owner ne subscription band ki (player chhod gaya). Aage ki kisht nahi katti, jersey alag chalti hai.
+        stopped: {
+            at: { type: Date, default: null },
+            by: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+            reason: { type: String, trim: true, default: "" },
+        },
+
         refundedAmount: { type: Number, min: 0, default: 0 },
         refunds: { type: [RefundSchema], default: [] },
         events: { type: [ChargeEventSchema], default: [], select: false },
@@ -135,6 +166,26 @@ const ChargeSchema = new mongoose.Schema(
 ChargeSchema.index({ clubId: 1, season: 1, status: 1 });
 ChargeSchema.index({ playerId: 1, season: 1 });
 ChargeSchema.index({ feePlanId: 1 });
+ChargeSchema.index({ playerId: 1, category: 1, season: 1 });
+
+// Items se category (naye bill pe, aur purane bills jinme category save nahi)
+const categoryFromItems = (items = []) => {
+    const types = new Set(items.map((i) => i.type));
+    if (types.has("season_registration")) return "subscription";
+    if (types.has("camp")) return "camp";
+    if (types.size === 1 && types.has("jersey")) return "jersey";
+    return "other";
+};
+
+// Purane bill pe category "other" (default) hai, isliye items se bhi dekhte hain
+const chargeCategory = (charge) => {
+    if (charge.category && charge.category !== "other") return charge.category;
+    return categoryFromItems(charge.items || []);
+};
+
+ChargeSchema.pre("validate", function () {
+    if (this.isNew && (!this.category || this.category === "other")) this.category = categoryFromItems(this.items || []);
+});
 
 // INV2026-7KQ9M2X4
 ChargeSchema.pre("validate", async function () {
@@ -152,6 +203,9 @@ ChargeSchema.pre("validate", async function () {
 const Charge = mongoose.model("Charge", ChargeSchema);
 module.exports = Charge;
 module.exports.CHARGE_ITEM_TYPES = CHARGE_ITEM_TYPES;
+module.exports.CHARGE_CATEGORIES = CHARGE_CATEGORIES;
+module.exports.categoryFromItems = categoryFromItems;
+module.exports.chargeCategory = chargeCategory;
 module.exports.UPFRONT_ITEM_TYPES = UPFRONT_ITEM_TYPES;
 module.exports.PAYMENT_PLANS = PAYMENT_PLANS;
 module.exports.CHARGE_STATUSES = CHARGE_STATUSES;

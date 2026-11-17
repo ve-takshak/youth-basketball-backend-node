@@ -6,15 +6,15 @@ const Team = require("../../models/Team");
 const Coach = require("../../models/Coach");
 const FeePlan = require("../../models/FeePlan");
 const { parseItems } = require("../../helpers/chargeItems");
-const { CHARGE_ITEM_TYPES, CURRENCIES, PAYMENT_METHODS, UPFRONT_ITEM_TYPES } = require("../../models/Charge");
+const { CHARGE_ITEM_TYPES, CHARGE_CATEGORIES, CURRENCIES, PAYMENT_METHODS, categoryFromItems, chargeCategory } = require("../../models/Charge");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, getPagination } = require("../../helpers/common");
 const { parseSeason } = require("../../helpers/season");
-const { chargeBadge, playerBadge, jerseyPaid, amounts, round } = require("../../helpers/paymentStatus");
+const { chargeBadge, playerBadge, jerseyPaid, amounts, upfrontTypes, round } = require("../../helpers/paymentStatus");
+const { refundQuote } = require("../../helpers/refundQuote");
 const { formatCharge, PLAYER_POPULATE } = require("../../helpers/chargeFormat");
-const { providerForClub, addEvent, syncStandingOrder, latestReceipt } = require("../../payments/service");
+const { addEvent, syncStandingOrder, latestReceipt, stopStandingOrder, executeRefund } = require("../../payments/service");
 const { PaymentError } = require("../../payments");
-const { decrypt } = require("../../helpers/secretBox");
 
 // Club owner / super admin ka payments section: bill banana, list, summary, refund, receipt.
 //   POST /user/payments/charges/issue
@@ -24,6 +24,8 @@ const { decrypt } = require("../../helpers/secretBox");
 //   PUT  /user/payments/charges/:id/mark-paid
 //   PUT  /user/payments/charges/:id/cancel
 //   POST /user/payments/charges/:id/refund
+//   GET  /user/payments/charges/:id/refund-quote             bache mahine / din ka refund kitna banta hai
+//   POST /user/payments/players/:playerId/stop-subscription  subscription ki aage ki monthly band (jersey chalta rahe)
 //   GET  /user/payments/charges/:id/receipt
 //   GET  /user/teams/:id/payment-status   (coach bhi: roster ke badges)
 
@@ -60,6 +62,18 @@ const findCharge = async (req, id, select = "") => {
     return { charge };
 };
 
+const sumItems = (items) => round(items.reduce((s, i) => s + i.amount, 0));
+
+// Haath ke items -> bills. Jersey hamesha alag bill (alag pay / Standing Order), baaki ek bill mein.
+const billsFromItems = (items, title, servicePeriod = null) => {
+    const main = items.filter((i) => i.type !== "jersey");
+    const jersey = items.filter((i) => i.type === "jersey");
+    const out = [];
+    if (main.length && sumItems(main) > 0) out.push({ category: categoryFromItems(main), title, items: main, servicePeriod });
+    if (jersey.length && sumItems(jersey) > 0) out.push({ category: "jersey", title: main.length ? `${title} - Jersey` : title, items: jersey, servicePeriod: null });
+    return out;
+};
+
 /**
  * Season registration bill banana: ek player = ek bill (items: season fee, jersey...).
  * Do tarah se:
@@ -67,6 +81,8 @@ const findCharge = async (req, id, select = "") => {
  *                    subscription + jersey. teamId / playerIds na do toh club ke saare players.
  *                    Jiski fee nahi (team nahi, ya us group ki fee 0) wo skip ("noFee").
  *   items do      -> haath se price, sabke liye same (purana tareeka). teamId ya playerIds zaroori.
+ * Subscription aur jersey ke ALAG bill bante hain (club owner subscription band kare toh jersey ki kisht chalti rahe).
+ * Camp plan (productType "camp") bhi yahin se: chune hue players ko camp ka bill.
  * teamId do toh poori team, playerIds do toh sirf wo. Jis player ka same plan (ya same season + title) ka bill pehle se hai, wo skip.
  * overrides: kisi player ki alag fee, [{ playerId, items: [{ type, name, amount }] }]. Baaki sab ko normal price.
  * Plan ka proRate on: season (Aug-Jul) ke beech join kiya toh bache mahino ki fee. Join date = joinDate ya player ki registration date.
@@ -92,12 +108,10 @@ const issueCharges = async (req, res) => {
 
         // Plan nahi: sabke liye body ke items. Plan hai: har player ke items uski team ke age group se (neeche).
         let items = null;
-        let amount = 0;
         if (!plan) {
             const parsed = parseItems(body.items);
             if (parsed.message) return sendError(res, 400, parsed.message);
             items = parsed.items;
-            amount = parsed.total;
         }
 
         const currency = plan ? plan.currency : String(body.currency || "ILS").toUpperCase();
@@ -142,20 +156,20 @@ const issueCharges = async (req, res) => {
         if (!players.length) return sendError(res, 404, "No players found.");
 
         // Plan: har player ki fee uski team ke age group se. Fee nahi (team nahi / group ki fee 0) toh bill nahi.
-        const itemsByPlayer = new Map();
+        const billsByPlayer = new Map();
         let noFee = 0;
         players.forEach((player) => {
-            if (!plan) return itemsByPlayer.set(String(player._id), items);
+            if (!plan) return billsByPlayer.set(String(player._id), billsFromItems(items, title));
             const category = player.teamId?.categoryId;
-            const planItems = plan.itemsFor(
+            const planBills = plan.chargesFor(
                 category?._id,
                 plan.pricingMode === "per_age_group" ? category?.name : "",
                 joinDate || player.createdAt || new Date()
             );
-            if (planItems) itemsByPlayer.set(String(player._id), planItems);
+            if (planBills) billsByPlayer.set(String(player._id), planBills.map((b) => ({ ...b, title: b.category === "jersey" ? `${title} - Jersey` : title })));
             else noFee += 1;
         });
-        if (!itemsByPlayer.size) {
+        if (!billsByPlayer.size) {
             return sendError(res, 404, "None of these players has a fee in this plan. Check the age group fees or the players' teams.");
         }
 
@@ -163,7 +177,7 @@ const issueCharges = async (req, res) => {
             clubId,
             playerId: { $in: players.map((p) => p._id) },
             status: { $nin: ["cancelled", "refunded"] },
-            $or: [{ season: season.value, title }, ...(plan ? [{ feePlanId: plan._id }] : [])],
+            $or: [{ season: season.value, title }, { season: season.value, title: `${title} - Jersey` }, ...(plan ? [{ feePlanId: plan._id }] : [])],
         }).select("playerId");
         const already = new Set(existing.map((c) => String(c.playerId)));
 
@@ -194,22 +208,32 @@ const issueCharges = async (req, res) => {
             const key = String(player._id);
             if (already.has(key)) continue;
             const custom = overrides.get(key);
-            const playerItems = custom ? custom.items : itemsByPlayer.get(key);
-            if (!playerItems) continue; // is player ke age group ki fee nahi
-            const charge = await Charge.create({
-                clubId,
-                playerId: player._id,
-                season: season.value,
-                feePlanId: plan?._id || null,
-                customAmount: Boolean(custom),
-                title,
-                items: playerItems,
-                amount: custom ? custom.total : plan ? round(playerItems.reduce((s, i) => s + i.amount, 0)) : amount,
-                currency,
-                dueDate,
-                createdBy: req.user._id,
-            });
-            created.push(charge._id);
+            const normal = billsByPlayer.get(key);
+            // Alag fee: items override ke, par service period (refund ka hisaab) plan wala
+            const period = normal?.find((b) => b.category !== "jersey")?.servicePeriod || null;
+            const bills = custom ? billsFromItems(custom.items, title, period) : normal;
+            if (!bills || !bills.length) continue; // is player ke age group ki fee nahi
+            let mainId = null;
+            for (const bill of bills) {
+                const charge = await Charge.create({
+                    clubId,
+                    playerId: player._id,
+                    season: season.value,
+                    feePlanId: plan?._id || null,
+                    customAmount: Boolean(custom),
+                    category: bill.category,
+                    linkedChargeId: bill.category === "jersey" ? mainId : null,
+                    servicePeriod: bill.servicePeriod || null,
+                    title: bill.title,
+                    items: bill.items,
+                    amount: sumItems(bill.items),
+                    currency,
+                    dueDate,
+                    createdBy: req.user._id,
+                });
+                if (bill.category !== "jersey") mainId = charge._id;
+                created.push(charge._id);
+            }
         }
 
         return sendOk(res, `${created.length} charge(s) created.`, {
@@ -247,6 +271,16 @@ const buildFilter = async (req, query) => {
         filter.playerId = { $in: ids };
     }
     if (query.itemType) filter["items.type"] = query.itemType;
+    if (query.category) {
+        if (!CHARGE_CATEGORIES.includes(String(query.category))) return { message: `Category must be one of: ${CHARGE_CATEGORIES.join(", ")}.` };
+        // Purane bills mein category "other" save hai, unhe items se pehchante hain
+        const legacy = {
+            subscription: { "items.type": "season_registration" },
+            camp: { "items.type": "camp" },
+            jersey: { items: { $not: { $elemMatch: { type: { $ne: "jersey" } } } } },
+        };
+        filter.$or = [{ category: query.category }, ...(legacy[query.category] ? [{ category: "other", ...legacy[query.category] }] : [])];
+    }
     if (query.feePlanId) {
         if (!isValidId(query.feePlanId)) return { message: "Invalid fee plan id." };
         filter.feePlanId = new mongoose.Types.ObjectId(String(query.feePlanId));
@@ -320,8 +354,9 @@ const getPaymentsSummary = async (req, res) => {
             if (j === true) jersey.paid += 1;
             if (j === false) jersey.unpaid += 1;
 
-            // Item ke hisaab se: Standing Order mein upfront items poore paid, season fee kisht ke hisaab se
-            const upfrontTotal = charge.items.filter((i) => UPFRONT_ITEM_TYPES.includes(i.type)).reduce((s, i) => s + i.amount, 0);
+            // Item ke hisaab se: purane mixed Standing Order mein jersey pehli kisht mein poora, baaki kisht ke hisaab se
+            const upfront = upfrontTypes(charge.items);
+            const upfrontTotal = charge.items.filter((i) => upfront.includes(i.type)).reduce((s, i) => s + i.amount, 0);
             const spreadTotal = charge.amount - upfrontTotal;
             const spreadPaidShare = spreadTotal > 0 ? Math.max(0, Math.min(1, (money.paid - upfrontTotal) / spreadTotal)) : 1;
             charge.items.forEach((item) => {
@@ -329,7 +364,7 @@ const getPaymentsSummary = async (req, res) => {
                 bucket.billed += item.amount;
                 let paid = 0;
                 if (charge.status === "paid") {
-                    paid = charge.plan === "standing_order" && !UPFRONT_ITEM_TYPES.includes(item.type) ? item.amount * spreadPaidShare : item.amount;
+                    paid = charge.plan === "standing_order" && !upfront.includes(item.type) ? item.amount * spreadPaidShare : item.amount;
                 }
                 bucket.paid += paid;
                 bucket.outstanding += badge === "refunded" ? 0 : item.amount - paid;
@@ -398,6 +433,12 @@ const updateCharge = async (req, res) => {
         if (body.items !== undefined) {
             const parsed = parseItems(body.items);
             if (parsed.message) return sendError(res, 400, parsed.message);
+            // Jersey aur subscription alag bills hain (alag band / refund hote hain), ek bill mein mix nahi
+            const jerseyItems = parsed.items.filter((i) => i.type === "jersey").length;
+            if (jerseyItems && jerseyItems < parsed.items.length) {
+                return sendError(res, 400, "Jersey must be on its own bill. Remove the jersey item here, or issue a separate jersey bill.");
+            }
+            charge.category = categoryFromItems(parsed.items);
             changes.push(`amount ${charge.amount} -> ${parsed.total}`);
             charge.items = parsed.items;
             charge.amount = parsed.total;
@@ -470,8 +511,22 @@ const markChargePaid = async (req, res) => {
     }
 };
 
+// Subscription bills (naye: category, purane: season_registration item)
+const SUBSCRIPTION_FILTER = { $or: [{ category: "subscription" }, { category: "other", "items.type": "season_registration" }] };
+const JERSEY_FILTER = { $or: [{ category: "jersey" }, { category: "other", items: { $not: { $elemMatch: { type: { $ne: "jersey" } } } } }] };
+
+// Player ke jersey bills jo abhi chal rahe hain (subscription band karne ke baad bhi chalte rahenge)
+const runningJerseyBills = async (playerId, season) => {
+    const filter = { playerId, status: { $nin: ["cancelled", "refunded"] }, ...JERSEY_FILTER };
+    if (season) filter.season = season;
+    const bills = await Charge.find(filter).populate(PLAYER_POPULATE);
+    return bills.map((c) => formatCharge(c));
+};
+
 /**
  * Bill cancel. Standing Order chal raha ho toh Tranzila mein bhi band hota hai (aage ki kisht nahi kategi).
+ * Sirf YAHI bill band hota hai: subscription ka STO band karne se jersey ka bill (alag) chalta rehta hai.
+ * Jersey bhi band karni ho toh jersey wale bill ko alag se cancel karo.
  * Paid one-time bill cancel nahi hota, uska refund karo.
  * body: { reason? }
  */
@@ -482,25 +537,23 @@ const cancelCharge = async (req, res) => {
         if (["cancelled", "refunded"].includes(charge.status)) return sendError(res, 409, `This charge is already ${charge.status}.`);
 
         const reason = String(req.body?.reason || "").trim().slice(0, 200);
-        const so = charge.standingOrder;
 
-        if (charge.status === "paid" && charge.plan === "standing_order" && so?.stoId) {
-            if (so.stoStatus !== "inactive") {
-                const { provider } = await providerForClub(charge.clubId, { requireActive: false });
-                await provider.cancelStandingOrder({ stoId: so.stoId, terminal: so.terminal });
-                so.stoStatus = "inactive";
-                charge.markModified("standingOrder");
-            }
-            // Jo kisht kat chuki wo paid hi rahengi, aage ki "cancelled" dikhengi
-            addEvent(charge, { kind: "manual", success: true, message: `Standing order stopped by admin. ${reason}`.trim() });
+        if (charge.status === "paid" && charge.plan === "standing_order" && charge.standingOrder?.stoId) {
+            await stopStandingOrder(charge, { reason, userId: req.user._id });
             await charge.save();
-            return sendOk(res, "Standing order stopped. No more monthly payments will be taken.", { charge: formatCharge(charge) });
+            const jersey = chargeCategory(charge) === "jersey" ? [] : await runningJerseyBills(charge.playerId?._id || charge.playerId, charge.season);
+            return sendOk(res, "Standing order stopped. No more monthly payments will be taken.", {
+                charge: formatCharge(charge),
+                jerseyContinuing: jersey, // jersey ke bills (alag) chalte rahenge
+            });
         }
 
         if (charge.status === "paid") return sendError(res, 409, "This charge is already paid. Refund it instead.");
+        if (chargeBadge(charge) === "pending") return sendError(res, 409, "The parent is paying this charge right now. Try again in a few minutes.");
 
         charge.status = "cancelled";
         charge.checkoutStartedAt = null;
+        charge.stopped = { at: new Date(), by: req.user._id, reason };
         addEvent(charge, { kind: "manual", success: true, message: `Cancelled by admin. ${reason}`.trim() });
         await charge.save();
         return sendOk(res, "Charge cancelled.", { charge: formatCharge(charge) });
@@ -510,57 +563,115 @@ const cancelCharge = async (req, res) => {
 };
 
 /**
- * Refund (pura ya aadha). manual = true: paisa gateway ke bahar lauta diya (sirf record).
- * Standing Order ka refund sirf pehli kisht ka hota hai (baaki kisht My Tranzila se).
- * body: { amount?, reason?, manual? }
+ * Player ne chhod diya: club owner uski SUBSCRIPTION band karta hai. Jersey ke bills ko haath nahi lagta.
+ *   monthly (Standing Order) chal raha  -> Tranzila mein band, aage ki kisht nahi kategi (jo kati wo paid)
+ *   abhi pay nahi hua                   -> cancel
+ *   poora ek baar mein pay ho chuka     -> kuch nahi badalta, "refundable" mein aata hai (refund-quote / refund se lautao)
+ *   parent abhi pay kar raha            -> skip (thodi der baad dobara)
+ * body: { season?, reason? }   season na do toh saare khule subscription bills
+ */
+const stopPlayerSubscription = async (req, res) => {
+    try {
+        const { playerId } = req.params;
+        if (!isValidId(playerId)) return sendError(res, 400, "Invalid player id.");
+        const player = await Player.findById(playerId).select("clubId");
+        if (!player || (!isSuperAdmin(req) && String(player.clubId) !== String(req.clubId))) return sendError(res, 404, "Player not found.");
+
+        const body = req.body || {};
+        const reason = String(body.reason || "").trim().slice(0, 200);
+        let season = "";
+        if (body.season) {
+            const parsed = parseSeason(body.season);
+            if (parsed.message) return sendError(res, 400, parsed.message);
+            season = parsed.value;
+        }
+
+        const filter = { playerId, status: { $nin: ["cancelled", "refunded"] }, ...SUBSCRIPTION_FILTER };
+        if (season) filter.season = season;
+        const charges = await Charge.find(filter).select("+events").populate(PLAYER_POPULATE);
+        if (!charges.length) return sendError(res, 404, "This player has no open subscription.");
+
+        const result = { stopped: [], cancelled: [], refundable: [], skipped: [] };
+        for (const charge of charges) {
+            const badge = chargeBadge(charge);
+            if (charge.status === "paid" && charge.plan === "standing_order") {
+                if (charge.standingOrder?.stoStatus === "inactive" && charge.stopped?.at) continue; // pehle hi band
+                if (!charge.standingOrder?.stoId) {
+                    result.skipped.push({ charge: formatCharge(charge), message: "Standing order not synced from Tranzila yet. Stop it in My Tranzila." });
+                    continue;
+                }
+                await stopStandingOrder(charge, { reason, userId: req.user._id });
+                await charge.save();
+                result.stopped.push(formatCharge(charge));
+            } else if (charge.status === "paid") {
+                result.refundable.push({ charge: formatCharge(charge), quote: refundQuote(charge) });
+            } else if (badge === "pending") {
+                result.skipped.push({ charge: formatCharge(charge), message: "The parent is paying this charge right now." });
+            } else {
+                charge.status = "cancelled";
+                charge.checkoutStartedAt = null;
+                charge.stopped = { at: new Date(), by: req.user._id, reason };
+                addEvent(charge, { kind: "manual", success: true, message: `Subscription stopped by admin. ${reason}`.trim() });
+                await charge.save();
+                result.cancelled.push(formatCharge(charge));
+            }
+        }
+
+        const jerseyContinuing = await runningJerseyBills(playerId, season);
+        const parts = [];
+        if (result.stopped.length) parts.push(`${result.stopped.length} monthly plan(s) stopped`);
+        if (result.cancelled.length) parts.push(`${result.cancelled.length} unpaid bill(s) cancelled`);
+        if (result.refundable.length) parts.push(`${result.refundable.length} paid-in-full bill(s) can be refunded`);
+        if (result.skipped.length) parts.push(`${result.skipped.length} skipped`);
+        return sendOk(res, `${parts.join(", ") || "Nothing to stop"}. Jersey payments are not affected.`, { ...result, jerseyContinuing });
+    } catch (e) {
+        return sendServerError(res, "stopPlayerSubscription", e);
+    }
+};
+
+/**
+ * Refund (pura ya aadha) gateway (Tranzila) se. manual = true: paisa gateway ke bahar lauta diya (sirf record).
+ * Standing Order ka gateway refund sirf pehli kisht tak (baaki kisht My Tranzila se).
+ * Kitna banta hai dekhne ke liye pehle GET .../refund-quote.
+ * body: { amount?, reason?, manual? }   amount na do = jitna bacha sab
  */
 const refundCharge = async (req, res) => {
     try {
         const { charge, status, message } = await findCharge(req, req.params.id, "+events +paymentToken +tokenExpMonth +tokenExpYear");
         if (!charge) return sendError(res, status, message);
-        if (charge.status !== "paid") return sendError(res, 409, "Only paid charges can be refunded.");
 
         const body = req.body || {};
-        const manual = [true, "true", "1", 1].includes(body.manual) || !["card", "standing_order"].includes(charge.method);
-        const firstAmount = charge.plan === "standing_order" ? charge.standingOrder?.firstAmount || 0 : charge.amount;
-        const refundable = round((manual ? amounts(charge).paid + (charge.refundedAmount || 0) : firstAmount) - (charge.refundedAmount || 0));
-
-        const amount = body.amount === undefined || body.amount === "" ? refundable : round(Number(body.amount));
-        if (!(amount > 0)) return sendError(res, 400, "Refund amount must be more than 0.");
-        if (amount > refundable) return sendError(res, 400, `You can refund up to ${refundable}.`);
-        const reason = String(body.reason || "").trim().slice(0, 200);
-
-        let providerTxnId = "";
-        if (!manual) {
-            const { provider } = await providerForClub(charge.clubId, { requireActive: false });
-            const token = charge.paymentToken ? { token: decrypt(charge.paymentToken), expMonth: charge.tokenExpMonth, expYear: charge.tokenExpYear } : null;
-            const result = await provider.refund({
-                amount,
-                currency: charge.currency,
-                providerTxnId: charge.providerTxnId,
-                authNumber: charge.authNumber,
-                token,
-                reason: reason || `Refund ${charge.invoiceNumber}`,
-            });
-            addEvent(charge, { kind: "refund", success: result.success, message: result.message, raw: result.raw });
-            if (!result.success) {
-                await charge.save();
-                return sendError(res, 402, `Refund failed: ${result.message}`);
-            }
-            providerTxnId = result.providerTxnId;
-        } else {
-            addEvent(charge, { kind: "refund", success: true, message: `Manual refund recorded by admin. ${reason}`.trim() });
-        }
-
-        charge.refunds.push({ amount, reason, providerTxnId, manual, by: req.user._id });
-        charge.refundedAmount = round((charge.refundedAmount || 0) + amount);
-        const fullyRefunded = charge.plan === "one_time" && charge.refundedAmount >= charge.amount;
-        if (fullyRefunded) charge.status = "refunded";
-        await charge.save();
-
-        return sendOk(res, "Refund done.", { charge: formatCharge(charge) });
+        const result = await executeRefund(charge, {
+            amount: body.amount,
+            reason: String(body.reason || "").trim().slice(0, 200),
+            manual: [true, "true", "1", 1].includes(body.manual),
+            userId: req.user._id,
+        });
+        if (!result.ok) return sendError(res, result.status || 400, result.message, { refundable: result.refundable });
+        return sendOk(res, "Refund done.", { charge: formatCharge(charge), refundedNow: result.amount, manual: result.manual });
     } catch (e) {
         return sendServerError(res, "refundCharge", e);
+    }
+};
+
+/**
+ * Refund kitna banta hai (kuch nahi badalta). Yearly: bache mahine, camp: bache din. Jersey nahi.
+ * query: date? (YYYY-MM-DD, player ka aakhri din, default aaj)
+ * 7 din camp 700, 4th din aakhri -> remainingUnits 3, suggestedAmount 300.
+ */
+const getRefundQuote = async (req, res) => {
+    try {
+        const { charge, status, message } = await findCharge(req, req.params.id);
+        if (!charge) return sendError(res, status, message);
+        let lastDay = new Date();
+        if (req.query.date) {
+            const m = moment(req.query.date, ["YYYY-MM-DD", moment.ISO_8601], true);
+            if (!m.isValid()) return sendError(res, 400, "Date must be YYYY-MM-DD.");
+            lastDay = m.toDate();
+        }
+        return sendOk(res, "Refund quote.", { quote: refundQuote(charge, lastDay), charge: formatCharge(charge) });
+    } catch (e) {
+        return sendServerError(res, "getRefundQuote", e);
     }
 };
 
@@ -644,6 +755,8 @@ module.exports = {
     markChargePaid,
     cancelCharge,
     refundCharge,
+    getRefundQuote,
+    stopPlayerSubscription,
     getChargeReceipt,
     getTeamPaymentStatus,
 };

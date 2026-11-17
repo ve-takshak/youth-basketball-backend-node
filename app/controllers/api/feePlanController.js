@@ -1,7 +1,7 @@
 const moment = require("moment");
 const mongoose = require("../../../config/database");
 const FeePlan = require("../../models/FeePlan");
-const { PRICING_MODES } = require("../../models/FeePlan");
+const { PRICING_MODES, PAYMENT_OPTIONS, PRODUCT_TYPES, SUBSCRIPTION_PRODUCTS, FORCED_PAYMENT_OPTIONS, DEFAULT_CAMP_DAYS, planAllows } = require("../../models/FeePlan");
 const Charge = require("../../models/Charge");
 const Team = require("../../models/Team");
 const Player = require("../../models/Player");
@@ -21,6 +21,8 @@ const { splitPlan, round } = require("../../helpers/paymentStatus");
 //   DELETE /user/payments/fee-plans/:id
 //   GET    /user/payments/fee-plans/:id/quote   join date se kitna dena (bache mahine)
 // Age group = team category (U12 Minis, U14 Boys...). Player ka age group = uski team ki category.
+// productType: yearly (default) | seasonal (sirf monthly) | camp (sirf ek baar, campStartDate + campDays).
+// Season mein ek hi chalu yearly / seasonal plan. Camps jitne chahe (POST /user/payments/charges/issue se players ko bill).
 
 const sendError = (res, status, message, data = {}) =>
     res.status(status).json({ error: true, status, message, message_desc: message, data });
@@ -60,12 +62,10 @@ const clubAgeGroups = async (clubId) => {
 };
 
 // Monthly (Standing Order) mein pehli aur har mahine ki kisht. Club setting ke maxInstallments tak.
-const installmentPreview = (subscription, jersey, maxInstallments) => {
-    if (!(subscription > 0) || maxInstallments < 2) return [];
-    const items = [
-        { type: "season_registration", amount: subscription },
-        { type: "jersey", amount: jersey || 0 },
-    ];
+// Subscription aur jersey ke alag bills hain, isliye preview bhi alag: type "season_registration" ya "jersey".
+const installmentPreview = (amount, maxInstallments, type = "season_registration") => {
+    if (!(amount > 0) || maxInstallments < 2) return [];
+    const items = [{ type, amount }];
     return Array.from({ length: maxInstallments - 1 }, (_, i) => i + 2).map((n) => {
         const { firstAmount, monthlyAmount } = splitPlan(items, n);
         return { installments: n, firstAmount, monthlyAmount };
@@ -74,10 +74,15 @@ const installmentPreview = (subscription, jersey, maxInstallments) => {
 
 // groups = clubAgeGroups(). maxInstallments diya ho toh har fee ke saath monthly preview bhi.
 const formatPlan = (plan, { groups = [], issuedCount, maxInstallments } = {}) => {
-    const jersey = plan.jerseyAmount || 0;
-    const withTotal = (subscription) => ({
+    const jersey = plan.jerseyAmount || 0; // "same" mode ki jersey
+    const withTotal = (subscription, jersey) => ({
         totalAmount: subscription > 0 ? round(subscription + jersey) : 0, // parent ka bill (subscription + jersey)
-        ...(maxInstallments !== undefined ? { standingOrderPreview: installmentPreview(subscription, jersey, maxInstallments) } : {}),
+        ...(maxInstallments !== undefined
+            ? {
+                  standingOrderPreview: installmentPreview(subscription, maxInstallments), // subscription bill
+                  jerseyStandingOrderPreview: subscription > 0 ? installmentPreview(jersey, maxInstallments, "jersey") : [], // jersey bill (alag)
+              }
+            : {}),
     });
     const stored = new Map((plan.ageGroups || []).map((g) => [String(g.categoryId), g.amount]));
     // Saari age groups (screen ki list), jinki fee nahi unka amount 0. Purane / hata diye group bhi jo plan mein hain.
@@ -89,14 +94,22 @@ const formatPlan = (plan, { groups = [], issuedCount, maxInstallments } = {}) =>
         clubId: plan.clubId,
         name: plan.name,
         season: plan.season,
+        productType: plan.productType || "yearly", // yearly | seasonal | camp
+        camp:
+            plan.productType === "camp"
+                ? { startDate: plan.camp?.startDate || null, endDate: plan.campPeriod()?.end || null, days: plan.camp?.days || DEFAULT_CAMP_DAYS }
+                : null,
         pricingMode: plan.pricingMode, // same | per_age_group
         subscriptionAmount: plan.subscriptionAmount || 0, // "same" mode ki fee
         jerseyAmount: jersey,
         proRate: plan.proRate !== false, // true = beech season join par bache mahino ki fee
-        ...(plan.pricingMode === "same" ? withTotal(plan.subscriptionAmount || 0) : {}),
+        paymentOptions: plan.paymentOptions || "both", // one_time | standing_order | both
+        ...(plan.pricingMode === "same" ? withTotal(plan.subscriptionAmount || 0, jersey) : {}),
+        // per_age_group: har group ki apni subscription (amount) aur apni jersey (jerseyAmount)
         ageGroups: [...groups, ...extra].map((g) => {
             const amount = stored.get(String(g.categoryId)) || 0;
-            return { ...g, amount, ...(plan.pricingMode === "per_age_group" ? withTotal(amount) : {}) };
+            const groupJersey = plan.jerseyFor(g.categoryId);
+            return { ...g, amount, jerseyAmount: groupJersey, ...(plan.pricingMode === "per_age_group" ? withTotal(amount, groupJersey) : {}) };
         }),
         currency: plan.currency,
         dueDate: plan.dueDate,
@@ -128,6 +141,25 @@ const parseList = (value) => {
 const parseBody = async (body, { partial = false } = {}) => {
     const out = {};
 
+    if (!partial || body.productType !== undefined) {
+        const type = String(body.productType || "yearly").trim();
+        if (!PRODUCT_TYPES.includes(type)) return { message: `productType must be one of: ${PRODUCT_TYPES.join(", ")}.` };
+        out.productType = type;
+    }
+    if (body.campStartDate !== undefined) {
+        if (body.campStartDate === null || body.campStartDate === "") out["camp.startDate"] = null;
+        else {
+            const m = moment(body.campStartDate, ["YYYY-MM-DD", moment.ISO_8601], true);
+            if (!m.isValid()) return { message: "Camp start date must be YYYY-MM-DD." };
+            out["camp.startDate"] = m.startOf("day").toDate();
+        }
+    }
+    if (body.campDays !== undefined && body.campDays !== "") {
+        const days = Number(body.campDays);
+        if (!Number.isInteger(days) || days < 1 || days > 60) return { message: "Camp days must be a whole number from 1 to 60." };
+        out["camp.days"] = days;
+    }
+
     if (!partial || body.season !== undefined) {
         const season = parseSeason(body.season);
         if (season.message) return { message: season.message };
@@ -140,7 +172,7 @@ const parseBody = async (body, { partial = false } = {}) => {
         if (name) out.name = name;
     }
     if (!partial || body.pricingMode !== undefined) {
-        const mode = String(body.pricingMode || "").trim();
+        const mode = String(body.pricingMode || (out.productType === "camp" ? "same" : "")).trim(); // camp ki ek hi fee
         if (!PRICING_MODES.includes(mode)) return { message: `pricingMode must be one of: ${PRICING_MODES.join(", ")}.` };
         out.pricingMode = mode;
     }
@@ -156,7 +188,7 @@ const parseBody = async (body, { partial = false } = {}) => {
     }
     if (body.ageGroups !== undefined) {
         const groups = parseList(body.ageGroups);
-        if (!Array.isArray(groups)) return { message: "ageGroups must be a list: [{ categoryId, amount }]." };
+        if (!Array.isArray(groups)) return { message: "ageGroups must be a list: [{ categoryId, amount, jerseyAmount }]." };
         const ids = groups.map((g) => String(g?.categoryId || ""));
         if (!ids.every(isValidId)) return { message: "Invalid age group id." };
         if (new Set(ids).size !== ids.length) return { message: "Each age group can appear only once." };
@@ -166,9 +198,17 @@ const parseBody = async (body, { partial = false } = {}) => {
 
         out.ageGroups = [];
         for (const g of groups) {
-            const parsed = parseAmount(g.amount, `Fee for ${nameOf.get(String(g.categoryId))}`);
+            const groupName = nameOf.get(String(g.categoryId));
+            const parsed = parseAmount(g.amount, `Fee for ${groupName}`);
             if (parsed.message) return { message: parsed.message };
-            out.ageGroups.push({ categoryId: String(g.categoryId), amount: parsed.value });
+            // jerseyAmount na bhejo = plan ki jerseyAmount (sabke liye ek). 0 = is group ki jersey nahi.
+            let jerseyAmount = null;
+            if (g.jerseyAmount !== undefined && g.jerseyAmount !== null && g.jerseyAmount !== "") {
+                const jersey = parseAmount(g.jerseyAmount, `Jersey for ${groupName}`);
+                if (jersey.message) return { message: jersey.message };
+                jerseyAmount = jersey.value;
+            }
+            out.ageGroups.push({ categoryId: String(g.categoryId), amount: parsed.value, jerseyAmount });
         }
     }
     if (body.currency !== undefined || !partial) {
@@ -186,11 +226,21 @@ const parseBody = async (body, { partial = false } = {}) => {
     }
     if (body.isActive !== undefined) out.isActive = [true, "true", 1, "1"].includes(body.isActive);
     if (body.proRate !== undefined) out.proRate = [true, "true", 1, "1"].includes(body.proRate);
+    if (body.paymentOptions !== undefined) {
+        const value = String(body.paymentOptions || "").trim();
+        if (!PAYMENT_OPTIONS.includes(value)) return { message: `Payment options must be one of: ${PAYMENT_OPTIONS.join(", ")}.` };
+        out.paymentOptions = value;
+    }
     return { data: out };
 };
 
 // Mode ke hisaab se fee bhari hai? (plan = save hone wala final roop)
 const checkFees = (plan) => {
+    if (plan.productType === "camp") {
+        if (!(plan.subscriptionAmount > 0)) return "Enter the camp fee (more than 0).";
+        if (!plan.camp?.startDate) return "Enter the camp start date.";
+        return "";
+    }
     if (plan.pricingMode === "same" && !(plan.subscriptionAmount > 0)) return "Enter the annual fee (more than 0).";
     if (plan.pricingMode === "per_age_group" && !(plan.ageGroups || []).some((g) => g.amount > 0)) {
         return "Enter a fee (more than 0) for at least one age group.";
@@ -198,8 +248,28 @@ const checkFees = (plan) => {
     return "";
 };
 
+// Season ka ek hi chalu yearly / seasonal plan (auto bill isi se). Camp ka koi duplicate nahi.
 const findDuplicate = (clubId, season, excludeId = null) =>
-    FeePlan.findOne({ clubId, season, isActive: true, ...(excludeId ? { _id: { $ne: excludeId } } : {}) }).select("name");
+    FeePlan.findOne({
+        clubId,
+        season,
+        isActive: true,
+        productType: { $in: [...SUBSCRIPTION_PRODUCTS, null] },
+        ...(excludeId ? { _id: { $ne: excludeId } } : {}),
+    }).select("name");
+
+const DEFAULT_NAMES = { yearly: "Annual subscription", seasonal: "Seasonal training", camp: "Camp" };
+
+// camp.startDate jaisi dotted keys -> nested (create ke liye)
+const nest = (data) => {
+    const out = {};
+    Object.entries(data).forEach(([key, value]) => {
+        const [head, tail] = key.split(".");
+        if (tail) out[head] = { ...(out[head] || {}), [tail]: value };
+        else out[key] = value;
+    });
+    return out;
+};
 
 const maxInstallmentsFor = async (clubId) => {
     const club = await Club.findById(clubId).select("paymentSettings");
@@ -223,6 +293,10 @@ const listFeePlans = async (req, res) => {
             filter.season = season.value;
         }
         if (req.query.active !== undefined && req.query.active !== "") filter.isActive = req.query.active === "true";
+        if (req.query.productType) {
+            if (!PRODUCT_TYPES.includes(String(req.query.productType))) return sendError(res, 400, `productType must be one of: ${PRODUCT_TYPES.join(", ")}.`);
+            filter.productType = req.query.productType === "yearly" ? { $in: ["yearly", null] } : req.query.productType;
+        }
 
         const [plans, groups] = await Promise.all([FeePlan.find(filter).sort({ isActive: -1, createdAt: -1 }), clubAgeGroups(clubId)]);
         const counts = await Charge.aggregate([
@@ -242,9 +316,14 @@ const listFeePlans = async (req, res) => {
 
 /**
  * Season ka Fee Plan ek call mein (Subscription Plan screen ka Save).
- * pricingMode "same": subscriptionAmount. "per_age_group": ageGroups [{ categoryId, amount }] (0 = is group ki fee nahi).
+ * pricingMode "same": subscriptionAmount + jerseyAmount (sabke liye).
+ * "per_age_group": ageGroups [{ categoryId, amount, jerseyAmount }] -> har group ki apni fee aur apni jersey (0 = nahi).
+ *   group ki jerseyAmount na bhejo toh plan ki jerseyAmount lagti hai.
  * proRate (default true): season (Aug-Jul) ke beech join kare toh bache mahino ki fee. false = hamesha poore saal ki.
- * body: { clubId?, season, pricingMode, subscriptionAmount?, ageGroups?, jerseyAmount?, proRate?, name?, currency?, dueDate? }
+ * paymentOptions (default "both"): one_time = sirf ek baar | standing_order = sirf har mahine | both
+ * productType (default "yearly"): yearly | seasonal (paymentOptions apne aap standing_order) | camp (one_time, jersey / pro-rate nahi)
+ *   camp: subscriptionAmount = camp ki fee, campStartDate (YYYY-MM-DD), campDays (default 7)
+ * body: { clubId?, season, productType?, pricingMode, subscriptionAmount?, ageGroups?, jerseyAmount?, proRate?, paymentOptions?, campStartDate?, campDays?, name?, currency?, dueDate? }
  */
 const createFeePlan = async (req, res) => {
     try {
@@ -254,12 +333,16 @@ const createFeePlan = async (req, res) => {
 
         const parsed = await parseBody(body);
         if (parsed.message) return sendError(res, 400, parsed.message);
-        const data = { name: `Annual subscription ${parsed.data.season}`, ...parsed.data };
+        const type = parsed.data.productType || "yearly";
+        if (type === "camp") parsed.data.pricingMode = "same";
+        const data = nest({ name: `${DEFAULT_NAMES[type]} ${parsed.data.season}`, ...parsed.data });
+        if (type === "camp" && !data.camp?.days) data.camp = { ...(data.camp || {}), days: DEFAULT_CAMP_DAYS };
+        if (FORCED_PAYMENT_OPTIONS[type]) data.paymentOptions = FORCED_PAYMENT_OPTIONS[type];
 
         const feeError = checkFees(data);
         if (feeError) return sendError(res, 400, feeError);
 
-        if (data.isActive !== false) {
+        if (data.isActive !== false && type !== "camp") {
             const other = await findDuplicate(clubId, data.season);
             if (other) return sendError(res, 409, `A fee plan for ${data.season} already exists. Edit it instead.`, { feePlanId: other._id });
         }
@@ -276,11 +359,13 @@ const getFeePlan = async (req, res) => {
     try {
         const { plan, status, message } = await findPlan(req, req.params.id);
         if (!plan) return sendError(res, status, message);
-        const [issuedCount, groups, maxInstallments] = await Promise.all([
+        const [issuedCount, groups, clubMax] = await Promise.all([
             Charge.countDocuments({ feePlanId: plan._id, status: { $nin: ["cancelled"] } }),
             clubAgeGroups(plan.clubId),
             maxInstallmentsFor(plan.clubId),
         ]);
+        // Plan mein monthly band ho toh preview khaali
+        const maxInstallments = planAllows(plan.paymentOptions, "standing_order") ? clubMax : 0;
         return sendOk(res, "Fee plan.", { feePlan: formatPlan(plan, { groups, issuedCount, maxInstallments }) });
     } catch (e) {
         return sendServerError(res, "getFeePlan", e);
@@ -290,7 +375,8 @@ const getFeePlan = async (req, res) => {
 /**
  * Plan badalna (jo field bhejo wahi badlega). ageGroups bhejo toh poori list badal jaati hai.
  * Pehle bane bills nahi badalte, sirf naye bills naye price se.
- * body: { season?, pricingMode?, subscriptionAmount?, ageGroups?, jerseyAmount?, proRate?, name?, currency?, dueDate?, isActive? }
+ * productType bills bane hon toh nahi badalta.
+ * body: { season?, productType?, pricingMode?, subscriptionAmount?, ageGroups?, jerseyAmount?, proRate?, paymentOptions?, campStartDate?, campDays?, name?, currency?, dueDate?, isActive? }
  */
 const updateFeePlan = async (req, res) => {
     try {
@@ -299,12 +385,16 @@ const updateFeePlan = async (req, res) => {
 
         const parsed = await parseBody(req.body || {}, { partial: true });
         if (parsed.message) return sendError(res, 400, parsed.message);
+        if (parsed.data.productType && parsed.data.productType !== (plan.productType || "yearly") && (await Charge.exists({ feePlanId: plan._id }))) {
+            return sendError(res, 409, "This plan already has bills, so its type can't change. Create a new plan instead.");
+        }
 
-        Object.assign(plan, parsed.data, { updatedBy: req.user._id });
+        Object.entries(parsed.data).forEach(([key, value]) => plan.set(key, value));
+        plan.updatedBy = req.user._id;
         const feeError = checkFees(plan);
         if (feeError) return sendError(res, 400, feeError);
 
-        if (plan.isActive) {
+        if (plan.isActive && plan.productType !== "camp") {
             const other = await findDuplicate(plan.clubId, plan.season, plan._id);
             if (other) return sendError(res, 409, `Another active fee plan for ${plan.season} already exists.`, { feePlanId: other._id });
         }

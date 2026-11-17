@@ -1,5 +1,12 @@
+const moment = require("moment");
 const Charge = require("../../models/Charge");
+const RefundRequest = require("../../models/RefundRequest");
+const { OPEN_STATUSES } = require("../../models/RefundRequest");
+const { refundQuote } = require("../../helpers/refundQuote");
+const { formatRefundRequest, REQUEST_POPULATE } = require("./refundRequestController");
 const Club = require("../../models/Club");
+const FeePlan = require("../../models/FeePlan");
+const { allowedMethods } = require("../../models/FeePlan");
 const Parent = require("../../models/Parent");
 const Player = require("../../models/Player");
 const { ROLES } = require("../../helpers/constants");
@@ -16,6 +23,9 @@ const { parseSeason, currentSeason } = require("../../helpers/season");
 //   GET  /user/parent/payments/children   har bachche ka season ka hisaab (bill nahi toh Fee Plan se apne aap)
 //   POST /user/parent/payments/:id/checkout
 //   GET  /user/parent/payments/:id/receipt
+//   POST /user/parent/payments/:id/refund-request   (yearly ek baar pay / camp: beech mein chhoda, bache ka refund maango)
+//   GET  /user/parent/refund-requests
+// Monthly subscription parent khud band nahi kar sakta: club owner band karta hai.
 //
 // Pay ka flow:
 //   1. App checkout call karti hai -> data.checkout.url milta hai
@@ -84,25 +94,48 @@ const listMyPayments = async (req, res) => {
     }
 };
 
+// feePlanId -> paymentOptions
+const planOptionsFor = async (charges) => {
+    const ids = [...new Set(charges.map((c) => c.feePlanId && String(c.feePlanId._id || c.feePlanId)).filter(Boolean))];
+    if (!ids.length) return new Map();
+    const plans = await FeePlan.find({ _id: { $in: ids } }).select("paymentOptions");
+    return new Map(plans.map((p) => [String(p._id), p.paymentOptions || "both"]));
+};
+
 // Bills formatted + har bill ke pay options (ek baar / Standing Order ki kishton ki list)
 const withPayOptions = async (charges) => {
     // Standing Order wale bills Tranzila se refresh (ghante mein ek baar)
     await Promise.all(charges.filter((c) => c.plan === "standing_order").map((c) => syncStandingOrder(c)));
 
     const clubIds = [...new Set(charges.map((c) => String(c.clubId)))];
-    const clubs = await Club.find({ _id: { $in: clubIds } }).select("paymentSettings");
+    const [clubs, planOptions, openRequests] = await Promise.all([
+        Club.find({ _id: { $in: clubIds } }).select("paymentSettings"),
+        planOptionsFor(charges),
+        RefundRequest.find({ chargeId: { $in: charges.map((c) => c._id) } }).sort({ createdAt: -1 }).select("chargeId status refundedAmount reviewNote createdAt"),
+    ]);
+    // Har bill ka sabse naya refund request
+    const requestByCharge = new Map();
+    openRequests.forEach((r) => !requestByCharge.has(String(r.chargeId)) && requestByCharge.set(String(r.chargeId), r));
     const settingsByClub = new Map(clubs.map((c) => [String(c._id), c.paymentSettings || {}]));
 
     return charges.map((charge) => {
         const out = formatCharge(charge);
         const settings = settingsByClub.get(String(charge.clubId)) || {};
+        const allowed = allowedMethods(planOptions.get(String(charge.feePlanId?._id || charge.feePlanId || "")), settings);
+        out.paymentOptions = allowed.paymentOptions; // one_time | standing_order | both
+        const lastRequest = requestByCharge.get(String(charge._id));
+        out.refundRequest = lastRequest
+            ? { _id: lastRequest._id, status: lastRequest.status, refundedAmount: lastRequest.refundedAmount || 0, reviewNote: lastRequest.reviewNote, createdAt: lastRequest.createdAt }
+            : null;
+        const requestOpen = lastRequest && [...OPEN_STATUSES, "processing"].includes(lastRequest.status);
+        out.canRequestRefund = !requestOpen && refundQuote(charge).eligible; // app "Request refund" button
         const canPay = ["unpaid", "overdue", "pending"].includes(out.badge) || charge.status === "failed";
         const max = settings.maxInstallments || 10;
         out.options = canPay
             ? {
-                  oneTime: { amount: charge.amount },
+                  oneTime: allowed.oneTime ? { amount: charge.amount } : null,
                   standingOrder:
-                      settings.allowStandingOrder !== false && max >= 2
+                      allowed.standingOrder
                           ? {
                                 maxInstallments: max,
                                 // App dropdown ke liye: har option pe pehli aur mahine ki kisht
@@ -225,6 +258,12 @@ const checkoutCharge = async (req, res) => {
 
         const club = await Club.findById(charge.clubId).select("name paymentSettings");
         const settings = club?.paymentSettings || {};
+
+        // Fee Plan mein club admin ne jo tareeka band kiya hai woh nahi chalega
+        const allowed = allowedMethods((await planOptionsFor([charge])).get(String(charge.feePlanId?._id || charge.feePlanId || "")), settings);
+        if (plan === "one_time" && !allowed.oneTime) return sendError(res, 400, "This fee can only be paid monthly (standing order).");
+        if (plan === "standing_order" && !allowed.standingOrder) return sendError(res, 400, "Your club doesn't offer monthly payments for this fee.");
+
         const { gateway, provider } = await providerForClub(charge.clubId);
 
         const user = req.user;
@@ -327,4 +366,65 @@ const getMyReceipt = async (req, res) => {
     }
 };
 
-module.exports = { listMyPayments, listMyChildrenPayments, checkoutCharge, getMyReceipt };
+/**
+ * Refund maangna (player ne chhod diya). Sirf ek baar mein pay hua subscription / camp. Club owner review karke Tranzila se lautata hai.
+ * Yearly: bache mahine, camp: bache din ka hisaab (data.quote). Jersey ka refund nahi.
+ * body: { reason?, lastDay? (YYYY-MM-DD, player ka aakhri din, default aaj) }
+ */
+const requestRefund = async (req, res) => {
+    try {
+        const { charge, status, message } = await findMyCharge(req, req.params.id);
+        if (!charge) return sendError(res, status, message);
+
+        const body = req.body || {};
+        let lastDay = new Date();
+        if (body.lastDay) {
+            const m = moment(body.lastDay, ["YYYY-MM-DD", moment.ISO_8601], true);
+            if (!m.isValid()) return sendError(res, 400, "Last day must be YYYY-MM-DD.");
+            if (m.isAfter(moment().endOf("day"))) return sendError(res, 400, "Last day can't be in the future.");
+            lastDay = m.toDate();
+        }
+
+        const quote = refundQuote(charge, lastDay);
+        if (!quote.eligible) return sendError(res, 400, quote.reason);
+
+        const open = await RefundRequest.exists({ chargeId: charge._id, status: { $in: [...OPEN_STATUSES, "processing"] } });
+        if (open) return sendError(res, 409, "You already asked for a refund for this payment. The club will review it.");
+
+        const request = await RefundRequest.create({
+            clubId: charge.clubId,
+            chargeId: charge._id,
+            playerId: charge.playerId?._id || charge.playerId,
+            requestedBy: req.user._id,
+            reason: String(body.reason || "").trim().slice(0, 500),
+            lastDay: quote.lastDay,
+            quote: {
+                unit: quote.unit,
+                totalUnits: quote.totalUnits,
+                usedUnits: quote.usedUnits,
+                remainingUnits: quote.remainingUnits,
+                serviceAmount: quote.serviceAmount,
+                suggestedAmount: quote.suggestedAmount,
+            },
+            currency: charge.currency,
+        });
+        await request.populate(REQUEST_POPULATE);
+        return sendOk(res, "Refund request sent. The club will review it.", { refundRequest: formatRefundRequest(request), quote });
+    } catch (e) {
+        return sendServerError(res, "requestRefund", e);
+    }
+};
+
+// Mere (bachchon ke) refund requests, naye pehle
+const listMyRefundRequests = async (req, res) => {
+    try {
+        const ids = await myPlayerIds(req.user);
+        if (ids === null) return sendError(res, 403, "Only parents and senior players can see refund requests.");
+        const requests = await RefundRequest.find({ playerId: { $in: ids } }).sort({ createdAt: -1 }).limit(100).populate(REQUEST_POPULATE);
+        return sendOk(res, "My refund requests.", { refundRequests: requests.map(formatRefundRequest) });
+    } catch (e) {
+        return sendServerError(res, "listMyRefundRequests", e);
+    }
+};
+
+module.exports = { listMyPayments, listMyChildrenPayments, checkoutCharge, getMyReceipt, requestRefund, listMyRefundRequests };

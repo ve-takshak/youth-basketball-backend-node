@@ -1,5 +1,6 @@
 // Parent app khule toh bachche ka is season ka bill apne aap (admin ko "issue" nahi karna padta).
-// Club ka chalu season ka Fee Plan + bachche ki team ka age group -> fee (registration date se pro-rated) + jersey.
+// Club ka chalu season ka Fee Plan (yearly / seasonal, camp nahi) + bachche ki team ka age group -> fee (registration date se pro-rated) + jersey.
+// Subscription aur jersey ke ALAG bill bante hain (alag pay, alag Standing Order): subscription band ho toh jersey chalta rahe.
 // Season ka bill pehle se hai (koi bhi status, cancelled bhi) toh naya nahi banta - admin ne cancel kiya toh wapas nahi aata.
 // Har player ka result:
 //   billed      bill hai (pehle se ya abhi bana)
@@ -9,6 +10,7 @@
 //   inactive    player left / inactive
 const Charge = require("../models/Charge");
 const FeePlan = require("../models/FeePlan");
+const { SUBSCRIPTION_PRODUCTS } = require("../models/FeePlan");
 const Player = require("../models/Player");
 const { currentSeason } = require("./season");
 
@@ -24,7 +26,7 @@ const ensureSeasonCharges = async (playerIds, season = currentSeason()) => {
         .populate({ path: "teamId", select: "categoryId", populate: { path: "categoryId", select: "name" } });
 
     const clubIds = [...new Set(players.map((p) => String(p.clubId)))];
-    const plans = await FeePlan.find({ clubId: { $in: clubIds }, season, isActive: true }).sort({ createdAt: -1 });
+    const plans = await FeePlan.find({ clubId: { $in: clubIds }, season, isActive: true, productType: { $in: [...SUBSCRIPTION_PRODUCTS, null] } }).sort({ createdAt: -1 });
     const planByClub = new Map();
     plans.forEach((p) => !planByClub.has(String(p.clubId)) && planByClub.set(String(p.clubId), p));
 
@@ -58,8 +60,8 @@ const ensureSeasonCharges = async (playerIds, season = currentSeason()) => {
             result.set(key, "no_team");
             continue;
         }
-        const items = plan.itemsFor(category?._id, plan.pricingMode === "per_age_group" ? category?.name : "", player.createdAt || new Date());
-        if (!items) {
+        const bills = plan.chargesFor(category?._id, plan.pricingMode === "per_age_group" ? category?.name : "", player.createdAt || new Date());
+        if (!bills) {
             result.set(key, "no_fee");
             continue;
         }
@@ -73,19 +75,26 @@ const ensureSeasonCharges = async (playerIds, season = currentSeason()) => {
             // Lock milne tak kisi aur request ne bana diya ho
             const again = await Charge.exists({ playerId: player._id, season, "items.type": "season_registration" });
             if (!again) {
-                await Charge.create({
-                    clubId: player.clubId,
-                    playerId: player._id,
-                    season,
-                    feePlanId: plan._id,
-                    customAmount: false,
-                    title: plan.name,
-                    items,
-                    amount: round(items.reduce((s, i) => s + i.amount, 0)),
-                    currency: plan.currency,
-                    dueDate: plan.dueDate || null,
-                    createdBy: plan.createdBy, // plan banane wala admin
-                });
+                let subscriptionId = null;
+                for (const bill of bills) {
+                    const charge = await Charge.create({
+                        clubId: player.clubId,
+                        playerId: player._id,
+                        season,
+                        feePlanId: plan._id,
+                        customAmount: false,
+                        category: bill.category,
+                        linkedChargeId: bill.category === "jersey" ? subscriptionId : null,
+                        servicePeriod: bill.servicePeriod,
+                        title: bill.title,
+                        items: bill.items,
+                        amount: round(bill.items.reduce((s, i) => s + i.amount, 0)),
+                        currency: plan.currency,
+                        dueDate: plan.dueDate || null,
+                        createdBy: plan.createdBy, // plan banane wala admin
+                    });
+                    if (bill.category === "subscription") subscriptionId = charge._id;
+                }
             }
             result.set(key, "billed");
         } finally {
