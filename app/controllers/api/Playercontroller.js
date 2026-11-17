@@ -10,9 +10,10 @@ const ClubAdmin = require("../../models/ClubAdmin");
 const Coach = require("../../models/Coach");
 require("../../models/TeamCategory"); // getPlayer mein team.categoryId populate ke liye model register ho
 const { SHIRT_SIZES, WEAR_SIZE_FIELDS, PLAYER_STATUSES, PLAYER_TYPES, PARENT_RELATIONS } = require("../../models/Player");
-const { ROLES } = require("../../helpers/constants");
+const { ROLES, isPlayerRole } = require("../../helpers/constants");
+const { upcomingTeamSchedules } = require("./scheduleController");
 const { isValidId, cleanMobile, escapeRegex, getPagination } = require("../../helpers/common");
-const { validatePersonInput } = require("../../helpers/userHelper");
+const { validatePersonInput, applyPersonUpdates } = require("../../helpers/userHelper");
 const { upload_files, deleteFiles } = require("../../../utils/s3");
 const { withSubscriptions } = require("../../helpers/subscriptionStatus");
 const { billPlayersQuietly } = require("../../helpers/autoBill");
@@ -1495,7 +1496,82 @@ const removePlayerFromTeam = async (req, res) => {
     }
 };
 
+/**
+ * GET /api/user/player/dashboard   (seniorPlayer / youthPlayer, sirf apna)
+ * Mobile app ka player home: profile + club + team + coach + parents + aane wale schedules.
+ * parents: sirf youth player ke linked parents. Koi linked nahi (ya senior) toh [] aur hasParents false,
+ * app tab parent section nahi dikhata.
+ */
+const getMyPlayerDashboard = async (req, res) => {
+    try {
+        if (!isPlayerRole(req.user.role)) return sendError(res, 403, "Access denied. Player only.");
+
+        const player = await populatePlayerDetail(Player.findOne({ userId: req.user._id }));
+        if (!player) return sendError(res, 404, "Player profile not found. Please contact your club.");
+
+        const detail = await formatPlayerDetail(player);
+        const parents = player.playerType === "senior" ? [] : detail.parents;
+        const upcomingSchedules = await upcomingTeamSchedules({
+            clubId: player.clubId?._id || player.clubId,
+            teamId: player.teamId?._id || null,
+        });
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Dashboard fetched successfully.",
+            message_desc: "Dashboard fetched successfully.",
+            data: {
+                ...detail,
+                hasParents: parents.length > 0,
+                parents,
+                upcomingSchedules,
+            },
+        });
+    } catch (e) {
+        return sendServerError(res, "Player dashboard", e);
+    }
+};
+
+/**
+ * PUT /api/user/player/profile   (seniorPlayer / youthPlayer, sirf apna)
+ * body: { firstname?, lastname?, email? }  -> sirf ye teen badal sakte hain.
+ * Mobile (login isi se), DOB (age category / team), ID, sizes, shirt number, team, status
+ * club manage karta hai, isliye yahan se nahi badalte (body mein aaye toh ignore).
+ * Photo: PUT /user/:userId/profile-image (apni id). Response = dashboard jaisa player object.
+ */
+const updateMyPlayerProfile = async (req, res) => {
+    try {
+        if (!isPlayerRole(req.user.role)) return sendError(res, 403, "Access denied. Player only.");
+
+        const user = await User.findById(req.user._id);
+        if (!user) return sendError(res, 404, "User not found.");
+
+        const { firstname, lastname, email } = req.body || {};
+        const updateError = await applyPersonUpdates(user, { firstname, lastname, email });
+        if (updateError) return sendError(res, updateError.status, updateError.message);
+        await user.save();
+
+        const player = await populatePlayerDetail(Player.findOne({ userId: req.user._id }));
+        if (!player) return sendError(res, 404, "Player profile not found. Please contact your club.");
+        const detail = await formatPlayerDetail(player);
+        const parents = player.playerType === "senior" ? [] : detail.parents;
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Profile updated successfully.",
+            message_desc: "Profile updated successfully.",
+            data: { ...detail, hasParents: parents.length > 0, parents },
+        });
+    } catch (e) {
+        return sendServerError(res, "Update player profile", e);
+    }
+};
+
 module.exports = {
+    getMyPlayerDashboard,
+    updateMyPlayerProfile,
     createPlayer,
     createCoachPlayer,
     listCoachPlayers,

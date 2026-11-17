@@ -4,7 +4,8 @@ const ClubAdmin = require("../models/ClubAdmin");
 const Coach = require("../models/Coach");
 const Parent = require("../models/Parent");
 const Club = require("../models/Club");
-const { ROLES } = require("../helpers/constants");
+const Player = require("../models/Player");
+const { ROLES, isPlayerRole, NO_MOBILE_PLAYER_MESSAGE } = require("../helpers/constants");
 const { getRequiredTerms, hasAcceptedRequired } = require("../helpers/termsHelper");
 
 const sendError = (res, status, message, data = {}) =>
@@ -33,6 +34,8 @@ const getUserFromToken = async (req) => {
     const user = await User.findById(decoded.id);
     if (!user) return { error: "User no longer exists.", code: "TOKEN_INVALID" };
     if (!user.is_verify) return { error: "Please verify your account.", code: "TOKEN_INVALID" };
+    // Player ka mobile hata diya gaya ho toh purana token bhi band
+    if (isPlayerRole(user.role) && !user.mobileNumber) return { error: NO_MOBILE_PLAYER_MESSAGE, code: "TOKEN_INVALID" };
 
     return { user };
 };
@@ -58,6 +61,10 @@ const attachClub = async (req) => {
     if (req.user.role === ROLES.PARENT) {
         const parent = await Parent.findOne({ userId: req.user._id }).select("clubId");
         clubId = parent?.clubId;
+    }
+    if (isPlayerRole(req.user.role)) {
+        const player = await Player.findOne({ userId: req.user._id }).select("clubId");
+        clubId = player?.clubId;
     }
     if (clubId && (await Club.exists({ _id: clubId, isArchived: true }))) {
         return "Your club has been archived. Please contact the administrator.";
