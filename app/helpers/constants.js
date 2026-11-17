@@ -23,8 +23,16 @@ const OTP_REQUEST_WINDOW_MINUTES = 10;
 const OTP_MAX_FAILED_ATTEMPTS = 3; // har OTP pe itne galat try, phir OTP band + lock
 const OTP_LOCK_MINUTES = 15;
 
+// Dono player roles. Player sirf tab login kar sakta hai jab uske User pe mobile number ho.
+const PLAYER_ROLES = [ROLES.SENIOR_PLAYER, ROLES.YOUTH_PLAYER];
+const isPlayerRole = (role) => PLAYER_ROLES.includes(role);
+const NO_MOBILE_PLAYER_MESSAGE = "This player has no mobile number and cannot log in. Please contact your club.";
+
 module.exports = {
     ROLES,
+    PLAYER_ROLES,
+    isPlayerRole,
+    NO_MOBILE_PLAYER_MESSAGE,
     USE_STATIC_OTP,
     STATIC_OTP,
     ALLOW_TEST_OTP,

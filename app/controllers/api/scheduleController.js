@@ -380,7 +380,7 @@ const ignoreConflicts = (body) => body?.ignoreConflicts === true || String(body?
 // Access
 // ---------------------------------------------------------------------------
 
-const PLAYER_ROLES = [ROLES.SENIOR_PLAYER, ROLES.YOUTH_PLAYER];
+const { PLAYER_ROLES } = require("../../helpers/constants");
 const sentOnly = { publishedAt: { $ne: null }, status: { $ne: "draft" } };
 const notLinked = { status: 403, message: "Your account is not linked to any club." };
 
@@ -863,7 +863,21 @@ const sendSchedule = async (req, res) => {
     }
 };
 
+/**
+ * Player dashboard ke liye: team ke aane wale bheje gaye schedules (aaj se `days` din tak), pehle `limit`.
+ * Aaj ke jo khatam ho chuke (endTime nikal gaya) wo nahi. Team nahi toh khaali.
+ */
+const upcomingTeamSchedules = async ({ clubId, teamId }, { days = 14, limit = 5 } = {}) => {
+    if (!clubId || !teamId) return [];
+    const from = moment().format("YYYY-MM-DD");
+    const to = addDays(from, days);
+    const nowTime = moment().format("HH:mm");
+    const all = await expandSchedules([rangeFilter(from, to), { clubId, teamId, ...sentOnly }], from, to);
+    return all.filter((s) => !(s.date === from && s.endTime < nowTime)).slice(0, limit);
+};
+
 module.exports = {
+    upcomingTeamSchedules,
     createSchedule,
     listSchedules,
     listSentSchedules,

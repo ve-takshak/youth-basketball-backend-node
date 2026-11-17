@@ -33,6 +33,8 @@ const {
     deleteTeam,
 } = require("../app/controllers/api/teamController");
 const {
+    getMyPlayerDashboard,
+    updateMyPlayerProfile,
     createPlayer,
     createCoachPlayer,
     listCoachPlayers,
@@ -237,6 +239,8 @@ router.delete("/user/schedules/:id/delete", superAdminOrClubAdminAuthentication,
 // Mobile app: har role ki apni API, sirf bheje gaye (published) schedules
 router.get("/user/coach/schedules", authentication, listCoachSchedules);
 router.get("/user/coach/schedules/:id", authentication, getCoachSchedule);
+router.get("/user/player/dashboard", authentication, getMyPlayerDashboard); // senior / youth player ka apna home
+router.put("/user/player/profile", authentication, updateMyPlayerProfile); // player: naam / email (mobile, DOB club badalta hai)
 router.get("/user/player/schedules", authentication, listPlayerSchedules);
 router.get("/user/player/schedules/:id", authentication, getPlayerSchedule);
 router.get("/user/parent/schedules", authentication, requireTermsAccepted, listParentSchedules);

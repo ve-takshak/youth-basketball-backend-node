@@ -3856,6 +3856,71 @@
         ]
       }
     },
+    "/user/player/dashboard": {
+      "get": {
+        "description": "**Access:** Any logged-in user\n\nsenior / youth player ka apna home\n\n```\nMobile app ka player home: profile + club + team + coach + parents + aane wale schedules.\nparents: sirf youth player ke linked parents. Koi linked nahi (ya senior) toh [] aur hasParents false,\napp tab parent section nahi dikhata.\n```",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Schedule"
+        ],
+        "summary": "Get my player dashboard",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/player/profile": {
+      "put": {
+        "description": "**Access:** Any logged-in user\n\nplayer: naam / email (mobile, DOB club badalta hai)\n\n```\nbody: { firstname?, lastname?, email? }  -> sirf ye teen badal sakte hain.\nMobile (login isi se), DOB (age category / team), ID, sizes, shirt number, team, status\nclub manage karta hai, isliye yahan se nahi badalte (body mein aaye toh ignore).\nPhoto: PUT /user/:userId/profile-image (apni id). Response = dashboard jaisa player object.\n```",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [],
+                "properties": {
+                  "firstname": {
+                    "type": "string"
+                  },
+                  "lastname": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Schedule"
+        ],
+        "summary": "Update my player profile",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/user/player/schedules": {
       "get": {
         "description": "**Access:** Any logged-in user",

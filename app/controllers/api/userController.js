@@ -11,6 +11,7 @@ const {
     OTP_REQUEST_WINDOW_MINUTES,
     OTP_MAX_FAILED_ATTEMPTS,
     OTP_LOCK_MINUTES,
+    isPlayerRole,
 } = require("../../helpers/constants");
 const { cleanMobile } = require("../../helpers/common");
 const { publicUser, getRoleData, applyPersonUpdates } = require("../../helpers/userHelper");
@@ -914,7 +915,9 @@ const refreshToken = async (req, res) => {
             raw,
             async (userId) => {
                 const user = await User.findById(userId);
-                return user && user.is_verify ? user : null;
+                if (!user || !user.is_verify) return null;
+                if (isPlayerRole(user.role) && !user.mobileNumber) return null; // mobile hata = login band
+                return user;
             },
             req
         );
