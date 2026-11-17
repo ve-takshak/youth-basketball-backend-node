@@ -1,8 +1,10 @@
+const crypto = require("crypto");
 const validator = require("validator");
 const User = require("../../models/User");
 const {
     ROLES,
     USE_STATIC_OTP,
+    ALLOW_TEST_OTP,
     STATIC_OTP,
     OTP_VALID_MINUTES,
     OTP_MAX_REQUESTS,
@@ -18,10 +20,40 @@ const ClubAdmin = require("../../models/ClubAdmin");
 const Coach = require("../../models/Coach");
 const Player = require("../../models/Player");
 const { issueTokens, rotateTokens, revokeTokens } = require("../../helpers/authTokens");
+const { sendSms } = require("../../helpers/sms");
 
 
-// Abhi OTP hamesha 0000. SMS lagane pe yahan random OTP banake SMS bhejna.
-const generateOtp = () => STATIC_OTP;
+// Static mode (testing) = "000000". SMS mode = random 6 digit, SMS4Free se.
+const generateOtp = () => (USE_STATIC_OTP ? STATIC_OTP : String(crypto.randomInt(100000, 1000000)));
+
+// OTP ka SMS. Static mode mein kuch nahi bhejte. Fail = false (caller 502 de).
+const sendOtpSms = async (user) => {
+    if (USE_STATIC_OTP) return true;
+    const result = await sendSms({
+        countryCode: user.countryCode,
+        mobileNumber: user.mobileNumber,
+        msg: `קוד האימות שלך ל-Courtside: ${user.otp}\nYour Courtside code: ${user.otp}`,
+    });
+    const to = `***${String(user.mobileNumber || "").slice(-4)}`;
+    if (result.ok) console.log(`OTP SMS sent to ${to} (user ${user._id})`);
+    else console.error(`OTP SMS failed to ${to} (user ${user._id}): ${result.status} ${result.message}`);
+    return result.ok;
+};
+
+// Response mein: OTP kaise gaya. otpChannel "sms" = asli SMS gaya, "static" = testing mode, OTP 000000 (koi SMS nahi)
+const otpDelivery = (user) => ({
+    otpChannel: USE_STATIC_OTP ? "static" : "sms",
+    otpSentTo: USE_STATIC_OTP ? "" : `${user.countryCode} ***${String(user.mobileNumber || "").slice(-4)}`,
+});
+
+const otpSmsFailed = (res) =>
+    res.status(502).json({
+        error: true,
+        status: 502,
+        message: "Could not send the OTP. Please try again.",
+        message_desc: "Could not send the OTP. Please try again.",
+        data: {},
+    });
 
 // Access token 15 min + refresh token 30 din (helpers/authTokens)
 
@@ -53,17 +85,29 @@ const trackOtpRequest = (user) => {
     return {};
 };
 
-// Galat OTP: count badhao, limit pe lock. true = ab lock ho gaya
+// Galat OTP: count badhao. 3 galat = OTP band (naya maangna padega) + lock. true = ab lock ho gaya
 const recordFailedOtp = async (user) => {
     user.otp_failed_attempts = (user.otp_failed_attempts || 0) + 1;
     const locked = user.otp_failed_attempts >= OTP_MAX_FAILED_ATTEMPTS;
     if (locked) {
         user.otp_locked_until = new Date(Date.now() + OTP_LOCK_MINUTES * 60000);
         user.otp_failed_attempts = 0;
+        user.otp = "";
+        user.otp_generated_at = null;
     }
     await user.save();
     return locked;
 };
+
+// Galat OTP ka 400, kitne try bache
+const invalidOtp = (res, user) =>
+    res.status(400).json({
+        error: true,
+        status: 400,
+        message: "Invalid OTP.",
+        message_desc: "Invalid OTP.",
+        data: { attemptsLeft: Math.max(0, OTP_MAX_FAILED_ATTEMPTS - (user.otp_failed_attempts || 0)) },
+    });
 
 // Club ka ek hi format, har API mein same: { _id, clubCode, name, theme }
 const formatClub = (club) =>
@@ -202,13 +246,14 @@ const register = async (req, res) => {
             otp: generateOtp(),
             otp_generated_at: new Date(),
         });
+        if (!(await sendOtpSms(user))) return otpSmsFailed(res);
 
         return res.status(201).json({
             error: false,
             status: 201,
             message: "Signup successful. OTP sent to your mobile number.",
             message_desc: "Signup successful. OTP sent to your mobile number.",
-            data: publicUser(user),
+            data: { ...publicUser(user), ...otpDelivery(user) },
         });
     } catch (e) {
         console.error("Register error:", e);
@@ -358,6 +403,7 @@ const registerParent = async (req, res) => {
         user.device_type = device_type;
         user.device_token = device_token;
         user.otp = generateOtp();
+        user.otp_failed_attempts = 0; // naye OTP pe phir se 3 try
         user.otp_generated_at = new Date();
         await user.save();
 
@@ -372,6 +418,7 @@ const registerParent = async (req, res) => {
         } else {
             await Parent.create({ userId: user._id, clubId: club._id, createdBy: user._id }); // self-join
         }
+        if (!(await sendOtpSms(user))) return otpSmsFailed(res);
 
         return res.status(201).json({
             error: false,
@@ -385,6 +432,7 @@ const registerParent = async (req, res) => {
                 countryCode,
                 mobileNumber,
                 club: formatClub(club),
+                ...otpDelivery(user),
             },
         });
     } catch (e) {
@@ -554,15 +602,17 @@ const login = async (req, res) => {
         if (limit.blockedMinutes) return tooManyAttempts(res, limit.blockedMinutes);
 
         user.otp = generateOtp();
+        user.otp_failed_attempts = 0; // naye OTP pe phir se 3 try
         user.otp_generated_at = new Date();
         await user.save();
+        if (!(await sendOtpSms(user))) return otpSmsFailed(res);
 
         return res.status(200).json({
             error: false,
             status: 200,
             message: "OTP sent to your mobile number.",
             message_desc: "OTP sent to your mobile number.",
-            data: { countryCode, mobileNumber },
+            data: { countryCode, mobileNumber, ...otpDelivery(user) },
         });
     } catch (e) {
         console.error("Login error:", e);
@@ -633,28 +683,17 @@ const verifyOtp = async (req, res) => {
         }
 
         if (USE_STATIC_OTP) {
-            // Testing: sirf "0000" check
+            // Testing: sirf "000000" check
             if (otp !== STATIC_OTP) {
                 if (await recordFailedOtp(user)) return tooManyAttempts(res, OTP_LOCK_MINUTES);
-                return res.status(400).json({
-                    error: true,
-                    status: 400,
-                    message: "Invalid OTP.",
-                    message_desc: "Invalid OTP.",
-                    data: {},
-                });
+                return invalidOtp(res, user);
             }
-        } else {
+        } else if (!(ALLOW_TEST_OTP && otp === STATIC_OTP)) {
             // Asli SMS wala flow: DB wala OTP match + expiry
+            // (ALLOW_TEST_OTP=true ho toh "000000" bhi chalta hai, testing ke liye. Live se pehle band karna.)
             if (!user.otp || user.otp !== otp) {
                 if (await recordFailedOtp(user)) return tooManyAttempts(res, OTP_LOCK_MINUTES);
-                return res.status(400).json({
-                    error: true,
-                    status: 400,
-                    message: "Invalid OTP.",
-                    message_desc: "Invalid OTP.",
-                    data: {},
-                });
+                return invalidOtp(res, user);
             }
 
             const minutes = (Date.now() - new Date(user.otp_generated_at).getTime()) / 60000;
@@ -738,15 +777,17 @@ const resendOtp = async (req, res) => {
         if (limit.blockedMinutes) return tooManyAttempts(res, limit.blockedMinutes);
 
         user.otp = generateOtp();
+        user.otp_failed_attempts = 0; // naye OTP pe phir se 3 try
         user.otp_generated_at = new Date();
         await user.save();
+        if (!(await sendOtpSms(user))) return otpSmsFailed(res);
 
         return res.status(200).json({
             error: false,
             status: 200,
             message: "OTP resent to your mobile number.",
             message_desc: "OTP resent to your mobile number.",
-            data: { countryCode, mobileNumber },
+            data: { countryCode, mobileNumber, ...otpDelivery(user) },
         });
     } catch (e) {
         console.error("Resend OTP error:", e);

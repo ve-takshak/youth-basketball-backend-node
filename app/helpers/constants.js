@@ -10,22 +10,24 @@ const ROLES = {
     PARENT: "parent",              // Youth player ka maa/baap: mobile app pe apne bachche
 };
 
-// Abhi testing ke liye: true rehne tak har user ka OTP "0000" chalega.
-// Twilio / SMS service lagane ke baad false kar dena.
-const USE_STATIC_OTP = true;
-const STATIC_OTP = "0000";
+// .env SMS_OTP_ENABLED=true = random OTP, SMS4Free se SMS. Warna sabka OTP "000000" (testing, koi SMS nahi jaata).
+const USE_STATIC_OTP = process.env.SMS_OTP_ENABLED !== "true";
+const STATIC_OTP = "000000";
+// SMS mode mein bhi "000000" chalne do (ek hi server pe testing). .env ALLOW_TEST_OTP=true. LIVE SE PEHLE HATANA: koi bhi kisi ka account khol sakta hai.
+const ALLOW_TEST_OTP = process.env.ALLOW_TEST_OTP === "true";
 const OTP_VALID_MINUTES = 10;
 
 // OTP ka misuse rokna (SMS bomb / brute force), per user
 const OTP_MAX_REQUESTS = 10; // itne OTP request ek window mein
 const OTP_REQUEST_WINDOW_MINUTES = 10;
-const OTP_MAX_FAILED_ATTEMPTS = 5; // itni galat OTP ke baad lock
+const OTP_MAX_FAILED_ATTEMPTS = 3; // har OTP pe itne galat try, phir OTP band + lock
 const OTP_LOCK_MINUTES = 15;
 
 module.exports = {
     ROLES,
     USE_STATIC_OTP,
     STATIC_OTP,
+    ALLOW_TEST_OTP,
     OTP_VALID_MINUTES,
     OTP_MAX_REQUESTS,
     OTP_REQUEST_WINDOW_MINUTES,

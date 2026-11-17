@@ -124,7 +124,8 @@ class TranzilaProvider extends IPaymentProvider {
             success_url_address: urls.success,
             fail_url_address: urls.fail,
         };
-        if (language === "he") fields.lang = "il";
+        // Tranzila page ki bhasha: il = Hebrew (Tranzila ka default), us = English
+        fields.lang = language === "he" ? "il" : "us";
         if (this.useHandshake && tranmode === "A") fields.thtk = await this.createHandshake(amount);
 
         Object.keys(fields).forEach((key) => {
