@@ -4,7 +4,7 @@ const ClubAdmin = require("../../models/ClubAdmin");
 const Form101Submission = require("../../models/Form101Submission");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId } = require("../../helpers/common");
-const { parseForm101, Form101Error } = require("../../helpers/form101Fields");
+const { parseForm101, Form101Error, CREDIT_DOCUMENTS } = require("../../helpers/form101Fields");
 const { buildForm101Pdf, Form101PdfNotReady, Form101AttachmentError } = require("../../helpers/form101Pdf");
 const { sendMail } = require("../../../utils/mailer");
 
@@ -23,6 +23,9 @@ const TIME_ZONE = "Asia/Jerusalem";
 const SIGNATURE_TYPES = ["image/png", "image/jpeg", "image/jpg"];
 const DOC_TYPES = ["image/png", "image/jpeg", "image/jpg", "application/pdf"];
 const MAX_ATTACHMENTS = 5;
+const MAX_FILES_PER_REASON = 3;
+const MAX_SIGNATURE_BYTES = 2 * 1024 * 1024;
+const MAX_TOTAL_BYTES = 20 * 1024 * 1024; // saare documents milake (email size)
 
 const sendError = (res, status, message, data = {}) =>
     res.status(status).json({ error: true, status, message, message_desc: message, data });
@@ -106,6 +109,14 @@ const formatStatus = (sub, year, isApprovalRequired = false, { admin = false } =
     };
 };
 
+// "data:image/png;base64,iVBOR..." (signature pad ka output) -> file jaisa object. Galat ho toh null.
+const signatureFromBase64 = (value) => {
+    const match = typeof value === "string" ? value.trim().match(/^data:(image\/(?:png|jpe?g));base64,([A-Za-z0-9+/=\s]+)$/) : null;
+    if (!match) return null;
+    const data = Buffer.from(match[2].replace(/\s/g, ""), "base64");
+    return data.length ? { data, mimetype: match[1] === "image/jpg" ? "image/jpeg" : match[1], name: "signature" } : null;
+};
+
 // express-fileupload: ek ya zyada files -> array
 const filesOf = (req, key) => {
     const f = req.files?.[key];
@@ -166,9 +177,13 @@ const getMyForm101 = async (req, res) => {
  * multipart/form-data:
  *   data        JSON string: { employee, children, employerIncome, otherIncome, spouse, changes,
  *                              taxCredits, taxCoordination, declaration: { agreed: true } }
- *   signature   PNG / JPG (signature pad se)
+ *   signature   PNG / JPG file (signature pad se) YA text field: "data:image/png;base64,..."
  *   idCard      1-2 files: ID card + ספח (photo ya PDF)
- *   attachments 0-5 files: reason ke hisaab se documents (discharge certificate, form 119...)
+ *   doc_<reason> section ח ke reason ki file(s), max 3 har reason: doc_disabled, doc_disabilityAllowance,
+ *               doc_qualifyingSettlement, doc_newImmigrant (zaroori), doc_spouseNoIncome, doc_supportsChildren,
+ *               doc_disabledChildren (zaroori), doc_alimony, doc_dischargedSoldier, doc_academicDegree, doc_reserveCombat
+ *   doc_taxCoordination  section ט: assessor approval (reason assessorApproved pe zaroori) / salary slips
+ *   attachments 0-5 files: koi aur document
  * Kuch save nahi hota. Email fail = status nahi badalta, coach dobara bheje.
  */
 const submitMyForm101 = async (req, res) => {
@@ -205,10 +220,12 @@ const submitMyForm101 = async (req, res) => {
         }
 
         // ---- files (sirf memory mein) ----
-        const [signature] = filesOf(req, "signature");
-        if (!signature) return sendError(res, 400, "Signature is required.");
+        // Signature pad ki image: file (signature) YA base64 text (signature = "data:image/png;base64,...")
         if (filesOf(req, "signature").length > 1) return sendError(res, 400, "Only one signature is allowed.");
+        const signature = filesOf(req, "signature")[0] || signatureFromBase64(req.body?.signature ?? body?.signature);
+        if (!signature) return sendError(res, 400, "Signature is required.");
         if (!SIGNATURE_TYPES.includes(signature.mimetype)) return sendError(res, 400, "Signature must be a PNG or JPG image.");
+        if (signature.data.length > MAX_SIGNATURE_BYTES) return sendError(res, 400, "Signature image is too large.");
 
         const idCard = filesOf(req, "idCard");
         if (!idCard.length) return sendError(res, 400, "Please attach a photo of your ID card including the appendix (ספח).");
@@ -216,15 +233,43 @@ const submitMyForm101 = async (req, res) => {
 
         const attachments = filesOf(req, "attachments");
         if (attachments.length > MAX_ATTACHMENTS) return sendError(res, 400, `Please attach at most ${MAX_ATTACHMENTS} documents.`);
-        if ([...idCard, ...attachments].some((f) => !DOC_TYPES.includes(f.mimetype))) {
+
+        // ח: har reason ki file alag field mein (doc_newImmigrant, doc_disabledChildren ...)
+        const creditDocs = [];
+        for (const [key, info] of Object.entries(CREDIT_DOCUMENTS)) {
+            const files = filesOf(req, `doc_${key}`);
+            const selected = !!form.taxCredits[key];
+            if (files.length && !selected) return sendError(res, 400, `A document was attached for tax credit ${info.num}, but that reason is not selected.`);
+            if (selected && info.required && !files.length) return sendError(res, 400, `Tax credit ${info.num}: please attach the required document.`);
+            if (files.length > MAX_FILES_PER_REASON) return sendError(res, 400, `Tax credit ${info.num}: please attach at most ${MAX_FILES_PER_REASON} files.`);
+            files.forEach((f, i) => creditDocs.push({ ...f, label: `חלק ח סעיף ${info.num}: ${info.label}${files.length > 1 ? ` (${i + 1})` : ""}` }));
+        }
+        // ט: tax coordination ka document (assessor approval = zaroori, additional income = salary slips optional)
+        const coordinationFiles = filesOf(req, "doc_taxCoordination");
+        const coordReason = form.taxCoordination.reason;
+        if (coordinationFiles.length && !coordReason) return sendError(res, 400, "A tax coordination document was attached, but no tax coordination reason is selected.");
+        if (coordReason === "assessorApproved" && !coordinationFiles.length) return sendError(res, 400, "Please attach the tax assessor's approval for tax coordination.");
+        if (coordinationFiles.length > MAX_FILES_PER_REASON) return sendError(res, 400, `Tax coordination: please attach at most ${MAX_FILES_PER_REASON} files.`);
+        const coordLabel = coordReason === "assessorApproved" ? "אישור פקיד השומה לתיאום מס" : "תלושי שכר מהכנסות נוספות";
+        coordinationFiles.forEach((f, i) => creditDocs.push({ ...f, label: `חלק ט: ${coordLabel}${coordinationFiles.length > 1 ? ` (${i + 1})` : ""}` }));
+
+        const unknownDoc = Object.keys(req.files || {}).find((k) => k.startsWith("doc_") && k !== "doc_taxCoordination" && !CREDIT_DOCUMENTS[k.slice(4)]);
+        if (unknownDoc) return sendError(res, 400, `Unknown document field "${unknownDoc}".`);
+
+        const allDocs = [...idCard, ...creditDocs, ...attachments];
+        if (allDocs.some((f) => !DOC_TYPES.includes(f.mimetype))) {
             return sendError(res, 400, "Documents must be PNG, JPG or PDF files.");
+        }
+        // Email mein jaata hai, isliye kul size limit (har file 5MB alag se, express-fileupload)
+        if (allDocs.reduce((sum, f) => sum + (f.size || f.data?.length || 0), 0) > MAX_TOTAL_BYTES) {
+            return sendError(res, 400, "The attached files are too large in total (maximum 20MB). Please use smaller photos.");
         }
 
         // ---- PDF (memory) ----
         const signedAt = new Intl.DateTimeFormat("en-GB", { timeZone: TIME_ZONE, day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date());
         let pdf;
         try {
-            pdf = await buildForm101Pdf(form, employer, { signature, idCard, attachments, signedAt });
+            pdf = await buildForm101Pdf(form, employer, { signature, idCard, creditDocs, attachments, signedAt });
         } catch (e) {
             if (e instanceof Form101AttachmentError) return sendError(res, 400, e.message);
             if (e instanceof Form101PdfNotReady) return sendError(res, 503, "Form 101 is not available yet. Please try again later.");

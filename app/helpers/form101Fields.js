@@ -20,7 +20,9 @@ const INCOME_TYPES = ["monthly", "additional", "partial", "daily", "allowance", 
 
 const GENDERS = ["male", "female"];
 const MARITAL_STATUSES = ["single", "married", "divorced", "widowed", "separated"];
-const KIBBUTZ_OPTIONS = ["no", "transferred", "notTransferred"]; // income kibbutz ko jaati hai / nahi
+const KIBBUTZ_OPTIONS = ["no", "transferred", "notTransferred"]; // purana string format (ab object: { member, incomeTransferred })
+const IDENTIFY_BY = ["id", "passport"]; // ID number ya foreign passport (passport -> country + number)
+const HEALTH_FUNDS = ["clalit", "maccabi", "meuhedet", "leumit"];
 const CREDIT_POINTS_OPTIONS = ["here", "elsewhere"]; // ה: credit points isi income pe / dusri income pe
 const SPOUSE_INCOME_TYPES = ["work", "other"]; // עבודה/קצבה/עסק , הכנסה אחרת
 const COORDINATION_REASONS = ["", "noIncomeSinceYearStart", "additionalIncome", "assessorApproved"];
@@ -131,21 +133,56 @@ const israeliId = (value, label, { required = false } = {}) => {
     return out.padStart(9, "0");
 };
 
-// ID number ya (ID na ho toh) passport number
+// "Identify by": ID number ya foreign passport. Passport -> country + passport number dono zaroori.
+// identifyBy na bheja ho toh: idNumber hai = "id", warna "passport".
 const idOrPassport = (src, label) => {
-    const idNumber = israeliId(src.idNumber, `${label} ID number`);
-    const passportNumber = str(src.passportNumber, `${label} passport number`, { max: 20 });
-    if (!idNumber && !passportNumber) fail(`${label} ID number (or passport number) is required.`);
-    return { idNumber, passportNumber: idNumber ? "" : passportNumber };
+    const identifyBy = oneOf(src.identifyBy || (src.idNumber ? "id" : src.passportNumber ? "passport" : ""), IDENTIFY_BY, `${label} identify by`, { required: true });
+    if (identifyBy === "id") {
+        return { identifyBy, idNumber: israeliId(src.idNumber, `${label} ID number`, { required: true }), passportNumber: "", passportCountry: "" };
+    }
+    return {
+        identifyBy,
+        idNumber: "",
+        passportNumber: str(src.passportNumber, `${label} passport number`, { required: true, max: 20 }),
+        passportCountry: str(src.passportCountry, `${label} passport country`, { required: true, max: 50 }),
+    };
+};
+
+// Kibbutz / moshav: { member: true, incomeTransferred: true|false }. Purana string ("no"/"transferred"/"notTransferred") bhi chalta hai.
+const parseKibbutz = (value) => {
+    if (typeof value === "string") {
+        const old = oneOf(value || "no", KIBBUTZ_OPTIONS, "Kibbutz / cooperative moshav member");
+        return { member: old !== "no", incomeTransferred: old === "transferred" };
+    }
+    const k = isObj(value) ? value : {};
+    if (k.member === undefined) fail("Kibbutz / cooperative moshav member (yes / no) is required.");
+    const member = bool(k.member);
+    if (!member) return { member: false, incomeTransferred: false };
+    if (k.incomeTransferred === undefined) fail("Please answer whether your income from this employer is transferred to the kibbutz.");
+    return { member: true, incomeTransferred: bool(k.incomeTransferred) };
 };
 
 // ---------- sections ----------
+
+// Health fund: key (clalit...) ya Hebrew naam (כללית...) dono chalte hain
+const HEALTH_FUND_HEBREW = { כללית: "clalit", מכבי: "maccabi", מאוחדת: "meuhedet", לאומית: "leumit" };
+const healthFundKey = (value) => {
+    const v = String(value || "").trim();
+    return HEALTH_FUND_HEBREW[v] || v.toLowerCase();
+};
+
+const contactOf = (src) => {
+    const out = { phone: phone(src.phone, "Phone"), mobile: phone(src.mobile, "Mobile number") };
+    if (!out.phone && !out.mobile) fail("Please enter a mobile number or a phone number.");
+    return out;
+};
 
 // ב. פרטי העובד/ת
 const parseEmployee = (src) => {
     if (!isObj(src)) fail("Employee details are required.");
     const address = isObj(src.address) ? src.address : {};
     const healthFund = isObj(src.healthFund) ? src.healthFund : {};
+    if (healthFund.member === undefined) fail("Health fund member (yes / no) is required.");
     const member = bool(healthFund.member);
 
     return {
@@ -160,16 +197,16 @@ const parseEmployee = (src) => {
             city: str(address.city, "City", { required: true, max: 50 }),
             zip: digits(address.zip, "Zip code", { min: 5, max: 7 }),
         },
-        phone: phone(src.phone, "Phone"),
-        mobile: phone(src.mobile, "Mobile number", { required: true }),
-        email: email(src.email, "Email"),
+        // Mobile ya phone, kam se kam ek (sirf landline ho toh mobile optional)
+        ...contactOf(src),
+        email: email(src.email, "Email", { required: true }),
         gender: oneOf(src.gender, GENDERS, "Gender", { required: true }),
         maritalStatus: oneOf(src.maritalStatus, MARITAL_STATUSES, "Marital status", { required: true }),
         israeliResident: src.israeliResident === undefined ? fail("Israeli resident (yes / no) is required.") : bool(src.israeliResident),
-        kibbutz: oneOf(src.kibbutz || "no", KIBBUTZ_OPTIONS, "Kibbutz / cooperative moshav member"),
+        kibbutz: parseKibbutz(src.kibbutz),
         healthFund: {
             member,
-            name: member ? str(healthFund.name, "Health fund name", { required: true, max: 30 }) : "",
+            name: member ? oneOf(healthFundKey(healthFund.name), HEALTH_FUNDS, "Health fund name", { required: true }) : "",
         },
     };
 };
@@ -223,6 +260,13 @@ const parseOtherIncome = (src) => {
     };
 };
 
+const spouseIncomeTypes = (src) => {
+    const list = Array.isArray(src.incomeTypes) ? src.incomeTypes : src.incomeType ? [src.incomeType] : [];
+    const types = [...new Set(list.map((t) => oneOf(t, SPOUSE_INCOME_TYPES, "Spouse income type")))].filter(Boolean);
+    if (!types.length) fail("Please select your spouse's income type.");
+    return types;
+};
+
 // ו. פרטים על בן/בת הזוג (sirf married)
 const parseSpouse = (src, maritalStatus) => {
     if (maritalStatus !== "married") return null;
@@ -236,7 +280,8 @@ const parseSpouse = (src, maritalStatus) => {
         birthDate: date(src.birthDate, "Spouse date of birth", { required: true, notFuture: true }),
         aliyahDate: date(src.aliyahDate, "Spouse aliyah date", { notFuture: true }),
         hasIncome,
-        incomeType: hasIncome ? oneOf(src.incomeType, SPOUSE_INCOME_TYPES, "Spouse income type", { required: true }) : "",
+        // Checkbox: dono ek saath ho sakte hain. Purana incomeType (string) bhi chalta hai.
+        incomeTypes: hasIncome ? spouseIncomeTypes(src) : [],
     };
 };
 
@@ -262,13 +307,13 @@ const parseAgeGroups = (src, label) => {
 };
 
 // ח. פטור או זיכוי ממס. Har reason optional; tick kiya toh uske andar ke fields required.
-const parseTaxCredits = (src = {}) => {
+const parseTaxCredits = (src = {}, { children = [], israeliResident = true } = {}) => {
     const t = isObj(src) ? src : {};
     const on = (key) => bool(isObj(t[key]) ? t[key].selected : t[key]);
     const sub = (key) => (isObj(t[key]) ? t[key] : {});
 
     const out = {
-        israeliResident: on("israeliResident"), // 1
+        israeliResident, // 1: section ב ke "Israeli resident" se apne aap
         disabled: on("disabled"), // 2א: נכה 100% / עיוור לצמיתות
         disabilityAllowance: on("disabilityAllowance"), // 2ב: תגמול חודשי (חוק הנכים / נפגעי איבה)
         qualifyingSettlement: null, // 3
@@ -303,8 +348,21 @@ const parseTaxCredits = (src = {}) => {
             noIncomeUntil: date(s.noIncomeUntil, "New immigrant: no income until"),
         };
     }
-    if (on("childrenInCustody")) out.childrenInCustody = parseAgeGroups(sub("childrenInCustody"), "Tax credit 7");
-    if (on("childrenNotInCustody")) out.childrenNotInCustody = parseAgeGroups(sub("childrenNotInCustody"), "Tax credit 8");
+    // 7 aur 8: section ג mein bachche hone chahiye. 8 = "jo 7 tick nahi karta", dono ek saath nahi.
+    if (on("childrenInCustody") && on("childrenNotInCustody")) fail("Tax credits 7 and 8 cannot both be selected.");
+    if (on("childrenInCustody")) {
+        if (!children.some((c) => c.inCustody)) fail("Tax credit 7: list your children in your custody in section C first.");
+        out.childrenInCustody = parseAgeGroups(sub("childrenInCustody"), "Tax credit 7");
+    }
+    if (on("childrenNotInCustody")) {
+        if (!children.length) fail("Tax credit 8 cannot be selected because no children are listed in section C.");
+        const groups = { ...sub("childrenNotInCustody") };
+        delete groups.age18; // 8 mein 18 saal wala group nahi hota
+        out.childrenNotInCustody = parseAgeGroups(groups, "Tax credit 8");
+    }
+    if (out.singleParent && !out.childrenInCustody && !out.childrenNotInCustody) {
+        fail("Tax credit 9 (single parent) needs tax credit 7 or 8 to be selected.");
+    }
     if (on("disabledChildren")) {
         const n = count(sub("disabledChildren").count, "Number of children with disabilities");
         if (!n) fail("Tax credit 11: please enter the number of children with disabilities.");
@@ -353,6 +411,22 @@ const parseTaxCoordination = (src) => {
     return { reason, incomes };
 };
 
+// ח: har reason ke documents. App har reason ki file alag field mein bhejta hai: doc_<key> (jaise doc_newImmigrant).
+// required = reason tick ho toh file zaroori (form pe *). label = PDF mein us page ka title.
+const CREDIT_DOCUMENTS = {
+    disabled: { num: "2א", required: false, label: "אישור משרד הביטחון / האוצר / פקיד השומה / תעודת עיוור" },
+    disabilityAllowance: { num: "2ב", required: false, label: "אישור על קבלת תגמול חודשי" },
+    qualifyingSettlement: { num: "3", required: false, label: "אישור הרשות המקומית על גבי טופס 1312א" },
+    newImmigrant: { num: "4", required: true, label: "תעודת עולה" },
+    spouseNoIncome: { num: "5", required: false, label: "אישור נכות / עיוורון של העובד או בן/בת הזוג" },
+    supportsChildren: { num: "10", required: false, label: "צילום פסק דין למזונות ילדים" },
+    disabledChildren: { num: "11", required: true, label: "אישור גמלת ילד נכה מהמוסד לביטוח לאומי לשנת המס" },
+    alimony: { num: "12", required: false, label: "צילום פסק דין למזונות" },
+    dischargedSoldier: { num: "14", required: false, label: "צילום תעודת שחרור / סיום שירות לאומי" },
+    academicDegree: { num: "15", required: false, label: "טופס 119 / אישור סיום לימודים" },
+    reserveCombat: { num: "16", required: false, label: 'אישור מצה"ל על ימי שירות מילואים' },
+};
+
 /**
  * Pura form check karta hai. Galat ho toh Form101Error (message coach ko dikhane layak).
  * @returns saaf kiya hua form object (sirf PDF banane ke liye, save nahi hota)
@@ -362,18 +436,19 @@ const parseForm101 = (body, taxYear) => {
 
     const employee = parseEmployee(body.employee);
     const otherIncome = parseOtherIncome(body.otherIncome);
+    const children = parseChildren(body.children, taxYear);
 
     if (!bool(body.declaration?.agreed)) fail("Please confirm the declaration (section J) before submitting.");
 
     return {
         taxYear,
         employee,
-        children: parseChildren(body.children, taxYear),
+        children,
         employerIncome: parseEmployerIncome(body.employerIncome),
         otherIncome,
         spouse: parseSpouse(body.spouse, employee.maritalStatus),
         changes: parseChanges(body.changes),
-        taxCredits: parseTaxCredits(body.taxCredits),
+        taxCredits: parseTaxCredits(body.taxCredits, { children, israeliResident: employee.israeliResident }),
         taxCoordination: parseTaxCoordination(body.taxCoordination),
         // Form par note: "other income" hai aur coordination nahi -> employee ko tax assessor ke paas bheja jayega
         referToAssessor: otherIncome.hasOther && !body.taxCoordination?.reason,
@@ -382,6 +457,9 @@ const parseForm101 = (body, taxYear) => {
 
 module.exports = {
     parseForm101,
+    CREDIT_DOCUMENTS,
+    IDENTIFY_BY,
+    HEALTH_FUNDS,
     isValidIsraeliId,
     Form101Error,
     INCOME_TYPES,

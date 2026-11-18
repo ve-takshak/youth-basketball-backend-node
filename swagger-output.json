@@ -5949,7 +5949,7 @@
     },
     "/user/coach/form101/submit": {
       "post": {
-        "description": "**Access:** Any logged-in user\n\ncoach: form + signature + ID -> email\n\n```\nmultipart/form-data:\n  data        JSON string: { employee, children, employerIncome, otherIncome, spouse, changes,\n                             taxCredits, taxCoordination, declaration: { agreed: true } }\n  signature   PNG / JPG (signature pad se)\n  idCard      1-2 files: ID card + ספח (photo ya PDF)\n  attachments 0-5 files: reason ke hisaab se documents (discharge certificate, form 119...)\nKuch save nahi hota. Email fail = status nahi badalta, coach dobara bheje.\n```",
+        "description": "**Access:** Any logged-in user\n\ncoach: form + signature + ID -> email\n\n```\nmultipart/form-data:\n  data        JSON string: { employee, children, employerIncome, otherIncome, spouse, changes,\n                             taxCredits, taxCoordination, declaration: { agreed: true } }\n  signature   PNG / JPG file (signature pad se) YA text field: \"data:image/png;base64,...\"\n  idCard      1-2 files: ID card + ספח (photo ya PDF)\n  doc_<reason> section ח ke reason ki file(s), max 3 har reason: doc_disabled, doc_disabilityAllowance,\n              doc_qualifyingSettlement, doc_newImmigrant (zaroori), doc_spouseNoIncome, doc_supportsChildren,\n              doc_disabledChildren (zaroori), doc_alimony, doc_dischargedSoldier, doc_academicDegree, doc_reserveCombat\n  doc_taxCoordination  section ט: assessor approval (reason assessorApproved pe zaroori) / salary slips\n  attachments 0-5 files: koi aur document\nKuch save nahi hota. Email fail = status nahi badalta, coach dobara bheje.\n```",
         "responses": {
           "0": {
             "description": ""
@@ -5967,6 +5967,9 @@
             "description": ""
           },
           "5": {
+            "description": ""
+          },
+          "6": {
             "description": ""
           },
           "9": {

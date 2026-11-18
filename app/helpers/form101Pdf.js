@@ -110,11 +110,11 @@ const INCOME_LABELS = {
 };
 const GENDER_LABELS = { male: "זכר", female: "נקבה" };
 const MARITAL_LABELS = { single: "רווק/ה", married: "נשוי/אה", divorced: "גרוש/ה", widowed: "אלמן/ה", separated: "פרוד/ה" };
-const KIBBUTZ_LABELS = {
-    no: "לא",
-    transferred: "כן, הכנסותיי ממעסיק זה מועברות לקיבוץ",
-    notTransferred: "כן, הכנסותיי ממעסיק זה אינן מועברות לקיבוץ",
-};
+const kibbutzLabel = (k) =>
+    !k?.member ? "לא" : k.incomeTransferred ? "כן, הכנסותיי ממעסיק זה מועברות לקיבוץ" : "כן, הכנסותיי ממעסיק זה אינן מועברות לקיבוץ";
+const HEALTH_FUND_LABELS = { clalit: "כללית", maccabi: "מכבי", meuhedet: "מאוחדת", leumit: "לאומית" };
+// "מספר דרכון / מדינה"
+const passportText = (p) => (p?.passportNumber ? [p.passportNumber, p.passportCountry].filter(Boolean).join(" / ") : "");
 const AGE_GROUP_LABELS = {
     bornThisYear: "נולדו בשנת המס",
     age1to2: "ימלאו להם שנה עד שנתיים",
@@ -320,7 +320,7 @@ const drawForm = (L, form, employer, signatureImage, signedAt) => {
         { label: "תאריך עליה", value: dmy(e.aliyahDate), w: 0.18 },
     ]);
     L.row([
-        { label: "מספר דרכון (למי שאין מספר ת.ז.)", value: e.passportNumber, w: 0.2 },
+        { label: "דרכון זר / מדינה (למי שאין ת.ז.)", value: passportText(e), w: 0.2 },
         { label: "רחוב/שכונה", value: e.address.street, w: 0.3 },
         { label: "מספר", value: e.address.houseNumber, w: 0.1 },
         { label: "עיר/ישוב", value: e.address.city, w: 0.24 },
@@ -330,10 +330,10 @@ const drawForm = (L, form, employer, signatureImage, signedAt) => {
         { label: "מין", checks: Object.entries(GENDER_LABELS).map(([k, label]) => ({ label, checked: e.gender === k })), w: 0.2 },
         { label: "מצב משפחתי", checks: Object.entries(MARITAL_LABELS).map(([k, label]) => ({ label, checked: e.maritalStatus === k })), w: 0.5 },
         { label: "תושב ישראל", checks: [{ label: "כן", checked: e.israeliResident }, { label: "לא", checked: !e.israeliResident }], w: 0.15 },
-        { label: "חבר בקופת חולים", value: e.healthFund.member ? `כן, ${e.healthFund.name}` : "לא", w: 0.15 },
+        { label: "חבר בקופת חולים", value: e.healthFund.member ? `כן, ${HEALTH_FUND_LABELS[e.healthFund.name] || e.healthFund.name}` : "לא", w: 0.15 },
     ]);
     L.row([
-        { label: "חבר קיבוץ/מושב שיתופי", value: KIBBUTZ_LABELS[e.kibbutz] || "לא", w: 0.4 },
+        { label: "חבר קיבוץ/מושב שיתופי", value: kibbutzLabel(e.kibbutz), w: 0.4 },
         { label: "כתובת דואר אלקטרוני", value: e.email, w: 0.3 },
         { label: "מספר טלפון", value: e.phone, w: 0.15 },
         { label: "מספר טלפון נייד", value: e.mobile, w: 0.15 },
@@ -375,7 +375,7 @@ const drawForm = (L, form, employer, signatureImage, signedAt) => {
     L.title("ו. פרטים על בן/בת הזוג");
     L.row([
         { label: "מספר זהות (9 ספרות)", value: s?.idNumber || "", w: 0.2 },
-        { label: "מספר דרכון", value: s?.passportNumber || "", w: 0.16 },
+        { label: "דרכון זר / מדינה", value: passportText(s), w: 0.16 },
         { label: "שם משפחה", value: s?.lastName || "", w: 0.18 },
         { label: "שם פרטי", value: s?.firstName || "", w: 0.16 },
         { label: "תאריך לידה", value: dmy(s?.birthDate), w: 0.15 },
@@ -387,8 +387,8 @@ const drawForm = (L, form, employer, signatureImage, signedAt) => {
             checks: [
                 { label: "אין לבן/בת הזוג כל הכנסה", checked: !!s && !s.hasIncome },
                 { label: "יש לבן/בת הזוג הכנסה מ:", checked: !!s?.hasIncome },
-                { label: "עבודה/קצבה/עסק", checked: s?.incomeType === "work" },
-                { label: "הכנסה אחרת", checked: s?.incomeType === "other" },
+                { label: "עבודה/קצבה/עסק", checked: !!s?.incomeTypes?.includes("work") },
+                { label: "הכנסה אחרת", checked: !!s?.incomeTypes?.includes("other") },
             ],
             w: 1,
         },
@@ -477,7 +477,14 @@ const appendDocuments = async (pdf, fonts, docs) => {
                 throw new Form101AttachmentError(`${label} could not be read as a PDF.`);
             }
             const pages = await pdf.copyPages(src, src.getPageIndices());
-            pages.forEach((p) => pdf.addPage(p));
+            pages.forEach((p, i) => {
+                pdf.addPage(p);
+                if (i === 0) {
+                    const { width, height } = p.getSize();
+                    p.drawRectangle({ x: 0, y: height - 22, width, height: 22, color: rgb(1, 1, 1), opacity: 0.85 });
+                    drawRtl(p, label, width - 16, height - 15, { size: 10, font: fonts.bold, color: COLORS.text });
+                }
+            });
             continue;
         }
 
@@ -526,6 +533,7 @@ const buildForm101Pdf = async (form, employer, files) => {
 
     await appendDocuments(pdf, fonts, [
         ...(files.idCard || []).map((f, i) => ({ ...f, data: f.data, mimetype: f.mimetype, label: i === 0 ? "צילום תעודת זהות" : "ספח תעודת זהות" })),
+        ...(files.creditDocs || []).map((f) => ({ data: f.data, mimetype: f.mimetype, label: f.label })),
         ...(files.attachments || []).map((f, i) => ({ data: f.data, mimetype: f.mimetype, label: `מסמך מצורף ${i + 1}` })),
     ]);
 
