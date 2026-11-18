@@ -107,6 +107,37 @@ const getSignedFileUrl = async (value, { expiresIn = SIGNED_URL_TTL, downloadNam
 };
 
 
+// ---------------------------------------------------------------------------
+// Photos / logos (bucket private hone ke baad): API response mein plain URL ki jagah signed URL.
+// Signature ghante ki shuruaat (signingDate) se banta hai, isliye ek ghante tak URL same rehta hai
+// aur browser / app image cache kar paate hain. Har URL kam se kam 1 ghanta, zyada se zyada 2 ghante chalta hai.
+// ---------------------------------------------------------------------------
+const IMAGE_URL_TTL = 2 * 60 * 60;
+const SIGN_WINDOW_MS = 60 * 60 * 1000;
+let signCache = new Map();
+let signCacheWindow = 0;
+
+const isBucketUrl = (value) =>
+    typeof value === 'string' && value.startsWith(bucketBaseUrl()) && !value.includes('?');
+
+const signBucketUrl = async (url) => {
+    const windowStart = Math.floor(Date.now() / SIGN_WINDOW_MS) * SIGN_WINDOW_MS;
+    if (windowStart !== signCacheWindow) {
+        signCache = new Map();
+        signCacheWindow = windowStart;
+    }
+    if (signCache.has(url)) return signCache.get(url);
+
+    const signed = await getSignedUrl(
+        s3,
+        new GetObjectCommand({ Bucket: process.env.S3_BUCKET, Key: url.slice(bucketBaseUrl().length) }),
+        { expiresIn: IMAGE_URL_TTL, signingDate: new Date(windowStart) }
+    );
+    signCache.set(url, signed);
+    return signed;
+};
+
+
 const deleteFiles = async (folder, fileName) => {
     const params = {
         Bucket: process.env.S3_BUCKET,
@@ -141,4 +172,6 @@ module.exports = {
     deleteStoredFile,
     isS3Stored,
     SIGNED_URL_TTL,
+    isBucketUrl,
+    signBucketUrl,
 }

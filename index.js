@@ -5,6 +5,7 @@ const cors = require("cors");
 const path = require("path");
 const fileUpload = require("express-fileupload");
 const router = require("./routes/api.js");
+const signS3Urls = require("./app/middleware/signS3Urls");
 
 const app = express();
 
@@ -57,7 +58,8 @@ try {
     console.warn("API docs not available (run `npm run docs`):", e.message);
 }
 
-app.use("/api", router);
+// Bucket private: response ke S3 photo / logo URL signed bankar jaate hain
+app.use("/api", signS3Urls, router);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
