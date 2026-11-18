@@ -102,6 +102,13 @@ const pickLegal = (body = {}) => {
         fields[key] = value;
     }
 
+    // Employer phone (Form 101 section א): 9-10 digits, jaise 097610611 / 0501234567
+    if (body.phone !== undefined) {
+        const value = String(body.phone ?? "").replace(/[\s()-]/g, "");
+        if (value && !/^\+?\d{9,15}$/.test(value)) return { error: "Club phone must be 9 to 15 digits." };
+        fields.phone = value;
+    }
+
     return { fields };
 };
 
@@ -128,7 +135,7 @@ const findClubByName = (name, excludeId = null) =>
  * Ek hi call mein 3 cheezein banti hain: Club + User (role: clubAdmin) + ClubAdmin record.
  * multipart/form-data: {
  *   name, logo? (file), theme?: { primary, secondary, background },
- *   legalName?, taxId?, deductionFileNumber?, officialAddress?,
+ *   legalName?, taxId?, deductionFileNumber?, officialAddress?, phone?,
  *   clubAdmin: { firstname, lastname, countryCode, mobileNumber, email? }
  * }
  */
@@ -560,7 +567,7 @@ const getClub = async (req, res) => {
 
 /**
  * PUT /api/user/updateClub/:id   (sirf superAdmin)
- * multipart/form-data: jo badalna hai wahi { name?, logo? (file), theme?, clubAdmin?, legalName?, taxId?, deductionFileNumber?, officialAddress? }
+ * multipart/form-data: jo badalna hai wahi { name?, logo? (file), theme?, clubAdmin?, legalName?, taxId?, deductionFileNumber?, officialAddress?, phone? }
  * logo ko "" bhejo toh logo hat jayega
  */
 const updateClub = async (req, res) => {

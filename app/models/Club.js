@@ -35,6 +35,15 @@ const ClubSchema = new mongoose.Schema(
         taxId: { type: String, trim: true, default: "" }, // ח.פ. / עמותה #
         deductionFileNumber: { type: String, trim: true, default: "" }, // תיק ניכויים
         officialAddress: { type: String, trim: true, default: "" },
+        phone: { type: String, trim: true, default: "" }, // employer phone (Form 101 section א)
+
+        // Form 101 (club admin settings). Bhara hua form app mein store nahi hota, sirf email hota hai.
+        form101Settings: {
+            // Optional: bookkeeping / payroll company. Set ho toh form club admin + yahan dono jaata hai.
+            accountingEmail: { type: String, trim: true, lowercase: true, default: "" },
+            // true = club admin approve / send back karta hai. false = submit hote hi done.
+            requireApproval: { type: Boolean, default: false },
+        },
 
         // Payments: har club apne hisaab se (club owner dashboard se badalta hai)
         paymentSettings: {

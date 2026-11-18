@@ -3,6 +3,7 @@ const Team = require("../../models/Team");
 const { WEEK_DAYS } = require("../../models/Team");
 const Player = require("../../models/Player");
 const { ROLES } = require("../../helpers/constants");
+const { getCoachForm101Card } = require("./form101Controller");
 
 // Coach app ka Home (dashboard).
 //   1. header (coach + club)          7. parents jo app mein nahi aaye
@@ -335,6 +336,12 @@ const getCoachDashboard = async (req, res) => {
         // Section 10: quick status (abhi dummy/not_marked)
         const quickStatus = buildQuickStatus({ teams, players, today });
 
+        // "Action needed" cards: abhi sirf Form 101 (is saal nahi bhara / wapas aaya)
+        const form101 = await getCoachForm101Card(coach._id);
+        const actionsNeeded = form101.actionNeeded
+            ? [{ type: "form101", year: form101.year, status: form101.status, returnReason: form101.returnReason }]
+            : [];
+
         const user = coach.userId || {};
         const club = coach.clubId && coach.clubId._id ? coach.clubId : null;
 
@@ -362,6 +369,8 @@ const getCoachDashboard = async (req, res) => {
                     : null,
                 ...dashboard,
                 quickStatus,
+                form101,
+                actionsNeeded,
             },
         });
     } catch (e) {

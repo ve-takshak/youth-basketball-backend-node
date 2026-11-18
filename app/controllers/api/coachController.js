@@ -66,9 +66,12 @@ const populateCoach = (query) =>
         .populate("userId", "firstname lastname email countryCode mobileNumber birthDate is_verify profile_image")
         .populate("clubId", "name");
 
-// clubAdmin sirf apne club ke coach ko chhu sakta hai. SuperAdmin sab ko.
-const canAccess = (req, coachClubId) =>
-    req.user.role === ROLES.SUPER_ADMIN || String(req.clubId) === String(coachClubId?._id || coachClubId);
+// SuperAdmin sab ko. clubAdmin sirf apne club ke coach ko. Coach sirf APNA record (dusre coach ka nahi, same club ho tab bhi).
+const canAccess = (req, record) => {
+    if (req.user.role === ROLES.SUPER_ADMIN) return true;
+    if (req.user.role === ROLES.COACH) return String(record.userId?._id || record.userId) === String(req.user._id);
+    return String(req.clubId) === String(record.clubId?._id || record.clubId);
+};
 
 /**
  * Days + unavailable hours (sirf jo bheje gaye). Galti ho toh { message }, warna { values }
@@ -167,13 +170,16 @@ const listCoaches = async (req, res) => {
         if (req.user.role === ROLES.CLUB_ADMIN) {
             // clubAdmin sirf apne club ke coaches dekhega
             filter.clubId = req.clubId;
+        } else if (req.user.role === ROLES.COACH) {
+            // coach sirf apna record
+            filter.userId = req.user._id;
         } else if (clubId) {
             if (!isValidId(clubId)) return sendError(res, 400, "Invalid club id.");
             filter.clubId = clubId;
         }
 
         // Naam/mobile User mein hai, isliye pehle matching users dhundo
-        if (search) {
+        if (search && req.user.role !== ROLES.COACH) {
             const regex = new RegExp(escapeRegex(search), "i");
             const users = await User.find({
                 role: ROLES.COACH,
@@ -211,7 +217,7 @@ const getCoach = async (req, res) => {
         if (!isValidId(id)) return sendError(res, 400, "Invalid coach id.");
 
         const record = await populateCoach(Coach.findById(id));
-        if (!record || !canAccess(req, record.clubId)) return sendError(res, 404, "Coach not found.");
+        if (!record || !canAccess(req, record)) return sendError(res, 404, "Coach not found.");
 
         // Coach ki teams
         const assignedTeams = await Team.find({ coachId: record._id })
@@ -243,7 +249,7 @@ const updateCoach = async (req, res) => {
         if (!isValidId(id)) return sendError(res, 400, "Invalid coach id.");
 
         const record = await Coach.findById(id);
-        if (!record || !canAccess(req, record.clubId)) return sendError(res, 404, "Coach not found.");
+        if (!record || !canAccess(req, record)) return sendError(res, 404, "Coach not found.");
 
         const user = await User.findById(record.userId);
         if (!user) return sendError(res, 404, "Coach user not found.");
@@ -292,7 +298,7 @@ const deleteCoach = async (req, res) => {
         if (!isValidId(id)) return sendError(res, 400, "Invalid coach id.");
 
         const record = await Coach.findById(id);
-        if (!record || !canAccess(req, record.clubId)) return sendError(res, 404, "Coach not found.");
+        if (!record || !canAccess(req, record)) return sendError(res, 404, "Coach not found.");
 
         const coachUser = await User.findById(record.userId).select("profile_image");
 

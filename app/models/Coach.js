@@ -27,6 +27,25 @@ const CoachSchema = new mongoose.Schema(
         unavailableHours: { type: [UnavailableBlockSchema], default: [] },
 
         createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }, // superAdmin ya clubAdmin
+
+        // Salary ke liye bank account. Sirf coach khud, uske club ka club admin aur super admin dekh sakte hain
+        // (GET/PUT /user/coaches/:id/bank-details). select: false = normal Coach queries / responses mein
+        // ye kabhi nahi aata, sirf .select("+bankDetails") se. accountNumber secretBox (AES-256-GCM) se encrypted.
+        bankDetails: {
+            type: new mongoose.Schema(
+                {
+                    bankCode: { type: String, trim: true, required: true }, // jaise "12" (Hapoalim)
+                    branch: { type: String, trim: true, required: true }, // jaise "345"
+                    accountNumber: { type: String, required: true }, // ENCRYPTED: "v1:<iv>:<tag>:<data>"
+                    accountHolder: { type: String, trim: true, default: "" },
+                    updatedAt: { type: Date, default: Date.now },
+                    updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+                },
+                { _id: false }
+            ),
+            default: null,
+            select: false,
+        },
     },
     { timestamps: true }
 );

@@ -451,7 +451,7 @@
     },
     "/user/createClub": {
       "post": {
-        "description": "**Access:** Super admin only\n\n```\nEk hi call mein 3 cheezein banti hain: Club + User (role: clubAdmin) + ClubAdmin record.\nmultipart/form-data: {\n  name, logo? (file), theme?: { primary, secondary, background },\n  legalName?, taxId?, deductionFileNumber?, officialAddress?,\n  clubAdmin: { firstname, lastname, countryCode, mobileNumber, email? }\n}\n```",
+        "description": "**Access:** Super admin only\n\n```\nEk hi call mein 3 cheezein banti hain: Club + User (role: clubAdmin) + ClubAdmin record.\nmultipart/form-data: {\n  name, logo? (file), theme?: { primary, secondary, background },\n  legalName?, taxId?, deductionFileNumber?, officialAddress?, phone?,\n  clubAdmin: { firstname, lastname, countryCode, mobileNumber, email? }\n}\n```",
         "responses": {
           "201": {
             "description": "Created"
@@ -567,7 +567,7 @@
     },
     "/user/updateClub/{id}": {
       "put": {
-        "description": "**Access:** Super admin only\n\n```\nmultipart/form-data: jo badalna hai wahi { name?, logo? (file), theme?, clubAdmin?, legalName?, taxId?, deductionFileNumber?, officialAddress? }\nlogo ko \"\" bhejo toh logo hat jayega\n```",
+        "description": "**Access:** Super admin only\n\n```\nmultipart/form-data: jo badalna hai wahi { name?, logo? (file), theme?, clubAdmin?, legalName?, taxId?, deductionFileNumber?, officialAddress?, phone? }\nlogo ko \"\" bhejo toh logo hat jayega\n```",
         "parameters": [
           {
             "name": "id",
@@ -1415,6 +1415,96 @@
           "Coaches"
         ],
         "summary": "Delete coach",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/coaches/{id}/bank-details": {
+      "get": {
+        "description": "**Access:** Any logged-in user\n\ncoach (sirf apni) / club admin / super admin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Coaches"
+        ],
+        "summary": "Get bank details",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "description": "**Access:** Any logged-in user\n\naccountNumber encrypted save\n\n```\nbody: { bankCode: \"12\", branch: \"345\", accountNumber: \"123456\", accountHolder?: \"Yonatan Almog\" }\nPoora record replace hota hai (saare required fields har baar).\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "bankCode",
+                  "branch",
+                  "accountNumber"
+                ],
+                "properties": {
+                  "bankCode": {
+                    "type": "string"
+                  },
+                  "branch": {
+                    "type": "string"
+                  },
+                  "accountNumber": {
+                    "type": "string"
+                  },
+                  "accountHolder": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Coaches"
+        ],
+        "summary": "Update bank details",
         "security": [
           {
             "bearerAuth": []
@@ -2370,6 +2460,38 @@
           "Players"
         ],
         "summary": "Get player",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/players/{id}/id-document": {
+      "get": {
+        "description": "**Access:** Any logged-in user\n\nsigned URL (5 min), role check controller mein\n\n```\nPlayer ka ID / passport scan dekhne ke liye 5 minute ka signed URL.\nKaun dekh sakta hai:\n  superAdmin            -> sab\n  clubAdmin             -> apne club ka player\n  coach                 -> apni team ka player (ya bina team ka jo usne banaya)\n  parent                -> sirf apne linked bachche ka\n  seniorPlayer / youth  -> sirf apna\nBaaki sab ko 404 (taaki pata na chale ki player hai bhi ya nahi).\nresponse: { url, expiresIn }\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Players"
+        ],
+        "summary": "Get player id document",
         "security": [
           {
             "bearerAuth": []
@@ -5785,6 +5907,248 @@
         ]
       }
     },
+    "/user/coach/form101": {
+      "get": {
+        "description": "**Access:** Any logged-in user\n\ncoach: employer prefill + is saal ka status\n\n```\nEmployer details sirf coach ke apne club se. employee = profile se suggestion (app form mein pehle se bhar de).\n```",
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "Get my form101",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/coach/form101/submit": {
+      "post": {
+        "description": "**Access:** Any logged-in user\n\ncoach: form + signature + ID -> email\n\n```\nmultipart/form-data:\n  data        JSON string: { employee, children, employerIncome, otherIncome, spouse, changes,\n                             taxCredits, taxCoordination, declaration: { agreed: true } }\n  signature   PNG / JPG (signature pad se)\n  idCard      1-2 files: ID card + ספח (photo ya PDF)\n  attachments 0-5 files: reason ke hisaab se documents (discharge certificate, form 119...)\nKuch save nahi hota. Email fail = status nahi badalta, coach dobara bheje.\n```",
+        "responses": {
+          "0": {
+            "description": ""
+          },
+          "1": {
+            "description": ""
+          },
+          "2": {
+            "description": ""
+          },
+          "3": {
+            "description": ""
+          },
+          "4": {
+            "description": ""
+          },
+          "5": {
+            "description": ""
+          },
+          "9": {
+            "description": ""
+          },
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "Submit my form101",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/form101": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\n?year=&status=&clubId= (superAdmin)\n\n```\nClub ke saare coaches + unka is saal ka status (jinka record nahi = not_submitted).\n```",
+        "parameters": [
+          {
+            "name": "clubId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "List form101 status",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/form101/{id}/review": {
+      "put": {
+        "description": "**Access:** Super admin or club admin\n\napprove / return + reason\n\n```\nbody: { action: \"approve\" | \"return\", reason? }   return pe reason zaroori (coach ko dikhta hai)\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "Review form101",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/user/clubs/{id}/form101-settings": {
+      "get": {
+        "description": "**Access:** Super admin or club admin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "Get form101 settings",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "description": "**Access:** Super admin or club admin\n\naccounting email\n\n```\nbody: { accountingEmail?: \"payroll@...\" (\"\" = band), requireApproval?: boolean }\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [],
+                "properties": {
+                  "accountingEmail": {
+                    "type": "string"
+                  },
+                  "requireApproval": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "Update form101 settings",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/payments/webhook/{gatewayId}/{key}": {
       "post": {
         "description": "**Access:** Public (no token)\n\nTranzila notify\n\n```\nTranzila notify_url_address. URL ka :key secret hai, galat key = 404.\n```",
@@ -5820,6 +6184,27 @@
     "/payments/return": {
       "get": {
         "description": "**Access:** Public (no token)\n\n```\nPayment ke baad ka page. App WebView is URL ko dekh ke band ho jaye aur list refresh kare.\nYahan status nahi badalta (browser ki baat pe bharosa nahi), sirf webhook badalta hai.\n```",
+        "parameters": [
+          {
+            "name": "result",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "Payment gateway callbacks"
+        ],
+        "summary": "Payment return"
+      },
+      "post": {
+        "description": "**Access:** Public (no token)\n\nTranzila success / fail page pe POST karta hai\n\n```\nPayment ke baad ka page. App WebView is URL ko dekh ke band ho jaye aur list refresh kare.\nYahan status nahi badalta (browser ki baat pe bharosa nahi), sirf webhook badalta hai.\n```",
         "parameters": [
           {
             "name": "result",
@@ -5904,6 +6289,9 @@
     },
     {
       "name": "Payments"
+    },
+    {
+      "name": "Form 101"
     },
     {
       "name": "Payment gateway callbacks"

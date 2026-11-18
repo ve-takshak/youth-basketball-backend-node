@@ -129,6 +129,15 @@ const {
     rejectRefundRequest,
 } = require("../app/controllers/api/refundRequestController");
 const { paymentWebhook, paymentReturn } = require("../app/controllers/api/paymentWebhookController");
+const {
+    getMyForm101,
+    submitMyForm101,
+    listForm101Status,
+    reviewForm101,
+    getForm101Settings,
+    updateForm101Settings,
+} = require("../app/controllers/api/form101Controller");
+const { getBankDetails, updateBankDetails } = require("../app/controllers/api/bankDetailsController");
 
 router.get("/test", (req, res) => res.send("API working"));
 
@@ -175,6 +184,8 @@ router.get("/user/coaches", authentication, listCoaches);
 router.get("/user/coaches/:id", authentication, getCoach);
 router.put("/user/coaches/:id/update", authentication, updateCoach);
 router.delete("/user/coaches/:id/delete", superAdminOrClubAdminAuthentication, deleteCoach);
+router.get("/user/coaches/:id/bank-details", authentication, getBankDetails);    // coach (sirf apni) / club admin / super admin
+router.put("/user/coaches/:id/bank-details", authentication, updateBankDetails); // accountNumber encrypted save
 
 // ---------- Team categories ----------
 // Banana/badalna sirf superAdmin, dekhna koi bhi logged-in user (team form ke dropdown ke liye)
@@ -315,6 +326,14 @@ router.post("/user/parent/payments/:id/checkout", authentication, checkoutCharge
 router.get("/user/parent/payments/:id/receipt", authentication, getMyReceipt);
 router.post("/user/parent/payments/:id/refund-request", authentication, requestRefund); // club owner review karega
 router.get("/user/parent/refund-requests", authentication, listMyRefundRequests);
+
+// ---------- Form 101 (form store nahi hota, sirf email + status) ----------
+router.get("/user/coach/form101", authentication, getMyForm101);                 // coach: employer prefill + is saal ka status
+router.post("/user/coach/form101/submit", authentication, submitMyForm101);      // coach: form + signature + ID -> email
+router.get("/user/form101", superAdminOrClubAdminAuthentication, listForm101Status); // ?year=&status=&clubId= (superAdmin)
+router.put("/user/form101/:id/review", superAdminOrClubAdminAuthentication, reviewForm101); // approve / return + reason
+router.get("/user/clubs/:id/form101-settings", superAdminOrClubAdminAuthentication, getForm101Settings);
+router.put("/user/clubs/:id/form101-settings", superAdminOrClubAdminAuthentication, updateForm101Settings); // accounting email
 
 // ---------- Payment gateway callbacks (bina token) ----------
 router.post("/payments/webhook/:gatewayId/:key", paymentWebhook); // Tranzila notify

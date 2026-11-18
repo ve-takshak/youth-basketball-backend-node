@@ -23,19 +23,23 @@ const transporter = buildTransporter();
 // The one place every outgoing email goes through — signup OTP, login re-verification OTP,
 // forgot-password OTP and resend-OTP all call this, so there is a single place to change
 // the sender address, add logging, or swap providers later.
-async function sendMail({ to, subject, text, html }) {
+// attachments: nodemailer format [{ filename, content: Buffer, contentType }]. Sensitive files (jaise Form 101)
+// memory se seedhe jaate hain; SMTP na ho toh console mein sirf file ka naam aata hai, content kabhi nahi.
+async function sendMail({ to, subject, text, html, attachments }) {
     const from = process.env.EMAIL_FROM || '"Courtside" <notifications@courtside.com>';
 
     if (!transporter) {
+        const files = (attachments || []).map((a) => a.filename).join(", ");
         console.log(
             `\n--- Email not sent (SMTP_HOST is not set in .env) ---\n` +
-            `To: ${to}\nSubject: ${subject}\n\n${text || html}\n` +
+            `To: ${Array.isArray(to) ? to.join(", ") : to}\nSubject: ${subject}\n\n${text || html}\n` +
+            (files ? `Attachments (not shown): ${files}\n` : "") +
             `-------------------------------------------------------\n`
         );
         return { skipped: true };
     }
 
-    return transporter.sendMail({ from, to, subject, text, html });
+    return transporter.sendMail({ from, to, subject, text, html, attachments });
 }
 
 // Shared HTML for every OTP email, so signup / login / forgot-password / resend all look the same
