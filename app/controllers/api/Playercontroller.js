@@ -14,7 +14,7 @@ const { ROLES, isPlayerRole } = require("../../helpers/constants");
 const { upcomingTeamSchedules } = require("./scheduleController");
 const { isValidId, cleanMobile, escapeRegex, getPagination } = require("../../helpers/common");
 const { validatePersonInput, applyPersonUpdates } = require("../../helpers/userHelper");
-const { upload_files, deleteFiles } = require("../../../utils/s3");
+const { uploadPrivateFile, getSignedFileUrl, deleteStoredFile, isS3Stored, SIGNED_URL_TTL } = require("../../../utils/s3");
 const { withSubscriptions } = require("../../helpers/subscriptionStatus");
 const { billPlayersQuietly } = require("../../helpers/autoBill");
 
@@ -44,10 +44,6 @@ const WEAR_SIZE_LABELS = {
 const ALLOWED_DOC_TYPES = ["image/png", "image/jpeg", "image/jpg", "application/pdf"];
 const MAX_DOC_SIZE = 5 * 1024 * 1024; // 5MB
 
-// Hamare bucket ka base URL, taaki sirf apni S3 files hi delete hon
-const getS3BaseUrl = () =>
-    `https://${process.env.S3_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
-
 // req.files.idDocument check karna (express-fileupload)
 const getIdDocumentFile = (req) => {
     const file = req.files?.idDocument;
@@ -63,15 +59,12 @@ const getIdDocumentFile = (req) => {
     return { file };
 };
 
-// Purani file hatana: S3 wali ho toh S3 se, local upload ho toh disk se
+// Purani file hatana: S3 wali (nayi key ya purana URL) ho toh S3 se, local upload ho toh disk se
 const removeIdDocument = async (fileUrl) => {
     if (!fileUrl) return;
     try {
-        const baseUrl = getS3BaseUrl();
-        if (fileUrl.startsWith(baseUrl)) {
-            const key = fileUrl.replace(baseUrl, "");
-            const slash = key.lastIndexOf("/");
-            const result = await deleteFiles(key.slice(0, slash), key.slice(slash + 1));
+        if (isS3Stored(fileUrl)) {
+            const result = await deleteStoredFile(fileUrl);
             if (result !== 1) console.warn("Failed to delete player ID document from S3:", result);
         } else if (!fileUrl.startsWith("http")) {
             const filePath = path.resolve(__dirname, "../../../", fileUrl);
@@ -400,7 +393,8 @@ const formatPlayer = (player) => {
         trainingWearSize: player.trainingWearSize || "",
         winterWearSize: player.winterWearSize || "",
         medicalNotes: player.medicalNotes || "",
-        idDocument: fileUrlOf(player.idDocument),
+        // Document ka URL kabhi response mein nahi. Dekhne ke liye GET /user/players/:id/id-document
+        hasIdDocument: Boolean(player.idDocument),
         status: player.status,
         registrationNumber: player.registrationNumber || "",
         season: player.season || "",
@@ -654,7 +648,7 @@ const createPlayer = async (req, res) => {
 
         // ID document S3 par (saari checking pass hone ke baad hi)
         if (docCheck.file) {
-            uploadedDoc = await upload_files("players", docCheck.file);
+            uploadedDoc = await uploadPrivateFile(docCheck.file);
             if (!uploadedDoc) {
                 await rollbackCreated(created);
                 return sendError(res, 500, "ID document upload failed. Please try again.");
@@ -1123,7 +1117,7 @@ const updatePlayer = async (req, res) => {
         const oldDoc = player.idDocument || "";
         let docChanged = false;
         if (docCheck.file) {
-            uploadedDoc = await upload_files("players", docCheck.file);
+            uploadedDoc = await uploadPrivateFile(docCheck.file);
             if (!uploadedDoc) return sendError(res, 500, "ID document upload failed. Please try again.");
             player.idDocument = uploadedDoc;
             docChanged = true;
@@ -1569,7 +1563,64 @@ const updateMyPlayerProfile = async (req, res) => {
     }
 };
 
+/**
+ * GET /api/user/players/:id/id-document   (login zaroori)
+ * Player ka ID / passport scan dekhne ke liye 5 minute ka signed URL.
+ * Kaun dekh sakta hai:
+ *   superAdmin            -> sab
+ *   clubAdmin             -> apne club ka player
+ *   coach                 -> apni team ka player (ya bina team ka jo usne banaya)
+ *   parent                -> sirf apne linked bachche ka
+ *   seniorPlayer / youth  -> sirf apna
+ * Baaki sab ko 404 (taaki pata na chale ki player hai bhi ya nahi).
+ * response: { url, expiresIn }
+ */
+const getPlayerIdDocument = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isValidId(id)) return sendError(res, 400, "Invalid player id.");
+
+        const player = await Player.findById(id).select("userId clubId teamId createdBy parents idDocument");
+        if (!player) return sendError(res, 404, "Player not found.");
+
+        const role = req.user.role;
+        let allowed = false;
+        if (role === ROLES.SUPER_ADMIN) {
+            allowed = true;
+        } else if (role === ROLES.CLUB_ADMIN) {
+            allowed = Boolean(req.clubId) && canAccess(req, player.clubId);
+        } else if (role === ROLES.COACH) {
+            allowed = coachSeesPlayer(req, player, await getCoachTeamIds(req));
+        } else if (role === ROLES.PARENT) {
+            const parent = await Parent.findOne({ userId: req.user._id }).select("_id");
+            allowed = Boolean(parent) && player.parents.some((link) => String(link.parentId) === String(parent._id));
+        } else if (isPlayerRole(role)) {
+            allowed = String(player.userId) === String(req.user._id);
+        }
+        if (!allowed) return sendError(res, 404, "Player not found.");
+
+        if (!player.idDocument) return sendError(res, 404, "No ID document uploaded for this player.");
+
+        const url = await getSignedFileUrl(player.idDocument, {
+            downloadName: `id-document${path.extname(player.idDocument).toLowerCase()}`,
+        });
+        if (!url) return sendError(res, 404, "ID document is not available.");
+
+        res.set("Cache-Control", "no-store");
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Document link created.",
+            message_desc: "Document link created.",
+            data: { url, expiresIn: SIGNED_URL_TTL },
+        });
+    } catch (e) {
+        return sendServerError(res, "Get player ID document", e);
+    }
+};
+
 module.exports = {
+    getPlayerIdDocument,
     getMyPlayerDashboard,
     updateMyPlayerProfile,
     createPlayer,

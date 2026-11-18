@@ -52,6 +52,7 @@ const {
     removePlayerFromTeam,
     listUnassignedPlayers,
     getSizeSummary,
+    getPlayerIdDocument,
 } = require("../app/controllers/api/Playercontroller");
 const { removeProfileImage, updateProfileImage } = require("../app/controllers/api/Profileimagecontroller");
 const {
@@ -202,6 +203,7 @@ router.post("/user/players/assign", superAdminOrClubAdminAuthentication, assignP
 router.post("/user/players/create", superAdminOrClubAdminAuthentication, createPlayer);
 router.get("/user/players", authentication, listPlayers); // coach bhi, sirf apni teams ke players
 router.get("/user/players/:id", authentication, getPlayer); // coach bhi, sirf apni team ka player
+router.get("/user/players/:id/id-document", authentication, getPlayerIdDocument); // signed URL (5 min), role check controller mein
 router.put("/user/players/:id/update", superAdminOrClubAdminAuthentication, updatePlayer);
 router.delete("/user/players/:id/delete", superAdminOrClubAdminAuthentication, deletePlayer);
 

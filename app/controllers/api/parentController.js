@@ -7,7 +7,7 @@ const Player = require("../../models/Player");
 const { SHIRT_SIZES, WEAR_SIZE_FIELDS, PARENT_RELATIONS, PLAYER_STATUSES } = require("../../models/Player");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId } = require("../../helpers/common");
-const { upload_files } = require("../../../utils/s3");
+const { upload_files, uploadPrivateFile } = require("../../../utils/s3");
 const { withSubscriptions } = require("../../helpers/subscriptionStatus");
 // Ye functions playerController (isi folder) mein pehle se hain, wahin se le rahe hain
 const { removeIdDocument, populatePlayer, formatPlayer } = require("./Playercontroller");
@@ -315,7 +315,7 @@ const createYouthPlayer = async (req, res) => {
         }
         let docUrl = "";
         if (doc.file) {
-            docUrl = await upload_files("players", doc.file);
+            docUrl = await uploadPrivateFile(doc.file);
             if (!docUrl) throw new Error("ID document upload failed.");
             uploaded.push(docUrl);
         }
@@ -563,7 +563,7 @@ const updateMyYouthPlayer = async (req, res) => {
         }
 
         if (doc.file) {
-            const url = await upload_files("players", doc.file);
+            const url = await uploadPrivateFile(doc.file);
             if (!url) throw new Error("ID document upload failed.");
             uploaded.push(url);
             player.idDocument = url;
