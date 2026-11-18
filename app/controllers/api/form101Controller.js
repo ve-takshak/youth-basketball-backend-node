@@ -61,16 +61,48 @@ const recipientsOf = async (club) => {
     return [...new Set(emails.map((e) => e.toLowerCase()))];
 };
 
-const formatStatus = (sub, year) => {
-    if (!sub) return { year, status: "not_submitted", actionNeeded: true, submittedAt: null, reviewedAt: null, returnReason: "" };
+// Timeline: submitted -> returned (reason) -> submitted (dobara) -> approved ... (naya pehle)
+const timelineOf = (sub) =>
+    (sub?.history || [])
+        .map((h) => ({ status: h.status, at: h.at, reason: h.status === "returned" ? h.reason || "" : "" }))
+        .reverse();
+
+// Club ne approval step on kiya hai? (club settings: requireApproval)
+const approvalRequiredOf = (club) => !!club?.form101Settings?.requireApproval;
+const approvalRequiredFor = async (clubId) => approvalRequiredOf(await Club.findById(clubId).select("form101Settings"));
+
+/**
+ * Status + seedhe true/false flags (app ko status string compare na karna pade):
+ *   isSubmitted        form bhar diya (submitted ya approved). false = coach ko bharna hai (naya ya wapas aaya)
+ *   isApproved         club admin ne approve kiya
+ *   isReturned         wapas bheja gaya, coach theek karke dobara bhare (returnReason dekho)
+ *   isApprovalRequired club ne approval step on kiya hai
+ * admin = true (sirf web panel wali APIs): reviewedAt, resubmitted, lastReturnReason, submissions bhi
+ */
+const formatStatus = (sub, year, isApprovalRequired = false, { admin = false } = {}) => {
+    const status = sub?.status || "not_submitted";
+    const out = {
+        ...(sub ? { _id: sub._id } : {}),
+        year: sub?.year || year,
+        status,
+        isSubmitted: status === "submitted" || status === "approved",
+        isApproved: status === "approved",
+        isReturned: status === "returned",
+        isApprovalRequired: !!isApprovalRequired,
+        submittedAt: sub?.submittedAt || null,
+        returnReason: status === "returned" ? sub.returnReason : "",
+    };
+    if (!admin) return out;
+
+    const history = sub?.history || [];
+    const lastReturn = [...history].reverse().find((h) => h.status === "returned");
     return {
-        _id: sub._id,
-        year: sub.year,
-        status: sub.status,
-        actionNeeded: sub.status === "returned",
-        submittedAt: sub.submittedAt,
-        reviewedAt: sub.reviewedAt,
-        returnReason: sub.status === "returned" ? sub.returnReason : "",
+        ...out,
+        reviewedAt: sub?.reviewedAt || null,
+        // Wapas bheja gaya tha aur coach ne dobara bhar diya (club admin ko pata chale ki ye sudhara hua form hai)
+        resubmitted: !!lastReturn && status !== "returned",
+        lastReturnReason: lastReturn?.reason || "",
+        submissions: history.filter((h) => h.status === "submitted").length,
     };
 };
 
@@ -102,7 +134,7 @@ const getMyForm101 = async (req, res) => {
         const year = currentTaxYear();
         const [current, history] = await Promise.all([
             Form101Submission.findOne({ coachId: coach._id, year }),
-            Form101Submission.find({ coachId: coach._id }).sort({ year: -1 }).select("year status submittedAt reviewedAt"),
+            Form101Submission.find({ coachId: coach._id }).sort({ year: -1 }).select("year status submittedAt"),
         ]);
 
         const employer = employerOf(club);
@@ -120,8 +152,9 @@ const getMyForm101 = async (req, res) => {
                 email: req.user.email || "",
                 birthDate: req.user.birthDate ? new Date(req.user.birthDate).toISOString().slice(0, 10) : "",
             },
-            status: formatStatus(current, year),
-            history: history.map((h) => ({ year: h.year, status: h.status, submittedAt: h.submittedAt, reviewedAt: h.reviewedAt })),
+            status: formatStatus(current, year, approvalRequiredOf(club)),
+            timeline: timelineOf(current), // is saal: kab bhara, kab wapas aaya (reason), kab dobara
+            history: history.map((h) => ({ year: h.year, status: h.status, submittedAt: h.submittedAt })),
         });
     } catch (e) {
         return sendServerError(res, "getMyForm101", e);
@@ -198,15 +231,20 @@ const submitMyForm101 = async (req, res) => {
             throw e;
         }
 
+        // Pehle wapas bheja gaya tha? Toh email mein "resubmitted" likho
+        const previous = await Form101Submission.findOne({ coachId: coach._id, year });
+        const isResubmit = previous?.status === "returned";
+
         // ---- email ----
         const fullName = `${form.employee.firstName} ${form.employee.lastName}`.trim();
         let mail;
         try {
             mail = await sendMail({
                 to: recipients,
-                subject: `Form 101 ${year} - ${fullName}`,
+                subject: `Form 101 ${year} - ${fullName}${isResubmit ? " (resubmitted)" : ""}`,
                 text:
-                    `Coach ${fullName} has submitted Form 101 for ${year}.\n` +
+                    `Coach ${fullName} has ${isResubmit ? "resubmitted" : "submitted"} Form 101 for ${year}.\n` +
+                    (isResubmit && previous.returnReason ? `It was sent back earlier with this reason: ${previous.returnReason}\n` : "") +
                     `The completed form is attached. Courtside does not keep a copy of this form.` +
                     (form.referToAssessor ? `\n\nNote: the employee reported other income without tax coordination.` : ""),
                 attachments: [{ filename: `Form101_${year}_${fullName.replace(/[^\p{L}\p{N}]+/gu, "_")}.pdf`, content: pdf, contentType: "application/pdf" }],
@@ -220,7 +258,7 @@ const submitMyForm101 = async (req, res) => {
 
         // ---- sirf status ----
         const now = new Date();
-        const sub = (await Form101Submission.findOne({ coachId: coach._id, year })) || new Form101Submission({ coachId: coach._id, clubId: club._id, year });
+        const sub = previous || new Form101Submission({ coachId: coach._id, clubId: club._id, year });
         sub.clubId = club._id;
         sub.status = "submitted";
         sub.submittedAt = now;
@@ -231,7 +269,7 @@ const submitMyForm101 = async (req, res) => {
         await sub.save();
 
         return sendOk(res, "Form 101 submitted.", {
-            status: formatStatus(sub, year),
+            status: formatStatus(sub, year, approvalRequiredOf(club)),
             sentTo: recipients.length,
             requiresApproval: !!club.form101Settings?.requireApproval,
             ...(mail?.skipped ? { emailSkipped: true } : {}),
@@ -253,19 +291,24 @@ const listForm101Status = async (req, res) => {
         const year = Number(req.query.year) || currentTaxYear();
         if (year < 2000 || year > 2100) return sendError(res, 400, "Invalid year.");
 
-        const [coaches, subs] = await Promise.all([
+        const [coaches, subs, isApprovalRequired] = await Promise.all([
             Coach.find({ clubId }).populate("userId", "firstname lastname profile_image"),
             Form101Submission.find({ clubId, year }),
+            approvalRequiredFor(clubId),
         ]);
         const subByCoach = new Map(subs.map((s) => [String(s.coachId), s]));
 
-        let list = coaches.map((c) => ({
-            coachId: c._id,
-            firstname: c.userId?.firstname || "",
-            lastname: c.userId?.lastname || "",
-            profile_image: c.userId?.profile_image || "",
-            ...formatStatus(subByCoach.get(String(c._id)), year),
-        }));
+        let list = coaches.map((c) => {
+            const sub = subByCoach.get(String(c._id));
+            return {
+                coachId: c._id,
+                firstname: c.userId?.firstname || "",
+                lastname: c.userId?.lastname || "",
+                profile_image: c.userId?.profile_image || "",
+                ...formatStatus(sub, year, isApprovalRequired, { admin: true }),
+                timeline: timelineOf(sub),
+            };
+        });
 
         if (req.query.status) list = list.filter((row) => row.status === req.query.status);
 
@@ -274,7 +317,7 @@ const listForm101Status = async (req, res) => {
             summary[subByCoach.get(String(c._id))?.status || "not_submitted"] += 1;
         });
 
-        return sendOk(res, "Form 101 status fetched.", { year, summary, list });
+        return sendOk(res, "Form 101 status fetched.", { year, isApprovalRequired, summary, list });
     } catch (e) {
         return sendServerError(res, "listForm101Status", e);
     }
@@ -309,9 +352,41 @@ const reviewForm101 = async (req, res) => {
         sub.history.push({ status: sub.status, at: now, by: req.user._id, reason: sub.returnReason });
         await sub.save();
 
-        return sendOk(res, action === "approve" ? "Form 101 approved." : "Form 101 sent back to the coach.", { status: formatStatus(sub, sub.year) });
+        return sendOk(res, action === "approve" ? "Form 101 approved." : "Form 101 sent back to the coach.", { status: formatStatus(sub, sub.year, await approvalRequiredFor(sub.clubId), { admin: true }) });
     } catch (e) {
         return sendServerError(res, "reviewForm101", e);
+    }
+};
+
+/**
+ * GET /user/coaches/:id/form101   (club admin: apne club ka coach, super admin: koi bhi)
+ * Ek coach ka is saal ka status + timeline + pichhle saalon ka record. Form ka data nahi (wo save hi nahi hota).
+ */
+const getCoachForm101 = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isValidId(id)) return sendError(res, 400, "Invalid coach id.");
+        const coach = await Coach.findById(id).select("clubId");
+        if (!coach || (req.user.role !== ROLES.SUPER_ADMIN && String(coach.clubId) !== String(req.clubId))) {
+            return sendError(res, 404, "Coach not found.");
+        }
+
+        const year = currentTaxYear();
+        const [subs, isApprovalRequired] = await Promise.all([
+            Form101Submission.find({ coachId: coach._id }).sort({ year: -1 }),
+            approvalRequiredFor(coach.clubId),
+        ]);
+        const current = subs.find((s) => s.year === year);
+
+        return sendOk(res, "Form 101 status fetched.", {
+            taxYear: year,
+            isApprovalRequired,
+            status: formatStatus(current, year, isApprovalRequired, { admin: true }),
+            timeline: timelineOf(current),
+            years: subs.map((s) => ({ ...formatStatus(s, s.year, isApprovalRequired, { admin: true }), timeline: timelineOf(s) })),
+        });
+    } catch (e) {
+        return sendServerError(res, "getCoachForm101", e);
     }
 };
 
@@ -371,10 +446,10 @@ const updateForm101Settings = async (req, res) => {
 };
 
 // Coach dashboard ke "action needed" card ke liye
-const getCoachForm101Card = async (coachId) => {
+const getCoachForm101Card = async (coachId, clubId) => {
     const year = currentTaxYear();
-    const sub = await Form101Submission.findOne({ coachId, year });
-    return formatStatus(sub, year);
+    const [sub, isApprovalRequired] = await Promise.all([Form101Submission.findOne({ coachId, year }), approvalRequiredFor(clubId)]);
+    return formatStatus(sub, year, isApprovalRequired);
 };
 
 module.exports = {
@@ -382,6 +457,7 @@ module.exports = {
     submitMyForm101,
     listForm101Status,
     reviewForm101,
+    getCoachForm101,
     getForm101Settings,
     updateForm101Settings,
     getCoachForm101Card,

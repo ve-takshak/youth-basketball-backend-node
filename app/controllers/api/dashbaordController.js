@@ -337,9 +337,17 @@ const getCoachDashboard = async (req, res) => {
         const quickStatus = buildQuickStatus({ teams, players, today });
 
         // "Action needed" cards: abhi sirf Form 101 (is saal nahi bhara / wapas aaya)
-        const form101 = await getCoachForm101Card(coach._id);
-        const actionsNeeded = form101.actionNeeded
-            ? [{ type: "form101", year: form101.year, status: form101.status, returnReason: form101.returnReason }]
+        const form101 = await getCoachForm101Card(coach._id, coach.clubId?._id || coach.clubId);
+        // Card tab tak jab tak form bhara nahi (naya saal ya wapas aaya)
+        const actionsNeeded = !form101.isSubmitted
+            ? [{
+                type: "form101",
+                year: form101.year,
+                status: form101.status,
+                isSubmitted: form101.isSubmitted,
+                isReturned: form101.isReturned,
+                returnReason: form101.returnReason,
+            }]
             : [];
 
         const user = coach.userId || {};

@@ -4155,6 +4155,24 @@
       "get": {
         "description": "**Access:** Any logged-in user",
         "responses": {
+          "0": {
+            "description": ""
+          },
+          "1": {
+            "description": ""
+          },
+          "2": {
+            "description": ""
+          },
+          "3": {
+            "description": ""
+          },
+          "4": {
+            "description": ""
+          },
+          "5": {
+            "description": ""
+          },
           "200": {
             "description": "OK"
           },
@@ -6067,6 +6085,38 @@
             }
           }
         }
+      }
+    },
+    "/user/coaches/{id}/form101": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\nek coach: status + timeline\n\n```\nEk coach ka is saal ka status + timeline + pichhle saalon ka record. Form ka data nahi (wo save hi nahi hota).\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "Get coach form101",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/user/clubs/{id}/form101-settings": {

@@ -134,6 +134,7 @@ const {
     submitMyForm101,
     listForm101Status,
     reviewForm101,
+    getCoachForm101,
     getForm101Settings,
     updateForm101Settings,
 } = require("../app/controllers/api/form101Controller");
@@ -332,6 +333,7 @@ router.get("/user/coach/form101", authentication, getMyForm101);                
 router.post("/user/coach/form101/submit", authentication, submitMyForm101);      // coach: form + signature + ID -> email
 router.get("/user/form101", superAdminOrClubAdminAuthentication, listForm101Status); // ?year=&status=&clubId= (superAdmin)
 router.put("/user/form101/:id/review", superAdminOrClubAdminAuthentication, reviewForm101); // approve / return + reason
+router.get("/user/coaches/:id/form101", superAdminOrClubAdminAuthentication, getCoachForm101); // ek coach: status + timeline
 router.get("/user/clubs/:id/form101-settings", superAdminOrClubAdminAuthentication, getForm101Settings);
 router.put("/user/clubs/:id/form101-settings", superAdminOrClubAdminAuthentication, updateForm101Settings); // accounting email
 
