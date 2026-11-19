@@ -5,6 +5,7 @@ const {
     authentication,
     superAdminAuthentication,
     superAdminOrClubAdminAuthentication,
+    clubAdminAuthentication,
     requireTermsAccepted,
 } = require("../app/middleware/authentication");
 
@@ -335,15 +336,15 @@ router.get("/user/parent/refund-requests", authentication, listMyRefundRequests)
 // ---------- Form 101 (form store nahi hota, sirf email + status) ----------
 router.get("/user/coach/form101", authentication, getMyForm101);                 // coach: employer prefill + is saal ka status
 router.post("/user/coach/form101/submit", authentication, submitMyForm101);      // coach: form + signature + ID -> email
-router.get("/user/form101", superAdminOrClubAdminAuthentication, listForm101Status); // ?year=&status=&clubId= (superAdmin)
-router.put("/user/form101/:id/review", superAdminOrClubAdminAuthentication, reviewForm101); // approve / return + reason
-router.get("/user/coaches/:id/form101", superAdminOrClubAdminAuthentication, getCoachForm101); // ek coach: status + timeline
-router.get("/user/form101/:id/pdf-link", superAdminOrClubAdminAuthentication, getForm101PdfLink); // 5 min ka download link (JSON)
+router.get("/user/form101", clubAdminAuthentication, listForm101Status); // ?year=&status=
+router.put("/user/form101/:id/review", clubAdminAuthentication, reviewForm101); // approve / return + reason
+router.get("/user/coaches/:id/form101", clubAdminAuthentication, getCoachForm101); // ek coach: status + timeline
+router.get("/user/form101/:id/pdf-link", clubAdminAuthentication, getForm101PdfLink); // 5 min ka download link (JSON)
 router.get("/form101/pdf/:token", downloadForm101PdfByLink); // bina token: link wala download
-router.get("/user/clubs/:id/form101-settings", superAdminOrClubAdminAuthentication, getForm101Settings);
-router.put("/user/clubs/:id/form101-settings", superAdminOrClubAdminAuthentication, updateForm101Settings); // accounting email
-router.get("/user/clubs/:id/form101-mandatory", superAdminOrClubAdminAuthentication, getForm101Mandatory); // mandatory on/off + count
-router.put("/user/clubs/:id/form101-mandatory", superAdminOrClubAdminAuthentication, updateForm101Mandatory); // { mandatory: true|false }
+router.get("/user/clubs/:id/form101-settings", clubAdminAuthentication, getForm101Settings);
+router.put("/user/clubs/:id/form101-settings", clubAdminAuthentication, updateForm101Settings); // accounting email
+router.get("/user/clubs/:id/form101-mandatory", clubAdminAuthentication, getForm101Mandatory); // mandatory on/off + count
+router.put("/user/clubs/:id/form101-mandatory", clubAdminAuthentication, updateForm101Mandatory); // { mandatory: true|false }
 
 // ---------- Payment gateway callbacks (bina token) ----------
 router.post("/payments/webhook/:gatewayId/:key", paymentWebhook); // Tranzila notify

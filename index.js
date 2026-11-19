@@ -63,4 +63,9 @@ try {
 app.use("/api", signS3Urls, router);
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+const server = app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+// Badi upload (Form 101: ID + documents ~20MB, phir PDF + email) slow mobile network pe bhi beech mein na kate
+server.requestTimeout = 5 * 60 * 1000; // poori request (body upload + response) max 5 minute
+server.headersTimeout = 2 * 60 * 1000; // headers aane ka time
+server.keepAliveTimeout = 65 * 1000; // load balancer / nginx ke 60s se zyada, taaki connection beech mein band na ho

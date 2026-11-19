@@ -137,6 +137,27 @@ const superAdminOrClubAdminAuthentication = async (req, res, next) => {
 };
 
 /**
+ * Sirf clubAdmin (req.clubId mein uska club)
+ * router.get("/user/form101", clubAdminAuthentication, listForm101Status)
+ */
+const clubAdminAuthentication = async (req, res, next) => {
+    try {
+        const auth = await getUserFromToken(req);
+        const { user, error } = auth;
+        if (error) return sendAuthError(res, auth);
+        if (user.role !== ROLES.CLUB_ADMIN) return sendError(res, 403, "Access denied. Club admin only.");
+
+        req.user = user;
+        const clubError = await attachClub(req);
+        if (clubError) return sendError(res, 403, clubError);
+
+        next();
+    } catch (e) {
+        return sendError(res, 500, "Something went wrong.");
+    }
+};
+
+/**
  * Parent ke bachche / payment APIs ke liye, authentication ke BAAD lagao.
  * Club ke terms hon aur parent ne required version accept na kiya ho toh 403 + data.termsRequired.
  * Dusre roles ko aur club bina terms wale parents ko nahi rokta.
@@ -159,4 +180,4 @@ const requireTermsAccepted = async (req, res, next) => {
     }
 };
 
-module.exports = { authentication, superAdminAuthentication, superAdminOrClubAdminAuthentication, requireTermsAccepted };
+module.exports = { authentication, superAdminAuthentication, superAdminOrClubAdminAuthentication, clubAdminAuthentication, requireTermsAccepted };

@@ -13,17 +13,17 @@ const { savePdf, readPdf, deletePdf, Form101StorageError } = require("../../help
 // Form 101 (טופס 101) — coach mobile app se bharta hai.
 //   GET  /user/coach/form101                   coach: apne club ka employer data (prefill) + is saal ka status
 //   POST /user/coach/form101/submit            coach: form + signature + ID photo -> PDF -> email
-//   GET  /user/form101?year=&clubId=           club admin / super admin: coaches ka status
-//   PUT  /user/form101/:id/review              club admin / super admin: approve / send back (reason)
-//   GET  /user/form101/:id/pdf-link            club admin / super admin: 5 min ka download link (JSON)
+//   GET  /user/form101?year=                   club admin: apne club ke coaches ka status
+//   PUT  /user/form101/:id/review              club admin: approve / send back (reason)
+//   GET  /user/form101/:id/pdf-link            club admin: 5 min ka download link (JSON)
 //   GET  /form101/pdf/:token                   bina login: link wala download
-//   GET  /user/clubs/:id/form101-settings      club admin / super admin
-//   PUT  /user/clubs/:id/form101-settings      club admin / super admin: mandatory, accounting email, approval on/off
-//   GET  /user/clubs/:id/form101-mandatory     club admin / super admin: mandatory on/off + is saal ka count
-//   PUT  /user/clubs/:id/form101-mandatory     club admin / super admin: { mandatory: true|false }
+//   GET  /user/clubs/:id/form101-settings      club admin
+//   PUT  /user/clubs/:id/form101-settings      club admin: mandatory, accounting email, approval on/off
+//   GET  /user/clubs/:id/form101-mandatory     club admin: mandatory on/off + is saal ka count
+//   PUT  /user/clubs/:id/form101-mandatory     club admin: { mandatory: true|false }
 //
 // STORAGE: PDF club admin (+ accounting) ko email hoti hai, aur (client ke kehne pe) encrypted save hoti hai
-// (GridFS, helpers/form101Storage.js). Har coach ka har saal sirf aakhri PDF. Download sirf club admin + super admin.
+// (GridFS, helpers/form101Storage.js). Har coach ka har saal sirf aakhri PDF. Download sirf club admin (super admin ko abhi Form 101 ka access nahi).
 // Form ke fields (ID, bachche, income...) alag se DB mein nahi jaate, logs mein bhi nahi.
 
 const TIME_ZONE = "Asia/Jerusalem";
@@ -366,12 +366,12 @@ const submitMyForm101 = async (req, res) => {
 };
 
 /**
- * GET /user/form101?year=2026&status=&clubId=   (club admin: apna club, super admin: clubId zaroori)
+ * GET /user/form101?year=2026&status=   (club admin: apna club)
  * Club ke saare coaches + unka is saal ka status (jinka record nahi = not_submitted).
  */
 const listForm101Status = async (req, res) => {
     try {
-        const clubId = req.user.role === ROLES.SUPER_ADMIN ? req.query.clubId : req.clubId;
+        const clubId = req.clubId;
         if (!isValidId(clubId)) return sendError(res, 400, "Please choose a valid club.");
 
         const year = Number(req.query.year) || currentTaxYear();
@@ -410,7 +410,7 @@ const listForm101Status = async (req, res) => {
 };
 
 /**
- * PUT /user/form101/:id/review   (club admin / super admin)
+ * PUT /user/form101/:id/review   (club admin: apne club ka)
  * body: { action: "approve" | "return", reason? }   return pe reason zaroori (coach ko dikhta hai)
  */
 const reviewForm101 = async (req, res) => {
@@ -419,7 +419,7 @@ const reviewForm101 = async (req, res) => {
         if (!isValidId(id)) return sendError(res, 400, "Invalid submission id.");
 
         const sub = await Form101Submission.findById(id);
-        if (!sub || (req.user.role !== ROLES.SUPER_ADMIN && String(sub.clubId) !== String(req.clubId))) {
+        if (!sub || String(sub.clubId) !== String(req.clubId)) {
             return sendError(res, 404, "Submission not found.");
         }
 
@@ -444,11 +444,11 @@ const reviewForm101 = async (req, res) => {
     }
 };
 
-// Club admin (apna club) / super admin ke liye submission + PDF check. Galat ho toh { status, message }.
+// Club admin (apna club) ke liye submission + PDF check. Galat ho toh { status, message }.
 const findPdfSubmission = async (req, id) => {
     if (!isValidId(id)) return { status: 400, message: "Invalid submission id." };
     const sub = await Form101Submission.findById(id).select("clubId pdf year");
-    if (!sub || (req.user.role !== ROLES.SUPER_ADMIN && String(sub.clubId) !== String(req.clubId))) {
+    if (!sub || String(sub.clubId) !== String(req.clubId)) {
         return { status: 404, message: "Submission not found." };
     }
     if (!sub.pdf?.fileId) return { status: 404, message: "No saved PDF for this form (it was submitted before PDFs were saved)." };
@@ -489,7 +489,7 @@ const apiBaseOf = (req) => {
 };
 
 /**
- * GET /user/form101/:id/pdf-link   (club admin: apne club ka, super admin: koi bhi). Coach ko nahi.
+ * GET /user/form101/:id/pdf-link   (club admin: apne club ka). Coach ko nahi.
  * Response: { url, filename, expiresAt }. url 5 minute tak chalta hai, bina token ke PDF download.
  */
 const getForm101PdfLink = async (req, res) => {
@@ -536,7 +536,7 @@ const downloadForm101PdfByLink = async (req, res) => {
 };
 
 /**
- * GET /user/coaches/:id/form101   (club admin: apne club ka coach, super admin: koi bhi)
+ * GET /user/coaches/:id/form101   (club admin: apne club ka coach)
  * Ek coach ka is saal ka status + timeline + pichhle saalon ka record. Form ka data nahi (wo save hi nahi hota).
  */
 const getCoachForm101 = async (req, res) => {
@@ -544,7 +544,7 @@ const getCoachForm101 = async (req, res) => {
         const { id } = req.params;
         if (!isValidId(id)) return sendError(res, 400, "Invalid coach id.");
         const coach = await Coach.findById(id).select("clubId");
-        if (!coach || (req.user.role !== ROLES.SUPER_ADMIN && String(coach.clubId) !== String(req.clubId))) {
+        if (!coach || String(coach.clubId) !== String(req.clubId)) {
             return sendError(res, 404, "Coach not found.");
         }
 
@@ -569,7 +569,7 @@ const getCoachForm101 = async (req, res) => {
 
 const findClub = async (req, id) => {
     if (!isValidId(id)) return { status: 400, message: "Invalid club id." };
-    if (req.user.role !== ROLES.SUPER_ADMIN && String(req.clubId) !== String(id)) return { status: 404, message: "Club not found." };
+    if (String(req.clubId) !== String(id)) return { status: 404, message: "Club not found." };
     const club = await Club.findById(id);
     if (!club) return { status: 404, message: "Club not found." };
     return { club };
@@ -642,7 +642,7 @@ const mandatoryStatusOf = async (club) => {
 };
 
 /**
- * GET /user/clubs/:id/form101-mandatory   (club admin: apna club, super admin: koi bhi)
+ * GET /user/clubs/:id/form101-mandatory   (club admin: apna club)
  * Form 101 coaches ke liye zaroori hai ya nahi + is saal ka count.
  */
 const getForm101Mandatory = async (req, res) => {
@@ -656,7 +656,7 @@ const getForm101Mandatory = async (req, res) => {
 };
 
 /**
- * PUT /user/clubs/:id/form101-mandatory   (club admin: apna club, super admin: koi bhi)
+ * PUT /user/clubs/:id/form101-mandatory   (club admin: apna club)
  * body: { mandatory: true | false }   true = har coach ko "Action needed" card, false = optional
  */
 const updateForm101Mandatory = async (req, res) => {
