@@ -3,6 +3,8 @@ const Club = require("../../models/Club");
 const Coach = require("../../models/Coach");
 const Team = require("../../models/Team");
 const Schedule = require("../../models/Schedule");
+const Form101Submission = require("../../models/Form101Submission");
+const { currentTaxYear } = require("./form101Controller");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, escapeRegex, getPagination } = require("../../helpers/common");
 const { validatePersonInput, findDuplicateUser, applyPersonUpdates } = require("../../helpers/userHelper");
@@ -158,6 +160,7 @@ const createCoach = async (req, res) => {
 /**
  * GET /api/user/coaches?clubId=&search=&page=1&limit=10   (superAdmin ya clubAdmin)
  * search: naam ya mobile number se
+ * clubAdmin ke liye har coach mein form101: { year, status, isSubmitted, submittedAt } (is saal bhara ya nahi)
  */
 const listCoaches = async (req, res) => {
     try {
@@ -193,13 +196,31 @@ const listCoaches = async (req, res) => {
             Coach.countDocuments(filter),
         ]);
 
+        // Club admin: har coach ne is saal Form 101 bhara ya nahi (list mein Yes / No)
+        let form101Of = null;
+        if (req.user.role === ROLES.CLUB_ADMIN) {
+            const year = currentTaxYear();
+            const subs = await Form101Submission.find({ coachId: { $in: records.map((r) => r._id) }, year }).select("coachId status submittedAt");
+            const byCoach = new Map(subs.map((s) => [String(s.coachId), s]));
+            form101Of = (record) => {
+                const sub = byCoach.get(String(record._id));
+                const status = sub?.status || "not_submitted";
+                return {
+                    year,
+                    status, // not_submitted | submitted | approved | returned
+                    isSubmitted: status === "submitted" || status === "approved", // returned = wapas bheja, dobara bharna hai
+                    submittedAt: sub?.submittedAt || null,
+                };
+            };
+        }
+
         return res.status(200).json({
             error: false,
             status: 200,
             message: "Coaches fetched successfully.",
             message_desc: "Coaches fetched successfully.",
             data: {
-                coaches: records.map((record) => formatCoach(record)),
+                coaches: records.map((record) => (form101Of ? { ...formatCoach(record), form101: form101Of(record) } : formatCoach(record))),
                 pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
             },
         });

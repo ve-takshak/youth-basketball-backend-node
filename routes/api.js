@@ -134,8 +134,10 @@ const {
     getMyForm101,
     submitMyForm101,
     listForm101Status,
+    listSubmittedForm101,
     reviewForm101,
     getCoachForm101,
+    getCoachForm101History,
     getForm101PdfLink,
     downloadForm101PdfByLink,
     getForm101Settings,
@@ -337,8 +339,10 @@ router.get("/user/parent/refund-requests", authentication, listMyRefundRequests)
 router.get("/user/coach/form101", authentication, getMyForm101);                 // coach: employer prefill + is saal ka status
 router.post("/user/coach/form101/submit", authentication, submitMyForm101);      // coach: form + signature + ID -> email
 router.get("/user/form101", clubAdminAuthentication, listForm101Status); // ?year=&status=
+router.get("/user/form101/submitted", clubAdminAuthentication, listSubmittedForm101); // sirf jinhone bhara + coach details
 router.put("/user/form101/:id/review", clubAdminAuthentication, reviewForm101); // approve / return + reason
 router.get("/user/coaches/:id/form101", clubAdminAuthentication, getCoachForm101); // ek coach: status + timeline
+router.get("/user/coaches/:id/form101/history", clubAdminAuthentication, getCoachForm101History); // poori history (kisne, kab, reason)
 router.get("/user/form101/:id/pdf-link", clubAdminAuthentication, getForm101PdfLink); // 5 min ka download link (JSON)
 router.get("/form101/pdf/:token", downloadForm101PdfByLink); // bina token: link wala download
 router.get("/user/clubs/:id/form101-settings", clubAdminAuthentication, getForm101Settings);

@@ -14,6 +14,8 @@ const { savePdf, readPdf, deletePdf, Form101StorageError } = require("../../help
 //   GET  /user/coach/form101                   coach: apne club ka employer data (prefill) + is saal ka status
 //   POST /user/coach/form101/submit            coach: form + signature + ID photo -> PDF -> email
 //   GET  /user/form101?year=                   club admin: apne club ke coaches ka status
+//   GET  /user/form101/submitted?year=&status=&search=&page=&limit=  club admin: jinhone bhara, details ke saath
+//   GET  /user/coaches/:id/form101/history     club admin: ek coach ki poori history (har saal, kisne kya kiya)
 //   PUT  /user/form101/:id/review              club admin: approve / send back (reason)
 //   GET  /user/form101/:id/pdf-link            club admin: 5 min ka download link (JSON)
 //   GET  /form101/pdf/:token                   bina login: link wala download
@@ -410,6 +412,81 @@ const listForm101Status = async (req, res) => {
 };
 
 /**
+ * GET /user/form101/submitted?year=2026&status=&search=&page=1&limit=20   (club admin: apna club)
+ * Sirf wo coaches jinhone is saal Form 101 bhara hai (submitted / approved / returned), naye submit pehle.
+ * Har row: coach (naam, email, phone) + status + dates + reviewer + hasPdf. Timeline nahi (wo history API mein).
+ * Form ke andar ka data nahi (wo save nahi hota, PDF mein hai).
+ *   status  submitted | approved | returned (khali = teeno)
+ *   search  coach ka naam / email / mobile
+ */
+const listSubmittedForm101 = async (req, res) => {
+    try {
+        const clubId = req.clubId;
+        if (!isValidId(clubId)) return sendError(res, 400, "Please choose a valid club.");
+
+        const year = Number(req.query.year) || currentTaxYear();
+        if (year < 2000 || year > 2100) return sendError(res, 400, "Invalid year.");
+
+        const status = String(req.query.status || "");
+        if (status && !["submitted", "approved", "returned"].includes(status)) {
+            return sendError(res, 400, 'Status must be "submitted", "approved" or "returned".');
+        }
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+        const search = String(req.query.search || "").trim().toLowerCase().slice(0, 100);
+
+        const [subs, settings] = await Promise.all([
+            Form101Submission.find({ clubId, year, ...(status ? { status } : {}) })
+                .sort({ submittedAt: -1 })
+                .populate({ path: "coachId", select: "userId", populate: { path: "userId", select: "firstname lastname email countryCode mobileNumber profile_image" } })
+                .populate("reviewedBy", "firstname lastname"),
+            settingsFor(clubId),
+        ]);
+
+        // Sirf zaroori fields. Poori timeline / history: GET /user/coaches/:coachId/form101/history
+        let list = subs.map((sub) => {
+            const user = sub.coachId?.userId;
+            const reviewer = sub.reviewedBy;
+            const { resubmitted } = formatStatus(sub, year, settings, { admin: true });
+            return {
+                _id: sub._id, // submission id: review + pdf-link isi se
+                coachId: sub.coachId?._id || null,
+                name: `${user?.firstname || ""} ${user?.lastname || ""}`.trim(),
+                email: user?.email || "",
+                phone: user?.mobileNumber ? `${user.countryCode || ""} ${user.mobileNumber}`.trim() : "",
+                profile_image: user?.profile_image || "",
+                status: sub.status, // submitted | approved | returned
+                resubmitted,
+                returnReason: sub.status === "returned" ? sub.returnReason : "",
+                submittedAt: sub.submittedAt,
+                reviewedAt: sub.reviewedAt || null,
+                reviewedBy: reviewer ? `${reviewer.firstname || ""} ${reviewer.lastname || ""}`.trim() : "",
+                hasPdf: !!sub.pdf?.fileId,
+            };
+        });
+
+        if (search) {
+            list = list.filter((row) => [row.name, row.email, row.phone].some((v) => v.toLowerCase().includes(search)));
+        }
+
+        const summary = { total: subs.length, submitted: 0, approved: 0, returned: 0 };
+        subs.forEach((s) => {
+            summary[s.status] += 1;
+        });
+        const total = list.length;
+
+        return sendOk(res, "Submitted Form 101 list fetched.", {
+            year,
+            summary,
+            list: list.slice((page - 1) * limit, page * limit),
+            pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+        });
+    } catch (e) {
+        return sendServerError(res, "listSubmittedForm101", e);
+    }
+};
+
+/**
  * PUT /user/form101/:id/review   (club admin: apne club ka)
  * body: { action: "approve" | "return", reason? }   return pe reason zaroori (coach ko dikhta hai)
  */
@@ -567,6 +644,67 @@ const getCoachForm101 = async (req, res) => {
     }
 };
 
+/**
+ * GET /user/coaches/:id/form101/history   (club admin: apne club ka coach)
+ * Coach ki details + har saal ka status + poori history (kab kisne submit / approve / wapas bheja, reason ke saath).
+ * Naya saal / naya event pehle. Form ka data nahi (PDF mein hai: GET /user/form101/:id/pdf-link).
+ */
+const getCoachForm101History = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isValidId(id)) return sendError(res, 400, "Invalid coach id.");
+        const coach = await Coach.findById(id).populate("userId", "firstname lastname email countryCode mobileNumber profile_image");
+        if (!coach || String(coach.clubId) !== String(req.clubId)) {
+            return sendError(res, 404, "Coach not found.");
+        }
+
+        const year = currentTaxYear();
+        const [subs, settings] = await Promise.all([
+            Form101Submission.find({ coachId: coach._id }).sort({ year: -1 }).populate("history.by", "firstname lastname role"),
+            settingsFor(coach.clubId),
+        ]);
+        const nameOf = (u) => (u ? `${u.firstname || ""} ${u.lastname || ""}`.trim() : "");
+
+        const years = subs.map((sub) => ({
+            ...formatStatus(sub, sub.year, settings, { admin: true }),
+            pdf: sub.pdf?.fileId ? { filename: sub.pdf.filename, size: sub.pdf.size, createdAt: sub.pdf.createdAt } : null,
+            history: [...sub.history].reverse().map((h) => ({
+                status: h.status, // submitted | approved | returned
+                at: h.at,
+                by: nameOf(h.by),
+                byRole: h.by?.role || "",
+                reason: h.status === "returned" ? h.reason || "" : "",
+            })),
+        }));
+        const current = subs.find((s) => s.year === year);
+        const user = coach.userId;
+
+        return sendOk(res, "Form 101 history fetched.", {
+            coach: {
+                _id: coach._id,
+                firstname: user?.firstname || "",
+                lastname: user?.lastname || "",
+                email: user?.email || "",
+                countryCode: user?.countryCode || "",
+                mobileNumber: user?.mobileNumber || "",
+                profile_image: user?.profile_image || "",
+            },
+            taxYear: year,
+            ...settings,
+            current: formatStatus(current, year, settings, { admin: true }),
+            totals: {
+                years: subs.length,
+                submissions: subs.reduce((n, s) => n + s.history.filter((h) => h.status === "submitted").length, 0),
+                returned: subs.reduce((n, s) => n + s.history.filter((h) => h.status === "returned").length, 0),
+                approved: subs.reduce((n, s) => n + s.history.filter((h) => h.status === "approved").length, 0),
+            },
+            years,
+        });
+    } catch (e) {
+        return sendServerError(res, "getCoachForm101History", e);
+    }
+};
+
 const findClub = async (req, id) => {
     if (!isValidId(id)) return { status: 400, message: "Invalid club id." };
     if (String(req.clubId) !== String(id)) return { status: 404, message: "Club not found." };
@@ -680,8 +818,10 @@ module.exports = {
     getMyForm101,
     submitMyForm101,
     listForm101Status,
+    listSubmittedForm101,
     reviewForm101,
     getCoachForm101,
+    getCoachForm101History,
     getForm101PdfLink,
     downloadForm101PdfByLink,
     getForm101Settings,
