@@ -9,7 +9,8 @@ const mongoose = require("../../config/database");
 //   - Form approve ho gaya (successfully finished) -> ye record turant delete. Status row (Form101Submission) rehta hai.
 //
 // data ENCRYPTED hai (helpers/secretBox, AES-256-GCM): ID number, bachche, income... plain text mein kabhi nahi.
-// Files (signature, ID card, documents) save nahi hote, submit pe dobara lagte hain.
+// Documents (ID card, ח / ט documents, attachments) submit pe GridFS "form101DraftFiles" mein encrypted
+// (helpers/form101DraftFiles), yahan sirf unka reference. Signature kabhi save nahi (har submit pe naya).
 
 const DRAFT_DAYS = 30;
 
@@ -20,6 +21,22 @@ const Form101DraftSchema = new mongoose.Schema(
         year: { type: Number, required: true },
         data: { type: String, required: true }, // ENCRYPTED JSON: "v1:<iv>:<tag>:<data>"
         source: { type: String, enum: ["draft", "submitted"], default: "draft" }, // draft = coach ne save kiya, submitted = aakhri submit ka data
+        // Aakhri submit ke documents. field = submit wala form-data key: idCard | doc_<reason> | doc_taxCoordination | attachments
+        files: {
+            type: [
+                new mongoose.Schema(
+                    {
+                        fileId: { type: mongoose.Schema.Types.ObjectId, required: true },
+                        field: { type: String, required: true },
+                        filename: { type: String, default: "" },
+                        mimetype: { type: String, default: "" },
+                        size: { type: Number, default: 0 },
+                    },
+                    { _id: false }
+                ),
+            ],
+            default: [],
+        },
         savedAt: { type: Date, default: Date.now },
         expiresAt: { type: Date, required: true },
     },

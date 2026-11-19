@@ -12,12 +12,14 @@ const { savePdf, readPdf, deletePdf, Form101StorageError } = require("../../help
 const Form101Draft = require("../../models/Form101Draft");
 const { DRAFT_DAYS, draftExpiry } = require("../../models/Form101Draft");
 const { encrypt, decrypt } = require("../../helpers/secretBox");
+const { saveDraftFile, readDraftFile, deleteDraftFiles, setDraftFilesExpiry } = require("../../helpers/form101DraftFiles");
 
 // Form 101 (טופס 101) — coach mobile app se bharta hai.
 //   GET  /user/coach/form101                   coach: apne club ka employer data (prefill) + is saal ka status + saved data
 //   PUT  /user/coach/form101/draft             coach: adhoora form save (1 mahina rehta hai)
 //   DELETE /user/coach/form101/draft           coach: saved data hatao, shuru se bharo
-//   GET  /user/coach/form101/saved             coach: reject hua form / adhoora form ka bhara data + reason
+//   GET  /user/coach/form101/saved             coach: reject hua form / adhoora form ka bhara data + documents + reason
+//   GET  /form101/saved-file/:token            bina login: saved document ka 30 min link (coach ke liye)
 //   POST /user/coach/form101/submit            coach: form + signature + ID photo -> PDF -> email
 //   GET  /user/form101?year=                   club admin: apne club ke coaches ka status
 //   GET  /user/form101/submitted?year=&status=&search=&page=&limit=  club admin: jinhone bhara, details ke saath
@@ -146,13 +148,24 @@ const cleanDraftData = (data) => {
     return rest;
 };
 
-const saveDraft = async ({ coach, year, data, source }) => {
+// files bheje (submit) toh document list badlo, warna purani files rehti hain. Files ki expiry bhi draft ke saath.
+const saveDraft = async ({ coach, year, data, source, files }) => {
     const now = new Date();
-    return Form101Draft.findOneAndUpdate(
+    const expiresAt = draftExpiry(now);
+    const draft = await Form101Draft.findOneAndUpdate(
         { coachId: coach._id, year },
-        { clubId: coach.clubId, data: encrypt(JSON.stringify(data)), source, savedAt: now, expiresAt: draftExpiry(now) },
+        { clubId: coach.clubId, data: encrypt(JSON.stringify(data)), source, savedAt: now, expiresAt, ...(files ? { files } : {}) },
         { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+    await setDraftFilesExpiry(draft.files.map((f) => f.fileId), expiresAt);
+    return draft;
+};
+
+// Return pe: data + files 1 mahina aur
+const extendDraft = async (coachId, year) => {
+    const expiresAt = draftExpiry();
+    const draft = await Form101Draft.findOneAndUpdate({ coachId, year }, { expiresAt }, { new: true });
+    if (draft) await setDraftFilesExpiry(draft.files.map((f) => f.fileId), expiresAt);
 };
 
 // Coach ko wapas dene ke liye. Expire ho chuka (TTL thoda late chalta hai) ya decrypt na ho -> null
@@ -160,14 +173,45 @@ const draftOf = async (coachId, year) => {
     const draft = await Form101Draft.findOne({ coachId, year });
     if (!draft || draft.expiresAt <= new Date()) return null;
     try {
-        return { data: JSON.parse(decrypt(draft.data)), source: draft.source, savedAt: draft.savedAt, expiresAt: draft.expiresAt };
+        return { data: JSON.parse(decrypt(draft.data)), source: draft.source, savedAt: draft.savedAt, expiresAt: draft.expiresAt, files: draft.files };
     } catch (e) {
         console.error("Form 101 draft decrypt failed:", e?.message || e);
         return null;
     }
 };
 
-const deleteDraft = (coachId, year) => Form101Draft.deleteOne({ coachId, year });
+// Data + saari saved files delete (approve / coach "shuru se")
+const deleteDraft = async (coachId, year) => {
+    const draft = await Form101Draft.findOneAndDelete({ coachId, year });
+    if (draft?.files?.length) await deleteDraftFiles(draft.files.map((f) => f.fileId));
+};
+
+// ---------- Saved documents (signature nahi) ----------
+const SAVED_FILE_LINK_TYPE = "form101-saved-file";
+const SAVED_FILE_LINK_MINUTES = 30;
+// Submit ke form-data keys jinki files save hoti hain (signature nahi)
+const SAVED_FILE_FIELDS = () => ["idCard", ...Object.keys(CREDIT_DOCUMENTS).map((k) => `doc_${k}`), "doc_taxCoordination", "attachments"];
+
+// App ke liye: har saved file + 30 min ka link (preview / download). keepFiles mein isi ka _id bhejo.
+const savedFilesOf = (req, coachId, files = []) => {
+    const base = apiBaseOf(req);
+    const expiresAt = new Date(Date.now() + SAVED_FILE_LINK_MINUTES * 60 * 1000);
+    return files.map((f) => ({
+        _id: f.fileId,
+        field: f.field, // idCard | doc_<reason> | doc_taxCoordination | attachments
+        filename: f.filename,
+        mimetype: f.mimetype,
+        size: f.size,
+        url: `${base}/api/form101/saved-file/${jwt.sign({ type: SAVED_FILE_LINK_TYPE, fid: String(f.fileId), cid: String(coachId) }, process.env.JWTKEY, { algorithm: "HS256", expiresIn: `${SAVED_FILE_LINK_MINUTES}m` })}`,
+        urlExpiresAt: expiresAt,
+    }));
+};
+
+// Draft ki file ko express-fileupload jaisa object (submit mein dobara use)
+const keptFileOf = async (meta) => {
+    const data = await readDraftFile(meta.fileId);
+    return { name: meta.filename, data, size: data.length, mimetype: meta.mimetype, keptFileId: meta.fileId };
+};
 
 // "Form101_2026_coach_atul.pdf"
 const pdfFilename = (year, fullName) => `Form101_${year}_${String(fullName || "coach").replace(/[^\p{L}\p{N}]+/gu, "_")}.pdf`;
@@ -231,8 +275,8 @@ const getMyForm101 = async (req, res) => {
             timeline: timelineOf(current), // is saal: kab bhara, kab wapas aaya (reason), kab dobara
             history: history.map((h) => ({ year: h.year, status: h.status, submittedAt: h.submittedAt })),
             // Pehle bhara hua data (adhoora save ya wapas aaya form): app isse form pre-fill kare. null = khali form.
-            // Files (signature, ID, documents) isme nahi, wo dobara lagani hongi.
-            savedForm: draft,
+            // files = saved documents (link ke saath). Signature kabhi save nahi, har submit pe naya.
+            savedForm: draft ? { ...draft, files: savedFilesOf(req, coach._id, draft.files) } : null,
         });
     } catch (e) {
         return sendServerError(res, "getMyForm101", e);
@@ -242,7 +286,7 @@ const getMyForm101 = async (req, res) => {
 /**
  * PUT /user/coach/form101/draft   (coach)
  * body (JSON): { data: { employee, children, ... } }   wahi structure jo submit mein "data" hai, adhoora bhi chalega.
- * 1 mahina rehta hai (har save pe phir se 1 mahina). Files yahan nahi aati.
+ * 1 mahina rehta hai (har save pe phir se 1 mahina). Files yahan nahi aati (pichhle submit ki saved files rehti hain).
  */
 const saveMyForm101Draft = async (req, res) => {
     try {
@@ -275,7 +319,9 @@ const saveMyForm101Draft = async (req, res) => {
  * App isse form pre-fill kare, coach sirf galat cheez theek karke dobara submit kare.
  *   hasSavedForm false = kuch save nahi (1 mahina nikal gaya / approve ho gaya / kabhi bhara nahi) -> khali form
  *   form = wahi JSON structure jo submit ke "data" mein jaata hai
- *   reupload = ye cheezein save nahi hoti, submit pe dobara lagani hongi
+ *   files = pichhle submit ke documents (ID card, ח / ט documents, attachments), har ek ka 30 min ka link.
+ *           Resubmit pe jo rakhni hai unke _id "keepFiles" mein bhejo, dobara upload nahi karni.
+ *   reupload = sirf signature (kabhi save nahi hota)
  */
 const getMyForm101Saved = async (req, res) => {
     try {
@@ -297,7 +343,8 @@ const getMyForm101Saved = async (req, res) => {
             savedAt: draft?.savedAt || null,
             expiresAt: draft?.expiresAt || null, // is date ke baad data delete, shuru se bharna hoga
             form: draft?.data || null,
-            reupload: draft ? ["signature", "idCard", "documents"] : [],
+            files: draft ? savedFilesOf(req, coach._id, draft.files) : [],
+            reupload: ["signature"],
         });
     } catch (e) {
         return sendServerError(res, "getMyForm101Saved", e);
@@ -330,9 +377,11 @@ const deleteMyForm101Draft = async (req, res) => {
  *               doc_disabledChildren (zaroori), doc_alimony, doc_dischargedSoldier, doc_academicDegree, doc_reserveCombat
  *   doc_taxCoordination  section ט: assessor approval (reason assessorApproved pe zaroori) / salary slips
  *   attachments 0-5 files: koi aur document
+ *   keepFiles   (optional) JSON array: pichhle submit ki saved files ke _id (GET /user/coach/form101/saved -> files[]).
+ *               Wo file apne purane field mein lagti hai, dobara upload nahi karni. Limits mein ginti hoti hai.
  * Email fail = status nahi badalta, coach dobara bheje.
- * Success pe: PDF (encrypted) + status save, aur bhara hua data 1 mahine ke liye (wapas aaye toh pre-fill).
- * Approve hote hi data delete.
+ * Success pe: PDF (encrypted) + status save, aur bhara hua data + documents (signature nahi) 1 mahine ke liye
+ * (wapas aaye toh pre-fill). Approve hote hi data + documents delete.
  */
 const submitMyForm101 = async (req, res) => {
     try {
@@ -365,6 +414,36 @@ const submitMyForm101 = async (req, res) => {
         } catch (e) {
             if (e instanceof Form101Error) return sendError(res, 400, e.message);
             throw e;
+        }
+
+        // ---- keepFiles: pichhle submit ki saved files dobara use (app ko phir upload nahi karni) ----
+        // keepFiles = JSON array of _id (GET /user/coach/form101/saved -> files[]._id). File apne purane field mein lagti hai.
+        let keepIds = req.body?.keepFiles;
+        if (typeof keepIds === "string") {
+            try {
+                keepIds = keepIds.trim() ? JSON.parse(keepIds) : [];
+            } catch (e) {
+                return sendError(res, 400, "keepFiles must be a JSON array of saved file ids.");
+            }
+        }
+        if (keepIds !== undefined && keepIds !== null && !Array.isArray(keepIds)) return sendError(res, 400, "keepFiles must be a JSON array of saved file ids.");
+        keepIds = [...new Set((keepIds || []).map(String))];
+        if (keepIds.length) {
+            const saved = await Form101Draft.findOne({ coachId: coach._id, year });
+            const usable = saved && saved.expiresAt > new Date() ? saved.files : [];
+            req.files = req.files || {};
+            for (const id of keepIds) {
+                const meta = usable.find((f) => String(f.fileId) === id);
+                if (!meta) return sendError(res, 400, "A saved document was not found (it may have expired). Please upload it again.");
+                let kept;
+                try {
+                    kept = await keptFileOf(meta);
+                } catch (e) {
+                    console.error("Form 101 saved file read failed:", e?.message || e);
+                    return sendError(res, 400, "A saved document could not be opened. Please upload it again.");
+                }
+                req.files[meta.field] = [kept, ...filesOf(req, meta.field)];
+            }
         }
 
         // ---- files (sirf memory mein) ----
@@ -482,12 +561,31 @@ const submitMyForm101 = async (req, res) => {
         }
         if (oldFileId && String(oldFileId) !== String(fileId)) await deletePdf(oldFileId);
 
-        // Bhara hua data 1 mahina rakho: club admin wapas bheje toh coach ko sirf galat field theek karna ho.
+        // Bhara hua data + documents (signature nahi) 1 mahina rakho: club admin wapas bheje toh coach ko sirf galat
+        // cheez theek karni ho. keepFiles wali files pehle se saved hain, sirf nayi upload save hoti hain.
         // Fail hua toh bhi submit ho chuka hai, isliye sirf log.
+        const newlySaved = [];
         try {
-            await saveDraft({ coach, year, data: cleanDraftData(body) || {}, source: "submitted" });
+            const expiresAt = draftExpiry();
+            const files = [];
+            for (const field of SAVED_FILE_FIELDS()) {
+                for (const f of filesOf(req, field)) {
+                    if (f.keptFileId) {
+                        files.push({ fileId: f.keptFileId, field, filename: f.name, mimetype: f.mimetype, size: f.size });
+                    } else {
+                        const meta = await saveDraftFile(f, { field, coachId: coach._id, year, expiresAt });
+                        newlySaved.push(meta.fileId);
+                        files.push(meta);
+                    }
+                }
+            }
+            const old = await Form101Draft.findOne({ coachId: coach._id, year }).select("files");
+            await saveDraft({ coach, year, data: cleanDraftData(body) || {}, source: "submitted", files });
+            const keep = new Set(files.map((f) => String(f.fileId)));
+            await deleteDraftFiles((old?.files || []).map((f) => f.fileId).filter((id) => !keep.has(String(id))));
         } catch (e) {
             console.error("Form 101 data save failed:", e?.message || e);
+            await deleteDraftFiles(newlySaved);
         }
 
         return sendOk(res, "Form 101 submitted.", {
@@ -652,7 +750,7 @@ const reviewForm101 = async (req, res) => {
         // Client rule: approve = successfully finished -> bhara hua data delete (status row + PDF rehte hain).
         // Wapas bheja -> data 1 mahina aur, coach ko theek karne ka time.
         if (action === "approve") await deleteDraft(sub.coachId, sub.year);
-        else await Form101Draft.updateOne({ coachId: sub.coachId, year: sub.year }, { expiresAt: draftExpiry(now) });
+        else await extendDraft(sub.coachId, sub.year);
 
         return sendOk(res, action === "approve" ? "Form 101 approved." : "Form 101 sent back to the coach.", { status: formatStatus(sub, sub.year, await settingsFor(sub.clubId), { admin: true }) });
     } catch (e) {
@@ -724,6 +822,40 @@ const getForm101PdfLink = async (req, res) => {
         });
     } catch (e) {
         return sendServerError(res, "getForm101PdfLink", e);
+    }
+};
+
+/**
+ * GET /form101/saved-file/:token   (bina login, link hi permission hai). /user/coach/form101/saved ke files[].url.
+ * Coach ki apni saved document (ID card / documents). 30 min ka link. inline: app / browser preview kar sake.
+ */
+const downloadSavedForm101File = async (req, res) => {
+    try {
+        let payload;
+        try {
+            payload = jwt.verify(req.params.token, process.env.JWTKEY, { algorithms: ["HS256"] });
+        } catch (e) {
+            return sendError(res, e.name === "TokenExpiredError" ? 410 : 400, e.name === "TokenExpiredError" ? "This link has expired. Please open the form again." : "Invalid link.");
+        }
+        if (payload.type !== SAVED_FILE_LINK_TYPE || !isValidId(payload.fid) || !isValidId(payload.cid)) return sendError(res, 400, "Invalid link.");
+
+        // File abhi bhi coach ke draft mein honi chahiye (approve / expire / naya submit ke baad nahi)
+        const draft = await Form101Draft.findOne({ coachId: payload.cid, "files.fileId": payload.fid, expiresAt: { $gt: new Date() } }).select("files");
+        const meta = draft?.files.find((f) => String(f.fileId) === payload.fid);
+        if (!meta) return sendError(res, 410, "This document is no longer saved. Please upload it again.");
+
+        const data = await readDraftFile(meta.fileId);
+        const safeName = String(meta.filename || "document").replace(/[^\w.\-]+/g, "_");
+        res.set({
+            "Content-Type": meta.mimetype || "application/octet-stream",
+            "Content-Length": data.length,
+            "Content-Disposition": `inline; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(meta.filename || "document")}`,
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        });
+        return res.end(data);
+    } catch (e) {
+        return sendServerError(res, "downloadSavedForm101File", e);
     }
 };
 
@@ -958,6 +1090,7 @@ module.exports = {
     saveMyForm101Draft,
     deleteMyForm101Draft,
     getMyForm101Saved,
+    downloadSavedForm101File,
     submitMyForm101,
     listForm101Status,
     listSubmittedForm101,

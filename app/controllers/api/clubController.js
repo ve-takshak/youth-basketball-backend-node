@@ -1006,4 +1006,63 @@ const clubOptions = async (req, res) => {
 };
 
 
-module.exports = { createClub, listClubs, getClub, getDashboardSummary, updateClub, deleteClub, restoreClub, clubOptions };
+// ---------- Legal & tax details (Form 101 section א ke employer details) ----------
+// Club admin apne club ki ye 5 fields khud bhar sake (baaki club settings sirf superAdmin: updateClub).
+const legalReply = (res, status, message, data = {}) =>
+    res.status(status).json({ error: status >= 400, status, message, message_desc: message, data });
+
+const legalOf = (club) => ({
+    clubId: club._id,
+    legalName: club.legalName || "",
+    taxId: club.taxId || "",
+    deductionFileNumber: club.deductionFileNumber || "",
+    officialAddress: club.officialAddress || "",
+    phone: club.phone || "",
+});
+
+const findLegalClub = async (req, id) => {
+    if (!isValidId(id)) return { status: 400, message: "Invalid club id." };
+    if (req.user.role === ROLES.CLUB_ADMIN && String(req.clubId) !== String(id)) return { status: 403, message: "You can only manage your own club." };
+    const club = await Club.findById(id);
+    if (!club) return { status: 404, message: "Club not found." };
+    return { club };
+};
+
+/**
+ * GET /api/user/clubs/:id/legal-details   (clubAdmin: apna club, superAdmin: koi bhi)
+ */
+const getClubLegalDetails = async (req, res) => {
+    try {
+        const { club, status, message } = await findLegalClub(req, req.params.id);
+        if (!club) return legalReply(res, status, message);
+        return legalReply(res, 200, "Legal details fetched.", legalOf(club));
+    } catch (e) {
+        console.error("getClubLegalDetails error:", e?.message || e);
+        return legalReply(res, 500, "Something went wrong.");
+    }
+};
+
+/**
+ * PUT /api/user/clubs/:id/legal-details   (clubAdmin: apna club, superAdmin: koi bhi)
+ * body (JSON): jo badalna hai wahi { legalName?, taxId?, deductionFileNumber?, officialAddress?, phone? }
+ * "" bhejo toh field khali. taxId / deductionFileNumber 5-15 digits, phone 9-15 digits.
+ */
+const updateClubLegalDetails = async (req, res) => {
+    try {
+        const { club, status, message } = await findLegalClub(req, req.params.id);
+        if (!club) return legalReply(res, status, message);
+
+        const { fields, error } = pickLegal(req.body || {});
+        if (error) return legalReply(res, 400, error);
+        if (!Object.keys(fields).length) return legalReply(res, 400, "Nothing to update. Send at least one legal field.");
+
+        Object.assign(club, fields);
+        await club.save();
+        return legalReply(res, 200, "Legal details saved.", legalOf(club));
+    } catch (e) {
+        console.error("updateClubLegalDetails error:", e?.message || e);
+        return legalReply(res, 500, "Something went wrong.");
+    }
+};
+
+module.exports = { createClub, listClubs, getClub, getDashboardSummary, updateClub, deleteClub, restoreClub, clubOptions, getClubLegalDetails, updateClubLegalDetails };

@@ -69,3 +69,13 @@ const server = app.listen(PORT, () => console.log(`Server running on port ${PORT
 server.requestTimeout = 5 * 60 * 1000; // poori request (body upload + response) max 5 minute
 server.headersTimeout = 2 * 60 * 1000; // headers aane ka time
 server.keepAliveTimeout = 65 * 1000; // load balancer / nginx ke 60s se zyada, taaki connection beech mein band na ho
+
+// Form 101 ke saved documents: 1 mahina purane har ghante delete (data ka record MongoDB TTL khud hatata hai)
+const mongoose = require("./config/database");
+const { sweepExpiredDraftFiles } = require("./app/helpers/form101DraftFiles");
+const startDraftFilesSweep = () => {
+    sweepExpiredDraftFiles();
+    setInterval(sweepExpiredDraftFiles, 60 * 60 * 1000).unref();
+};
+if (mongoose.connection.readyState === 1) startDraftFilesSweep();
+else mongoose.connection.once("open", startDraftFilesSweep);

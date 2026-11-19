@@ -10,7 +10,7 @@ const {
 } = require("../app/middleware/authentication");
 
 const { register, login, verifyOtp, getProfile, resendOtp, registerParent, updateParentProfile, updateProfile, refreshToken, logout } = require("../app/controllers/api/userController");
-const { createClub, listClubs, getClub, getDashboardSummary, updateClub, deleteClub, restoreClub, clubOptions } = require("../app/controllers/api/clubController");
+const { createClub, listClubs, getClub, getDashboardSummary, updateClub, deleteClub, restoreClub, clubOptions, getClubLegalDetails, updateClubLegalDetails } = require("../app/controllers/api/clubController");
 const {
     createClubAdmin,
     listClubAdmins,
@@ -135,6 +135,7 @@ const {
     saveMyForm101Draft,
     deleteMyForm101Draft,
     getMyForm101Saved,
+    downloadSavedForm101File,
     submitMyForm101,
     listForm101Status,
     listSubmittedForm101,
@@ -170,6 +171,8 @@ router.post("/user/createClub", superAdminAuthentication, createClub);
 router.get("/user/listClubs", superAdminOrClubAdminAuthentication, listClubs);   // clubAdmin ko sirf apna club
 router.get("/user/getClub/:id", superAdminOrClubAdminAuthentication, getClub);
 router.put("/user/updateClub/:id", superAdminAuthentication, updateClub);
+router.get("/user/clubs/:id/legal-details", superAdminOrClubAdminAuthentication, getClubLegalDetails);    // legal & tax details (Form 101 employer)
+router.put("/user/clubs/:id/legal-details", superAdminOrClubAdminAuthentication, updateClubLegalDetails); // clubAdmin apne club ki
 router.delete("/user/deleteClub/:id", superAdminAuthentication, deleteClub);
 router.put("/user/restoreClub/:id", superAdminAuthentication, restoreClub);
 router.get("/user/dashboard/summary", superAdminOrClubAdminAuthentication, getDashboardSummary);
@@ -342,7 +345,8 @@ router.get("/user/parent/refund-requests", authentication, listMyRefundRequests)
 router.get("/user/coach/form101", authentication, getMyForm101);                 // coach: employer prefill + is saal ka status
 router.put("/user/coach/form101/draft", authentication, saveMyForm101Draft);        // coach: adhoora form save (1 mahina)
 router.delete("/user/coach/form101/draft", authentication, deleteMyForm101Draft);  // coach: saved data hatao
-router.get("/user/coach/form101/saved", authentication, getMyForm101Saved);        // coach: reject hua form ka bhara data + reason
+router.get("/user/coach/form101/saved", authentication, getMyForm101Saved);        // coach: reject hua form ka bhara data + documents + reason
+router.get("/form101/saved-file/:token", downloadSavedForm101File);                // bina login: saved document (30 min link)
 router.post("/user/coach/form101/submit", authentication, submitMyForm101);      // coach: form + signature + ID -> email
 router.get("/user/form101", clubAdminAuthentication, listForm101Status); // ?year=&status=
 router.get("/user/form101/submitted", clubAdminAuthentication, listSubmittedForm101); // sirf jinhone bhara + coach details
