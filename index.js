@@ -32,6 +32,7 @@ app.use(cors({
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
+    exposedHeaders: ["Content-Disposition"], // web panel download (Form 101 PDF) ko file ka naam mile
 }));
 
 app.use(express.urlencoded({ extended: true }));

@@ -1,7 +1,8 @@
 const mongoose = require("../../config/database");
 
-// Form 101 ka SIRF status. Bhara hua form (ID, bachche, income...) yahan KABHI save nahi hota:
-// PDF memory mein banta hai, club admin (+ accounting) ko email hota hai, phir khatam.
+// Form 101 ka status + aakhri PDF ka reference. Form ka data (ID, bachche, income...) fields mein save nahi hota.
+// PDF club admin (+ accounting) ko email hoti hai, aur client ke kehne pe encrypted save bhi hoti hai
+// (GridFS, helpers/form101Storage.js) taaki club admin / super admin baad mein download kar sakein.
 //
 // Har coach ka har saal ek record. "Is saal bhara?" = is saal ka record hai ya nahi.
 // Isliye January mein koi reset / cron nahi chahiye: naye saal ka record hota hi nahi,
@@ -32,6 +33,21 @@ const Form101SubmissionSchema = new mongoose.Schema(
         returnReason: { type: String, trim: true, default: "" }, // coach ko dikhta hai
 
         history: { type: [HistorySchema], default: [] },
+
+        // Aakhri submit ki PDF (encrypted, GridFS "form101Pdfs"). Dobara submit pe purani delete.
+        // Download sirf club admin + super admin. Purane records (PDF save hone se pehle) mein null.
+        pdf: {
+            type: new mongoose.Schema(
+                {
+                    fileId: { type: mongoose.Schema.Types.ObjectId, required: true },
+                    filename: { type: String, default: "" },
+                    size: { type: Number, default: 0 },
+                    createdAt: { type: Date, default: Date.now },
+                },
+                { _id: false }
+            ),
+            default: null,
+        },
     },
     { timestamps: true }
 );

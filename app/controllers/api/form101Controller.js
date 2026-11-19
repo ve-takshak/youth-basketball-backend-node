@@ -7,17 +7,22 @@ const { isValidId } = require("../../helpers/common");
 const { parseForm101, Form101Error, CREDIT_DOCUMENTS } = require("../../helpers/form101Fields");
 const { buildForm101Pdf, Form101PdfNotReady, Form101AttachmentError } = require("../../helpers/form101Pdf");
 const { sendMail } = require("../../../utils/mailer");
+const { savePdf, readPdf, deletePdf, Form101StorageError } = require("../../helpers/form101Storage");
 
 // Form 101 (טופס 101) — coach mobile app se bharta hai.
 //   GET  /user/coach/form101                   coach: apne club ka employer data (prefill) + is saal ka status
 //   POST /user/coach/form101/submit            coach: form + signature + ID photo -> PDF -> email
 //   GET  /user/form101?year=&clubId=           club admin / super admin: coaches ka status
 //   PUT  /user/form101/:id/review              club admin / super admin: approve / send back (reason)
+//   GET  /user/form101/:id/pdf                 club admin / super admin: saved PDF download
 //   GET  /user/clubs/:id/form101-settings      club admin / super admin
-//   PUT  /user/clubs/:id/form101-settings      club admin / super admin: accounting email, approval on/off
+//   PUT  /user/clubs/:id/form101-settings      club admin / super admin: mandatory, accounting email, approval on/off
+//   GET  /user/clubs/:id/form101-mandatory     club admin / super admin: mandatory on/off + is saal ka count
+//   PUT  /user/clubs/:id/form101-mandatory     club admin / super admin: { mandatory: true|false }
 //
-// PRIVACY: bhara hua form KABHI save nahi hota (na DB, na S3, na disk, na logs).
-// PDF memory mein banta hai -> club admin (+ accounting) ko email -> khatam. DB mein sirf status + history.
+// STORAGE: PDF club admin (+ accounting) ko email hoti hai, aur (client ke kehne pe) encrypted save hoti hai
+// (GridFS, helpers/form101Storage.js). Har coach ka har saal sirf aakhri PDF. Download sirf club admin + super admin.
+// Form ke fields (ID, bachche, income...) alag se DB mein nahi jaate, logs mein bhi nahi.
 
 const TIME_ZONE = "Asia/Jerusalem";
 const SIGNATURE_TYPES = ["image/png", "image/jpeg", "image/jpg"];
@@ -70,9 +75,12 @@ const timelineOf = (sub) =>
         .map((h) => ({ status: h.status, at: h.at, reason: h.status === "returned" ? h.reason || "" : "" }))
         .reverse();
 
-// Club ne approval step on kiya hai? (club settings: requireApproval)
-const approvalRequiredOf = (club) => !!club?.form101Settings?.requireApproval;
-const approvalRequiredFor = async (clubId) => approvalRequiredOf(await Club.findById(clubId).select("form101Settings"));
+// Club ki Form 101 settings: approval step on hai? form bharna zaroori hai? (mandatory default true)
+const settingsOf = (club) => ({
+    isApprovalRequired: !!club?.form101Settings?.requireApproval,
+    isMandatory: club?.form101Settings?.mandatory !== false,
+});
+const settingsFor = async (clubId) => settingsOf(await Club.findById(clubId).select("form101Settings"));
 
 /**
  * Status + seedhe true/false flags (app ko status string compare na karna pade):
@@ -80,9 +88,10 @@ const approvalRequiredFor = async (clubId) => approvalRequiredOf(await Club.find
  *   isApproved         club admin ne approve kiya
  *   isReturned         wapas bheja gaya, coach theek karke dobara bhare (returnReason dekho)
  *   isApprovalRequired club ne approval step on kiya hai
- * admin = true (sirf web panel wali APIs): reviewedAt, resubmitted, lastReturnReason, submissions bhi
+ *   isMandatory        club ne Form 101 zaroori kiya hai (false = optional, "Action needed" card nahi)
+ * admin = true (sirf web panel wali APIs): reviewedAt, resubmitted, lastReturnReason, submissions, hasPdf bhi
  */
-const formatStatus = (sub, year, isApprovalRequired = false, { admin = false } = {}) => {
+const formatStatus = (sub, year, settings = {}, { admin = false } = {}) => {
     const status = sub?.status || "not_submitted";
     const out = {
         ...(sub ? { _id: sub._id } : {}),
@@ -91,23 +100,32 @@ const formatStatus = (sub, year, isApprovalRequired = false, { admin = false } =
         isSubmitted: status === "submitted" || status === "approved",
         isApproved: status === "approved",
         isReturned: status === "returned",
-        isApprovalRequired: !!isApprovalRequired,
+        isApprovalRequired: !!settings.isApprovalRequired,
+        isMandatory: settings.isMandatory !== false,
         submittedAt: sub?.submittedAt || null,
         returnReason: status === "returned" ? sub.returnReason : "",
     };
     if (!admin) return out;
 
     const history = sub?.history || [];
-    const lastReturn = [...history].reverse().find((h) => h.status === "returned");
+    // Resubmitted = aakhri submit theek "returned" ke baad hua (sudhara hua form). Approve ke baad dobara bhara toh nahi.
+    let lastSubmitIndex = -1;
+    history.forEach((h, i) => {
+        if (h.status === "submitted") lastSubmitIndex = i;
+    });
+    const fixedReturn = lastSubmitIndex > 0 && history[lastSubmitIndex - 1].status === "returned" ? history[lastSubmitIndex - 1] : null;
     return {
         ...out,
         reviewedAt: sub?.reviewedAt || null,
-        // Wapas bheja gaya tha aur coach ne dobara bhar diya (club admin ko pata chale ki ye sudhara hua form hai)
-        resubmitted: !!lastReturn && status !== "returned",
-        lastReturnReason: lastReturn?.reason || "",
+        resubmitted: !!fixedReturn && status !== "returned",
+        lastReturnReason: status !== "returned" ? fixedReturn?.reason || "" : "",
         submissions: history.filter((h) => h.status === "submitted").length,
+        hasPdf: !!sub?.pdf?.fileId, // download button: GET /user/form101/:id/pdf
     };
 };
+
+// "Form101_2026_coach_atul.pdf"
+const pdfFilename = (year, fullName) => `Form101_${year}_${String(fullName || "coach").replace(/[^\p{L}\p{N}]+/gu, "_")}.pdf`;
 
 // "data:image/png;base64,iVBOR..." (signature pad ka output) -> file jaisa object. Galat ho toh null.
 const signatureFromBase64 = (value) => {
@@ -163,7 +181,7 @@ const getMyForm101 = async (req, res) => {
                 email: req.user.email || "",
                 birthDate: req.user.birthDate ? new Date(req.user.birthDate).toISOString().slice(0, 10) : "",
             },
-            status: formatStatus(current, year, approvalRequiredOf(club)),
+            status: formatStatus(current, year, settingsOf(club)),
             timeline: timelineOf(current), // is saal: kab bhara, kab wapas aaya (reason), kab dobara
             history: history.map((h) => ({ year: h.year, status: h.status, submittedAt: h.submittedAt })),
         });
@@ -280,8 +298,20 @@ const submitMyForm101 = async (req, res) => {
         const previous = await Form101Submission.findOne({ coachId: coach._id, year });
         const isResubmit = previous?.status === "returned";
 
-        // ---- email ----
+        // ---- PDF save (encrypted). Email fail hua toh wapas delete ----
         const fullName = `${form.employee.firstName} ${form.employee.lastName}`.trim();
+        const filename = pdfFilename(year, fullName);
+        const pdfSize = pdf.length;
+        let fileId;
+        try {
+            fileId = await savePdf(pdf, { filename, coachId: coach._id, clubId: club._id, year });
+        } catch (e) {
+            console.error("Form 101 PDF save failed:", e?.message || e);
+            if (e instanceof Form101StorageError) return sendError(res, 503, "Form 101 cannot be saved right now. Please contact support.");
+            throw e;
+        }
+
+        // ---- email ----
         let mail;
         try {
             mail = await sendMail({
@@ -290,20 +320,23 @@ const submitMyForm101 = async (req, res) => {
                 text:
                     `Coach ${fullName} has ${isResubmit ? "resubmitted" : "submitted"} Form 101 for ${year}.\n` +
                     (isResubmit && previous.returnReason ? `It was sent back earlier with this reason: ${previous.returnReason}\n` : "") +
-                    `The completed form is attached. Courtside does not keep a copy of this form.` +
+                    `The completed form is attached. Club admins can also download it from the club's Form 101 page.` +
                     (form.referToAssessor ? `\n\nNote: the employee reported other income without tax coordination.` : ""),
-                attachments: [{ filename: `Form101_${year}_${fullName.replace(/[^\p{L}\p{N}]+/gu, "_")}.pdf`, content: pdf, contentType: "application/pdf" }],
+                attachments: [{ filename, content: pdf, contentType: "application/pdf" }],
             });
         } catch (e) {
             console.error("Form 101 email failed:", e?.message || e);
+            await deletePdf(fileId);
             return sendError(res, 502, "We could not send your form. Please try again.");
         } finally {
             pdf = null;
         }
 
-        // ---- sirf status ----
+        // ---- status + PDF reference (purani PDF delete) ----
         const now = new Date();
         const sub = previous || new Form101Submission({ coachId: coach._id, clubId: club._id, year });
+        const oldFileId = sub.pdf?.fileId;
+        sub.pdf = { fileId, filename, size: pdfSize, createdAt: now };
         sub.clubId = club._id;
         sub.status = "submitted";
         sub.submittedAt = now;
@@ -311,10 +344,16 @@ const submitMyForm101 = async (req, res) => {
         sub.reviewedBy = null;
         sub.returnReason = "";
         sub.history.push({ status: "submitted", at: now, by: req.user._id });
-        await sub.save();
+        try {
+            await sub.save();
+        } catch (e) {
+            await deletePdf(fileId);
+            throw e;
+        }
+        if (oldFileId && String(oldFileId) !== String(fileId)) await deletePdf(oldFileId);
 
         return sendOk(res, "Form 101 submitted.", {
-            status: formatStatus(sub, year, approvalRequiredOf(club)),
+            status: formatStatus(sub, year, settingsOf(club)),
             sentTo: recipients.length,
             requiresApproval: !!club.form101Settings?.requireApproval,
             ...(mail?.skipped ? { emailSkipped: true } : {}),
@@ -336,10 +375,10 @@ const listForm101Status = async (req, res) => {
         const year = Number(req.query.year) || currentTaxYear();
         if (year < 2000 || year > 2100) return sendError(res, 400, "Invalid year.");
 
-        const [coaches, subs, isApprovalRequired] = await Promise.all([
+        const [coaches, subs, settings] = await Promise.all([
             Coach.find({ clubId }).populate("userId", "firstname lastname profile_image"),
             Form101Submission.find({ clubId, year }),
-            approvalRequiredFor(clubId),
+            settingsFor(clubId),
         ]);
         const subByCoach = new Map(subs.map((s) => [String(s.coachId), s]));
 
@@ -350,7 +389,7 @@ const listForm101Status = async (req, res) => {
                 firstname: c.userId?.firstname || "",
                 lastname: c.userId?.lastname || "",
                 profile_image: c.userId?.profile_image || "",
-                ...formatStatus(sub, year, isApprovalRequired, { admin: true }),
+                ...formatStatus(sub, year, settings, { admin: true }),
                 timeline: timelineOf(sub),
             };
         });
@@ -362,7 +401,7 @@ const listForm101Status = async (req, res) => {
             summary[subByCoach.get(String(c._id))?.status || "not_submitted"] += 1;
         });
 
-        return sendOk(res, "Form 101 status fetched.", { year, isApprovalRequired, summary, list });
+        return sendOk(res, "Form 101 status fetched.", { year, ...settings, summary, list });
     } catch (e) {
         return sendServerError(res, "listForm101Status", e);
     }
@@ -397,9 +436,43 @@ const reviewForm101 = async (req, res) => {
         sub.history.push({ status: sub.status, at: now, by: req.user._id, reason: sub.returnReason });
         await sub.save();
 
-        return sendOk(res, action === "approve" ? "Form 101 approved." : "Form 101 sent back to the coach.", { status: formatStatus(sub, sub.year, await approvalRequiredFor(sub.clubId), { admin: true }) });
+        return sendOk(res, action === "approve" ? "Form 101 approved." : "Form 101 sent back to the coach.", { status: formatStatus(sub, sub.year, await settingsFor(sub.clubId), { admin: true }) });
     } catch (e) {
         return sendServerError(res, "reviewForm101", e);
+    }
+};
+
+/**
+ * GET /user/form101/:id/pdf   (club admin: apne club ka, super admin: koi bhi). Coach ko nahi.
+ * Saved (encrypted) PDF decrypt karke download. Response: application/pdf (attachment).
+ */
+const downloadForm101Pdf = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isValidId(id)) return sendError(res, 400, "Invalid submission id.");
+        const sub = await Form101Submission.findById(id).select("clubId pdf year");
+        if (!sub || (req.user.role !== ROLES.SUPER_ADMIN && String(sub.clubId) !== String(req.clubId))) {
+            return sendError(res, 404, "Submission not found.");
+        }
+        if (!sub.pdf?.fileId) return sendError(res, 404, "No saved PDF for this form (it was submitted before PDFs were saved).");
+
+        let pdf;
+        try {
+            pdf = await readPdf(sub.pdf.fileId);
+        } catch (e) {
+            console.error("Form 101 PDF read failed:", e?.message || e);
+            return sendError(res, 410, "The saved PDF could not be opened. Please ask the coach to submit the form again.");
+        }
+
+        const filename = sub.pdf.filename || `Form101_${sub.year}.pdf`;
+        const ascii = filename.replace(/[^\x20-\x7E]+/g, "_").replace(/"/g, "");
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Length", pdf.length);
+        res.setHeader("Content-Disposition", `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+        res.setHeader("Cache-Control", "no-store");
+        return res.status(200).end(pdf);
+    } catch (e) {
+        return sendServerError(res, "downloadForm101Pdf", e);
     }
 };
 
@@ -417,18 +490,18 @@ const getCoachForm101 = async (req, res) => {
         }
 
         const year = currentTaxYear();
-        const [subs, isApprovalRequired] = await Promise.all([
+        const [subs, settings] = await Promise.all([
             Form101Submission.find({ coachId: coach._id }).sort({ year: -1 }),
-            approvalRequiredFor(coach.clubId),
+            settingsFor(coach.clubId),
         ]);
         const current = subs.find((s) => s.year === year);
 
         return sendOk(res, "Form 101 status fetched.", {
             taxYear: year,
-            isApprovalRequired,
-            status: formatStatus(current, year, isApprovalRequired, { admin: true }),
+            ...settings,
+            status: formatStatus(current, year, settings, { admin: true }),
             timeline: timelineOf(current),
-            years: subs.map((s) => ({ ...formatStatus(s, s.year, isApprovalRequired, { admin: true }), timeline: timelineOf(s) })),
+            years: subs.map((s) => ({ ...formatStatus(s, s.year, settings, { admin: true }), timeline: timelineOf(s) })),
         });
     } catch (e) {
         return sendServerError(res, "getCoachForm101", e);
@@ -444,6 +517,7 @@ const findClub = async (req, id) => {
 };
 
 const formatSettings = (club) => ({
+    mandatory: club.form101Settings?.mandatory !== false,
     accountingEmail: club.form101Settings?.accountingEmail || "",
     requireApproval: !!club.form101Settings?.requireApproval,
     employer: employerOf(club),
@@ -463,7 +537,7 @@ const getForm101Settings = async (req, res) => {
 
 /**
  * PUT /user/clubs/:id/form101-settings
- * body: { accountingEmail?: "payroll@..." ("" = band), requireApproval?: boolean }
+ * body: { mandatory?: boolean, accountingEmail?: "payroll@..." ("" = band), requireApproval?: boolean }
  */
 const updateForm101Settings = async (req, res) => {
     try {
@@ -481,6 +555,7 @@ const updateForm101Settings = async (req, res) => {
             settings.accountingEmail = value;
         }
         if (body.requireApproval !== undefined) settings.requireApproval = [true, "true", "1", 1].includes(body.requireApproval);
+        if (body.mandatory !== undefined) settings.mandatory = [true, "true", "1", 1].includes(body.mandatory);
 
         club.form101Settings = settings;
         await club.save();
@@ -490,11 +565,56 @@ const updateForm101Settings = async (req, res) => {
     }
 };
 
-// Coach dashboard ke "action needed" card ke liye
-const getCoachForm101Card = async (coachId, clubId) => {
+// Mandatory ka response: setting + is saal kitne coaches ne bhara (club admin ko ek nazar mein dikhe)
+const mandatoryStatusOf = async (club) => {
     const year = currentTaxYear();
-    const [sub, isApprovalRequired] = await Promise.all([Form101Submission.findOne({ coachId, year }), approvalRequiredFor(clubId)]);
-    return formatStatus(sub, year, isApprovalRequired);
+    const [totalCoaches, submittedCoaches] = await Promise.all([
+        Coach.countDocuments({ clubId: club._id }),
+        Form101Submission.countDocuments({ clubId: club._id, year, status: { $in: ["submitted", "approved"] } }),
+    ]);
+    return {
+        clubId: club._id,
+        mandatory: club.form101Settings?.mandatory !== false,
+        year,
+        totalCoaches,
+        submittedCoaches,
+        pendingCoaches: Math.max(totalCoaches - submittedCoaches, 0),
+    };
+};
+
+/**
+ * GET /user/clubs/:id/form101-mandatory   (club admin: apna club, super admin: koi bhi)
+ * Form 101 coaches ke liye zaroori hai ya nahi + is saal ka count.
+ */
+const getForm101Mandatory = async (req, res) => {
+    try {
+        const { club, status, message } = await findClub(req, req.params.id);
+        if (!club) return sendError(res, status, message);
+        return sendOk(res, "Form 101 mandatory status fetched.", await mandatoryStatusOf(club));
+    } catch (e) {
+        return sendServerError(res, "getForm101Mandatory", e);
+    }
+};
+
+/**
+ * PUT /user/clubs/:id/form101-mandatory   (club admin: apna club, super admin: koi bhi)
+ * body: { mandatory: true | false }   true = har coach ko "Action needed" card, false = optional
+ */
+const updateForm101Mandatory = async (req, res) => {
+    try {
+        const { club, status, message } = await findClub(req, req.params.id);
+        if (!club) return sendError(res, status, message);
+
+        const value = req.body?.mandatory;
+        if (![true, false, "true", "false"].includes(value)) return sendError(res, 400, "mandatory must be true or false.");
+        const mandatory = value === true || value === "true";
+
+        club.form101Settings = { ...(club.form101Settings?.toObject?.() || club.form101Settings || {}), mandatory };
+        await club.save();
+        return sendOk(res, mandatory ? "Form 101 is now mandatory for coaches." : "Form 101 is now optional for coaches.", await mandatoryStatusOf(club));
+    } catch (e) {
+        return sendServerError(res, "updateForm101Mandatory", e);
+    }
 };
 
 module.exports = {
@@ -503,8 +623,10 @@ module.exports = {
     listForm101Status,
     reviewForm101,
     getCoachForm101,
+    downloadForm101Pdf,
     getForm101Settings,
     updateForm101Settings,
-    getCoachForm101Card,
+    getForm101Mandatory,
+    updateForm101Mandatory,
     currentTaxYear,
 };

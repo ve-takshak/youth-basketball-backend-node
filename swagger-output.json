@@ -4155,24 +4155,6 @@
       "get": {
         "description": "**Access:** Any logged-in user",
         "responses": {
-          "0": {
-            "description": ""
-          },
-          "1": {
-            "description": ""
-          },
-          "2": {
-            "description": ""
-          },
-          "3": {
-            "description": ""
-          },
-          "4": {
-            "description": ""
-          },
-          "5": {
-            "description": ""
-          },
           "200": {
             "description": "OK"
           },
@@ -5951,35 +5933,11 @@
       "post": {
         "description": "**Access:** Any logged-in user\n\ncoach: form + signature + ID -> email\n\n```\nmultipart/form-data:\n  data        JSON string: { employee, children, employerIncome, otherIncome, spouse, changes,\n                             taxCredits, taxCoordination, declaration: { agreed: true } }\n  signature   PNG / JPG file (signature pad se) YA text field: \"data:image/png;base64,...\"\n  idCard      1-2 files: ID card + ספח (photo ya PDF)\n  doc_<reason> section ח ke reason ki file(s), max 3 har reason: doc_disabled, doc_disabilityAllowance,\n              doc_qualifyingSettlement, doc_newImmigrant (zaroori), doc_spouseNoIncome, doc_supportsChildren,\n              doc_disabledChildren (zaroori), doc_alimony, doc_dischargedSoldier, doc_academicDegree, doc_reserveCombat\n  doc_taxCoordination  section ט: assessor approval (reason assessorApproved pe zaroori) / salary slips\n  attachments 0-5 files: koi aur document\nKuch save nahi hota. Email fail = status nahi badalta, coach dobara bheje.\n```",
         "responses": {
-          "0": {
-            "description": ""
-          },
-          "1": {
-            "description": ""
-          },
-          "2": {
-            "description": ""
-          },
-          "3": {
-            "description": ""
-          },
-          "4": {
-            "description": ""
-          },
-          "5": {
-            "description": ""
-          },
-          "6": {
-            "description": ""
-          },
-          "9": {
-            "description": ""
-          },
-          "200": {
-            "description": "OK"
-          },
           "401": {
             "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
           }
         },
         "tags": [
@@ -6122,6 +6080,41 @@
         ]
       }
     },
+    "/user/form101/{id}/pdf": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\nsaved PDF (sirf club admin / super admin)\n\n```\nSaved (encrypted) PDF decrypt karke download. Response: application/pdf (attachment).\n```",
+        "produces": [
+          "application/pdf"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "401": {
+            "description": "Missing or invalid token"
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "Download form101 pdf",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/user/clubs/{id}/form101-settings": {
       "get": {
         "description": "**Access:** Super admin or club admin",
@@ -6154,7 +6147,7 @@
         ]
       },
       "put": {
-        "description": "**Access:** Super admin or club admin\n\naccounting email\n\n```\nbody: { accountingEmail?: \"payroll@...\" (\"\" = band), requireApproval?: boolean }\n```",
+        "description": "**Access:** Super admin or club admin\n\naccounting email\n\n```\nbody: { mandatory?: boolean, accountingEmail?: \"payroll@...\" (\"\" = band), requireApproval?: boolean }\n```",
         "parameters": [
           {
             "name": "id",
@@ -6180,6 +6173,9 @@
                 "type": "object",
                 "required": [],
                 "properties": {
+                  "mandatory": {
+                    "type": "string"
+                  },
                   "accountingEmail": {
                     "type": "string"
                   },
@@ -6200,6 +6196,85 @@
             "bearerAuth": []
           }
         ]
+      }
+    },
+    "/user/clubs/{id}/form101-mandatory": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\nmandatory on/off + count\n\n```\nForm 101 coaches ke liye zaroori hai ya nahi + is saal ka count.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "Get form101 mandatory",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "description": "**Access:** Super admin or club admin\n\n{ mandatory: true|false }\n\n```\nbody: { mandatory: true | false }   true = har coach ko \"Action needed\" card, false = optional\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "Update form101 mandatory",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "mandatory"
+                ],
+                "properties": {
+                  "mandatory": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/payments/webhook/{gatewayId}/{key}": {

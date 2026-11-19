@@ -35,6 +35,22 @@ const decrypt = (box) => {
     return Buffer.concat([decipher.update(Buffer.from(data, "base64")), decipher.final()]).toString("utf8");
 };
 
+// Files (jaise Form 101 PDF) ke liye: Buffer -> [1 byte version][12 byte iv][16 byte tag][data]
+const BUFFER_VERSION = 1;
+const encryptBuffer = (plain) => {
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv(ALGO, getKey(), iv);
+    const data = Buffer.concat([cipher.update(plain), cipher.final()]);
+    return Buffer.concat([Buffer.from([BUFFER_VERSION]), iv, cipher.getAuthTag(), data]);
+};
+
+const decryptBuffer = (box) => {
+    if (!Buffer.isBuffer(box) || box.length < 29 || box[0] !== BUFFER_VERSION) throw new Error("Encrypted file is corrupted.");
+    const decipher = crypto.createDecipheriv(ALGO, getKey(), box.subarray(1, 13));
+    decipher.setAuthTag(box.subarray(13, 29));
+    return Buffer.concat([decipher.update(box.subarray(29)), decipher.final()]);
+};
+
 // Screen pe dikhane ke liye: "abcd1234xyz" -> "••••••4xyz"
 const mask = (plain) => {
     const text = String(plain || "");
@@ -42,4 +58,4 @@ const mask = (plain) => {
     return `••••••${text.slice(-4)}`;
 };
 
-module.exports = { encrypt, decrypt, mask };
+module.exports = { encrypt, decrypt, encryptBuffer, decryptBuffer, mask };

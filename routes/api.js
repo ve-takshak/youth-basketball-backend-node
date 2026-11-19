@@ -135,8 +135,11 @@ const {
     listForm101Status,
     reviewForm101,
     getCoachForm101,
+    downloadForm101Pdf,
     getForm101Settings,
     updateForm101Settings,
+    getForm101Mandatory,
+    updateForm101Mandatory,
 } = require("../app/controllers/api/form101Controller");
 const { getBankDetails, updateBankDetails } = require("../app/controllers/api/bankDetailsController");
 
@@ -334,8 +337,11 @@ router.post("/user/coach/form101/submit", authentication, submitMyForm101);     
 router.get("/user/form101", superAdminOrClubAdminAuthentication, listForm101Status); // ?year=&status=&clubId= (superAdmin)
 router.put("/user/form101/:id/review", superAdminOrClubAdminAuthentication, reviewForm101); // approve / return + reason
 router.get("/user/coaches/:id/form101", superAdminOrClubAdminAuthentication, getCoachForm101); // ek coach: status + timeline
+router.get("/user/form101/:id/pdf", superAdminOrClubAdminAuthentication, downloadForm101Pdf); // saved PDF (sirf club admin / super admin)
 router.get("/user/clubs/:id/form101-settings", superAdminOrClubAdminAuthentication, getForm101Settings);
 router.put("/user/clubs/:id/form101-settings", superAdminOrClubAdminAuthentication, updateForm101Settings); // accounting email
+router.get("/user/clubs/:id/form101-mandatory", superAdminOrClubAdminAuthentication, getForm101Mandatory); // mandatory on/off + count
+router.put("/user/clubs/:id/form101-mandatory", superAdminOrClubAdminAuthentication, updateForm101Mandatory); // { mandatory: true|false }
 
 // ---------- Payment gateway callbacks (bina token) ----------
 router.post("/payments/webhook/:gatewayId/:key", paymentWebhook); // Tranzila notify

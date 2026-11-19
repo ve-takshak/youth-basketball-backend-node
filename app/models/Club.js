@@ -43,6 +43,8 @@ const ClubSchema = new mongoose.Schema(
             accountingEmail: { type: String, trim: true, lowercase: true, default: "" },
             // true = club admin approve / send back karta hai. false = submit hote hi done.
             requireApproval: { type: Boolean, default: false },
+            // true = har coach ko Form 101 bharna zaroori ("Action needed" card). false = optional, coach chahe toh bhare.
+            mandatory: { type: Boolean, default: true },
         },
 
         // Payments: har club apne hisaab se (club owner dashboard se badalta hai)
