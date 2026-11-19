@@ -2,7 +2,7 @@
 // yahan check + saaf hota hai, phir PDF banta hai. Kuch bhi DB mein save NAHI hota.
 //
 // Sections (official form ke hisaab se):
-//   א employer        -> form se (app bhejta hai): name, address, phone, deductionFileNumber, taxId
+//   א employer        -> form se (app bhejta hai): name, address, phone, deductionFileNumber, taxId, email
 //   ב employee        -> coach ki details
 //   ג children        -> 19 saal se chhote bachche (custody / child allowance checkbox)
 //   ד employerIncome  -> is club se income ka type + start date
@@ -437,6 +437,7 @@ const parseEmployer = (src) => {
         phone: phone(e.phone, "Employer phone"),
         deductionFileNumber: digits(e.deductionFileNumber, "Employer deduction file number", { required: true, min: 5, max: 15 }),
         taxId: digits(e.taxId, "Employer tax ID", { min: 5, max: 15 }),
+        email: email(e.email, "Employer email"), // app ka "Employer's email address"
     };
 };
 

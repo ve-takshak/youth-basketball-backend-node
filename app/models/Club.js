@@ -30,12 +30,8 @@ const ClubSchema = new mongoose.Schema(
             background: { type: String, default: "#FFFFFF" },
         },
 
-        // Legal & tax profile (sab optional): invoices / Form 101 ke liye
-        legalName: { type: String, trim: true, default: "" },
-        taxId: { type: String, trim: true, default: "" }, // ח.פ. / עמותה #
-        deductionFileNumber: { type: String, trim: true, default: "" }, // תיק ניכויים
-        officialAddress: { type: String, trim: true, default: "" },
-        phone: { type: String, trim: true, default: "" }, // employer phone (Form 101 section א)
+        // Legal & tax fields (legalName, taxId, deductionFileNumber, officialAddress, phone) hata diye:
+        // Form 101 ki employer details (section א) ab app ke form se aati hain.
 
         // Form 101 (club admin settings). Bhara hua form app mein store nahi hota, sirf email hota hai.
         form101Settings: {

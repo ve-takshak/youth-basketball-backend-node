@@ -81,37 +81,6 @@ const formatClubAdmin = (admin) => ({
     mobileNumber: admin.userId?.mobileNumber || "",
 });
 
-// Legal & tax fields (sab optional). Jo bheje gaye wahi wapas: { fields } ya { error }.
-// taxId / deductionFileNumber: sirf digits (5-15), khaali bhejne pe field saaf ho jaati hai.
-const LEGAL_DIGIT_FIELDS = { taxId: "Tax ID / registration number", deductionFileNumber: "Deduction file number" };
-const pickLegal = (body = {}) => {
-    const fields = {};
-
-    for (const key of ["legalName", "officialAddress"]) {
-        if (body[key] === undefined) continue;
-        const value = String(body[key] ?? "").trim();
-        const max = key === "legalName" ? 150 : 250;
-        if (value.length > max) return { error: `${key === "legalName" ? "Legal name" : "Official address"} must be ${max} characters or fewer.` };
-        fields[key] = value;
-    }
-
-    for (const [key, label] of Object.entries(LEGAL_DIGIT_FIELDS)) {
-        if (body[key] === undefined) continue;
-        const value = String(body[key] ?? "").replace(/[\s-]/g, "");
-        if (value && !/^\d{5,15}$/.test(value)) return { error: `${label} must be 5 to 15 digits.` };
-        fields[key] = value;
-    }
-
-    // Employer phone (Form 101 section א): 9-10 digits, jaise 097610611 / 0501234567
-    if (body.phone !== undefined) {
-        const value = String(body.phone ?? "").replace(/[\s()-]/g, "");
-        if (value && !/^\+?\d{9,15}$/.test(value)) return { error: "Club phone must be 9 to 15 digits." };
-        fields.phone = value;
-    }
-
-    return { fields };
-};
-
 // theme object se sirf valid colors nikalna, galat ho toh error
 const pickTheme = (theme = {}) => {
     const result = {};
@@ -135,7 +104,6 @@ const findClubByName = (name, excludeId = null) =>
  * Ek hi call mein 3 cheezein banti hain: Club + User (role: clubAdmin) + ClubAdmin record.
  * multipart/form-data: {
  *   name, logo? (file), theme?: { primary, secondary, background },
- *   legalName?, taxId?, deductionFileNumber?, officialAddress?, phone?,
  *   clubAdmin: { firstname, lastname, countryCode, mobileNumber, email? }
  * }
  */
@@ -201,17 +169,6 @@ const createClub = async (req, res) => {
             });
         }
 
-        const legal = pickLegal(req.body);
-        if (legal.error) {
-            return res.status(400).json({
-                error: true,
-                status: 400,
-                message: legal.error,
-                message_desc: legal.error,
-                data: {},
-            });
-        }
-
         const checked = validatePersonInput(clubAdmin || {});
         if (checked.message) {
             const message = `Club admin: ${checked.message}`;
@@ -261,7 +218,6 @@ const createClub = async (req, res) => {
             name,
             logo: String(logo).trim(),
             theme: picked.theme,
-            ...legal.fields,
             createdBy: req.user._id,
         });
 
@@ -567,7 +523,7 @@ const getClub = async (req, res) => {
 
 /**
  * PUT /api/user/updateClub/:id   (sirf superAdmin)
- * multipart/form-data: jo badalna hai wahi { name?, logo? (file), theme?, clubAdmin?, legalName?, taxId?, deductionFileNumber?, officialAddress?, phone? }
+ * multipart/form-data: jo badalna hai wahi { name?, logo? (file), theme?, clubAdmin? }
  * logo ko "" bhejo toh logo hat jayega
  */
 const updateClub = async (req, res) => {
@@ -633,18 +589,6 @@ const updateClub = async (req, res) => {
 
             club.name = newName;
         }
-
-        const legal = pickLegal(req.body);
-        if (legal.error) {
-            return res.status(400).json({
-                error: true,
-                status: 400,
-                message: legal.error,
-                message_desc: legal.error,
-                data: {},
-            });
-        }
-        Object.assign(club, legal.fields);
 
         if (theme !== undefined) {
             let parsedTheme = theme;
