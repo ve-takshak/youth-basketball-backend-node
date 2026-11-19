@@ -15,7 +15,7 @@ const { encrypt, decrypt } = require("../../helpers/secretBox");
 const { saveDraftFile, readDraftFile, deleteDraftFiles, setDraftFilesExpiry } = require("../../helpers/form101DraftFiles");
 
 // Form 101 (טופס 101) — coach mobile app se bharta hai.
-//   GET  /user/coach/form101                   coach: apne club ka employer data (prefill) + is saal ka status + saved data
+//   GET  /user/coach/form101                   coach: profile se prefill + is saal ka status + saved data
 //   PUT  /user/coach/form101/draft             coach: adhoora form save (1 mahina rehta hai)
 //   DELETE /user/coach/form101/draft           coach: saved data hatao, shuru se bharo
 //   GET  /user/coach/form101/saved             coach: reject hua form / adhoora form ka bhara data + documents + reason
@@ -59,19 +59,7 @@ const sendServerError = (res, label, e) => {
 // Israel ka current tax year
 const currentTaxYear = () => Number(new Intl.DateTimeFormat("en-CA", { timeZone: TIME_ZONE, year: "numeric" }).format(new Date()));
 
-// Section א: employer details, hamesha coach ke APNE club se (body se kabhi nahi)
-const employerOf = (club) => ({
-    name: club.legalName || club.name || "",
-    address: club.officialAddress || "",
-    phone: club.phone || "",
-    taxId: club.taxId || "",
-    deductionFileNumber: club.deductionFileNumber || "",
-});
-
-const missingEmployerFields = (employer) => {
-    const labels = { name: "legal name", address: "official address", deductionFileNumber: "deduction file number (תיק ניכויים)" };
-    return Object.keys(labels).filter((k) => !employer[k]).map((k) => labels[k]);
-};
+// Section א (employer details) form se aata hai: data.employer (helpers/form101Fields parseEmployer). Club record se nahi.
 
 // Kis kis ko email jayega: club ke saare club admins (jinka email hai) + accounting (agar set hai)
 const recipientsOf = async (club) => {
@@ -242,7 +230,7 @@ const coachOf = async (req) => {
 
 /**
  * GET /user/coach/form101   (coach)
- * Employer details sirf coach ke apne club se. employee = profile se suggestion (app form mein pehle se bhar de).
+ * employee = profile se suggestion (app form mein pehle se bhar de). Employer details (א) app form mein bharta hai.
  */
 const getMyForm101 = async (req, res) => {
     try {
@@ -256,14 +244,8 @@ const getMyForm101 = async (req, res) => {
             draftOf(coach._id, year),
         ]);
 
-        const employer = employerOf(club);
-        const missing = missingEmployerFields(employer);
-
         return sendOk(res, "Form 101 fetched.", {
             taxYear: year,
-            employer,
-            employerReady: !missing.length,
-            employerMissing: missing,
             employee: {
                 firstName: req.user.firstname || "",
                 lastName: req.user.lastname || "",
@@ -368,8 +350,9 @@ const deleteMyForm101Draft = async (req, res) => {
 /**
  * POST /user/coach/form101/submit   (coach)
  * multipart/form-data:
- *   data        JSON string: { employee, children, employerIncome, otherIncome, spouse, changes,
+ *   data        JSON string: { employer, employee, children, employerIncome, otherIncome, spouse, changes,
  *                              taxCredits, taxCoordination, declaration: { agreed: true } }
+ *               employer = { name, address, phone?, deductionFileNumber, taxId? }  (section א, form se)
  *   signature   PNG / JPG file (signature pad se) YA text field: "data:image/png;base64,..."
  *   idCard      1-2 files: ID card + ספח (photo ya PDF)
  *   doc_<reason> section ח ke reason ki file(s), max 3 har reason: doc_disabled, doc_disabilityAllowance,
@@ -389,12 +372,6 @@ const submitMyForm101 = async (req, res) => {
         if (!coach) return sendError(res, status, message);
 
         const year = currentTaxYear();
-        const employer = employerOf(club);
-        const missing = missingEmployerFields(employer);
-        if (missing.length) {
-            return sendError(res, 409, `Your club has not completed its employer details (${missing.join(", ")}). Please contact your club admin.`);
-        }
-
         const recipients = await recipientsOf(club);
         if (!recipients.length) return sendError(res, 409, "Your club admin has no email address set. Please contact your club admin.");
 
@@ -496,7 +473,7 @@ const submitMyForm101 = async (req, res) => {
         const signedAt = new Intl.DateTimeFormat("en-GB", { timeZone: TIME_ZONE, day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date());
         let pdf;
         try {
-            pdf = await buildForm101Pdf(form, employer, { signature, idCard, creditDocs, attachments, signedAt });
+            pdf = await buildForm101Pdf(form, form.employer, { signature, idCard, creditDocs, attachments, signedAt });
         } catch (e) {
             if (e instanceof Form101AttachmentError) return sendError(res, 400, e.message);
             if (e instanceof Form101PdfNotReady) return sendError(res, 503, "Form 101 is not available yet. Please try again later.");
@@ -988,8 +965,6 @@ const formatSettings = (club) => ({
     mandatory: club.form101Settings?.mandatory !== false,
     accountingEmail: club.form101Settings?.accountingEmail || "",
     requireApproval: !!club.form101Settings?.requireApproval,
-    employer: employerOf(club),
-    employerMissing: missingEmployerFields(employerOf(club)),
 });
 
 /** GET /user/clubs/:id/form101-settings */

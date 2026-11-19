@@ -10,7 +10,7 @@ const {
 } = require("../app/middleware/authentication");
 
 const { register, login, verifyOtp, getProfile, resendOtp, registerParent, updateParentProfile, updateProfile, refreshToken, logout } = require("../app/controllers/api/userController");
-const { createClub, listClubs, getClub, getDashboardSummary, updateClub, deleteClub, restoreClub, clubOptions, getClubLegalDetails, updateClubLegalDetails } = require("../app/controllers/api/clubController");
+const { createClub, listClubs, getClub, getDashboardSummary, updateClub, deleteClub, restoreClub, clubOptions } = require("../app/controllers/api/clubController");
 const {
     createClubAdmin,
     listClubAdmins,
@@ -171,8 +171,6 @@ router.post("/user/createClub", superAdminAuthentication, createClub);
 router.get("/user/listClubs", superAdminOrClubAdminAuthentication, listClubs);   // clubAdmin ko sirf apna club
 router.get("/user/getClub/:id", superAdminOrClubAdminAuthentication, getClub);
 router.put("/user/updateClub/:id", superAdminAuthentication, updateClub);
-router.get("/user/clubs/:id/legal-details", superAdminOrClubAdminAuthentication, getClubLegalDetails);    // legal & tax details (Form 101 employer)
-router.put("/user/clubs/:id/legal-details", superAdminOrClubAdminAuthentication, updateClubLegalDetails); // clubAdmin apne club ki
 router.delete("/user/deleteClub/:id", superAdminAuthentication, deleteClub);
 router.put("/user/restoreClub/:id", superAdminAuthentication, restoreClub);
 router.get("/user/dashboard/summary", superAdminOrClubAdminAuthentication, getDashboardSummary);
