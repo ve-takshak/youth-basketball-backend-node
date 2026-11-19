@@ -1,0 +1,35 @@
+const mongoose = require("../../config/database");
+
+// Form 101 ke bhare hue fields (client ke kehne pe): coach adhoora chhode ya form wapas aaye (returned),
+// toh dobara poora na bharna pade. Har coach ka har saal ek record.
+//
+// Rules (client):
+//   - Data sirf 1 mahina rehta hai (aakhri save / submit / return se). Uske baad MongoDB khud delete karta hai
+//     (TTL index on expiresAt). Phir coach ko shuru se bharna hoga.
+//   - Form approve ho gaya (successfully finished) -> ye record turant delete. Status row (Form101Submission) rehta hai.
+//
+// data ENCRYPTED hai (helpers/secretBox, AES-256-GCM): ID number, bachche, income... plain text mein kabhi nahi.
+// Files (signature, ID card, documents) save nahi hote, submit pe dobara lagte hain.
+
+const DRAFT_DAYS = 30;
+
+const Form101DraftSchema = new mongoose.Schema(
+    {
+        coachId: { type: mongoose.Schema.Types.ObjectId, ref: "Coach", required: true },
+        clubId: { type: mongoose.Schema.Types.ObjectId, ref: "Club", required: true },
+        year: { type: Number, required: true },
+        data: { type: String, required: true }, // ENCRYPTED JSON: "v1:<iv>:<tag>:<data>"
+        source: { type: String, enum: ["draft", "submitted"], default: "draft" }, // draft = coach ne save kiya, submitted = aakhri submit ka data
+        savedAt: { type: Date, default: Date.now },
+        expiresAt: { type: Date, required: true },
+    },
+    { timestamps: true }
+);
+
+Form101DraftSchema.index({ coachId: 1, year: 1 }, { unique: true });
+Form101DraftSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // expiresAt aate hi MongoDB delete karta hai
+
+const Form101Draft = mongoose.model("Form101Draft", Form101DraftSchema);
+module.exports = Form101Draft;
+module.exports.DRAFT_DAYS = DRAFT_DAYS;
+module.exports.draftExpiry = (from = new Date()) => new Date(from.getTime() + DRAFT_DAYS * 24 * 60 * 60 * 1000);

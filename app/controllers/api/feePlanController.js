@@ -201,8 +201,8 @@ const parseBody = async (body, { partial = false } = {}) => {
             const groupName = nameOf.get(String(g.categoryId));
             const parsed = parseAmount(g.amount, `Fee for ${groupName}`);
             if (parsed.message) return { message: parsed.message };
-            // jerseyAmount na bhejo = plan ki jerseyAmount (sabke liye ek). 0 = is group ki jersey nahi.
-            let jerseyAmount = null;
+            // Har group ki apni jersey (amount jaisi). Na bhejo / 0 = is group ki jersey nahi. Plan ki jerseyAmount yahan nahi lagti.
+            let jerseyAmount = 0;
             if (g.jerseyAmount !== undefined && g.jerseyAmount !== null && g.jerseyAmount !== "") {
                 const jersey = parseAmount(g.jerseyAmount, `Jersey for ${groupName}`);
                 if (jersey.message) return { message: jersey.message };
@@ -317,8 +317,8 @@ const listFeePlans = async (req, res) => {
 /**
  * Season ka Fee Plan ek call mein (Subscription Plan screen ka Save).
  * pricingMode "same": subscriptionAmount + jerseyAmount (sabke liye).
- * "per_age_group": ageGroups [{ categoryId, amount, jerseyAmount }] -> har group ki apni fee aur apni jersey (0 = nahi).
- *   group ki jerseyAmount na bhejo toh plan ki jerseyAmount lagti hai.
+ * "per_age_group": ageGroups [{ categoryId, amount, jerseyAmount }] -> har group ki apni fee aur apni jersey (na bhejo / 0 = jersey nahi).
+ *   per_age_group mein plan ki jerseyAmount nahi lagti, sirf group ki.
  * proRate (default true): season (Aug-Jul) ke beech join kare toh bache mahino ki fee. false = hamesha poore saal ki.
  * paymentOptions (default "both"): one_time = sirf ek baar | standing_order = sirf har mahine | both
  * productType (default "yearly"): yearly | seasonal (paymentOptions apne aap standing_order) | camp (one_time, jersey / pro-rate nahi)

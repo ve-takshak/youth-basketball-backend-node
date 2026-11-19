@@ -132,6 +132,9 @@ const {
 const { paymentWebhook, paymentReturn } = require("../app/controllers/api/paymentWebhookController");
 const {
     getMyForm101,
+    saveMyForm101Draft,
+    deleteMyForm101Draft,
+    getMyForm101Saved,
     submitMyForm101,
     listForm101Status,
     listSubmittedForm101,
@@ -337,6 +340,9 @@ router.get("/user/parent/refund-requests", authentication, listMyRefundRequests)
 
 // ---------- Form 101 (form store nahi hota, sirf email + status) ----------
 router.get("/user/coach/form101", authentication, getMyForm101);                 // coach: employer prefill + is saal ka status
+router.put("/user/coach/form101/draft", authentication, saveMyForm101Draft);        // coach: adhoora form save (1 mahina)
+router.delete("/user/coach/form101/draft", authentication, deleteMyForm101Draft);  // coach: saved data hatao
+router.get("/user/coach/form101/saved", authentication, getMyForm101Saved);        // coach: reject hua form ka bhara data + reason
 router.post("/user/coach/form101/submit", authentication, submitMyForm101);      // coach: form + signature + ID -> email
 router.get("/user/form101", clubAdminAuthentication, listForm101Status); // ?year=&status=
 router.get("/user/form101/submitted", clubAdminAuthentication, listSubmittedForm101); // sirf jinhone bhara + coach details

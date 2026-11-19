@@ -1,6 +1,7 @@
 const mongoose = require("../../config/database");
 
-// Form 101 ka status + aakhri PDF ka reference. Form ka data (ID, bachche, income...) fields mein save nahi hota.
+// Form 101 ka status + aakhri PDF ka reference. Form ka data (ID, bachche, income...) yahan nahi hota:
+// wo models/Form101Draft mein encrypted, sirf 1 mahina / approve tak (coach ko pre-fill ke liye).
 // PDF club admin (+ accounting) ko email hoti hai, aur client ke kehne pe encrypted save bhi hoti hai
 // (GridFS, helpers/form101Storage.js) taaki club admin / super admin baad mein download kar sakein.
 //

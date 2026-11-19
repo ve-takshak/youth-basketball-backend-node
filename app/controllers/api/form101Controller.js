@@ -9,9 +9,15 @@ const { parseForm101, Form101Error, CREDIT_DOCUMENTS } = require("../../helpers/
 const { buildForm101Pdf, Form101PdfNotReady, Form101AttachmentError } = require("../../helpers/form101Pdf");
 const { sendMail } = require("../../../utils/mailer");
 const { savePdf, readPdf, deletePdf, Form101StorageError } = require("../../helpers/form101Storage");
+const Form101Draft = require("../../models/Form101Draft");
+const { DRAFT_DAYS, draftExpiry } = require("../../models/Form101Draft");
+const { encrypt, decrypt } = require("../../helpers/secretBox");
 
 // Form 101 (טופס 101) — coach mobile app se bharta hai.
-//   GET  /user/coach/form101                   coach: apne club ka employer data (prefill) + is saal ka status
+//   GET  /user/coach/form101                   coach: apne club ka employer data (prefill) + is saal ka status + saved data
+//   PUT  /user/coach/form101/draft             coach: adhoora form save (1 mahina rehta hai)
+//   DELETE /user/coach/form101/draft           coach: saved data hatao, shuru se bharo
+//   GET  /user/coach/form101/saved             coach: reject hua form / adhoora form ka bhara data + reason
 //   POST /user/coach/form101/submit            coach: form + signature + ID photo -> PDF -> email
 //   GET  /user/form101?year=                   club admin: apne club ke coaches ka status
 //   GET  /user/form101/submitted?year=&status=&search=&page=&limit=  club admin: jinhone bhara, details ke saath
@@ -26,7 +32,8 @@ const { savePdf, readPdf, deletePdf, Form101StorageError } = require("../../help
 //
 // STORAGE: PDF club admin (+ accounting) ko email hoti hai, aur (client ke kehne pe) encrypted save hoti hai
 // (GridFS, helpers/form101Storage.js). Har coach ka har saal sirf aakhri PDF. Download sirf club admin (super admin ko abhi Form 101 ka access nahi).
-// Form ke fields (ID, bachche, income...) alag se DB mein nahi jaate, logs mein bhi nahi.
+// Form ke fields (client ke kehne pe): models/Form101Draft mein ENCRYPTED, sirf 1 mahina (TTL), approve hote hi delete.
+// Coach ko wapas pre-fill ke liye. Logs mein kabhi nahi. Files (signature, ID, documents) save nahi hoti.
 
 const TIME_ZONE = "Asia/Jerusalem";
 const SIGNATURE_TYPES = ["image/png", "image/jpeg", "image/jpg"];
@@ -128,6 +135,40 @@ const formatStatus = (sub, year, settings = {}, { admin = false } = {}) => {
     };
 };
 
+// ---------- Saved form data (draft) ----------
+// Client: bhara hua data 1 mahina DB mein (encrypted), approve hote hi delete. Files kabhi save nahi.
+const MAX_DRAFT_BYTES = 200 * 1024;
+
+// App jo JSON bhejta hai wahi rakhte hain (adhoora bhi chalega), bas signature / base64 files hata ke
+const cleanDraftData = (data) => {
+    if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+    const { signature, ...rest } = data;
+    return rest;
+};
+
+const saveDraft = async ({ coach, year, data, source }) => {
+    const now = new Date();
+    return Form101Draft.findOneAndUpdate(
+        { coachId: coach._id, year },
+        { clubId: coach.clubId, data: encrypt(JSON.stringify(data)), source, savedAt: now, expiresAt: draftExpiry(now) },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+};
+
+// Coach ko wapas dene ke liye. Expire ho chuka (TTL thoda late chalta hai) ya decrypt na ho -> null
+const draftOf = async (coachId, year) => {
+    const draft = await Form101Draft.findOne({ coachId, year });
+    if (!draft || draft.expiresAt <= new Date()) return null;
+    try {
+        return { data: JSON.parse(decrypt(draft.data)), source: draft.source, savedAt: draft.savedAt, expiresAt: draft.expiresAt };
+    } catch (e) {
+        console.error("Form 101 draft decrypt failed:", e?.message || e);
+        return null;
+    }
+};
+
+const deleteDraft = (coachId, year) => Form101Draft.deleteOne({ coachId, year });
+
 // "Form101_2026_coach_atul.pdf"
 const pdfFilename = (year, fullName) => `Form101_${year}_${String(fullName || "coach").replace(/[^\p{L}\p{N}]+/gu, "_")}.pdf`;
 
@@ -165,9 +206,10 @@ const getMyForm101 = async (req, res) => {
         if (!coach) return sendError(res, status, message);
 
         const year = currentTaxYear();
-        const [current, history] = await Promise.all([
+        const [current, history, draft] = await Promise.all([
             Form101Submission.findOne({ coachId: coach._id, year }),
             Form101Submission.find({ coachId: coach._id }).sort({ year: -1 }).select("year status submittedAt"),
+            draftOf(coach._id, year),
         ]);
 
         const employer = employerOf(club);
@@ -188,9 +230,91 @@ const getMyForm101 = async (req, res) => {
             status: formatStatus(current, year, settingsOf(club)),
             timeline: timelineOf(current), // is saal: kab bhara, kab wapas aaya (reason), kab dobara
             history: history.map((h) => ({ year: h.year, status: h.status, submittedAt: h.submittedAt })),
+            // Pehle bhara hua data (adhoora save ya wapas aaya form): app isse form pre-fill kare. null = khali form.
+            // Files (signature, ID, documents) isme nahi, wo dobara lagani hongi.
+            savedForm: draft,
         });
     } catch (e) {
         return sendServerError(res, "getMyForm101", e);
+    }
+};
+
+/**
+ * PUT /user/coach/form101/draft   (coach)
+ * body (JSON): { data: { employee, children, ... } }   wahi structure jo submit mein "data" hai, adhoora bhi chalega.
+ * 1 mahina rehta hai (har save pe phir se 1 mahina). Files yahan nahi aati.
+ */
+const saveMyForm101Draft = async (req, res) => {
+    try {
+        const { coach, status, message } = await coachOf(req);
+        if (!coach) return sendError(res, status, message);
+
+        let data = req.body?.data;
+        if (typeof data === "string") {
+            try {
+                data = JSON.parse(data);
+            } catch (e) {
+                return sendError(res, 400, "Form data is not valid JSON.");
+            }
+        }
+        data = cleanDraftData(data);
+        if (!data) return sendError(res, 400, "Please send the form data as an object in \"data\".");
+        if (Buffer.byteLength(JSON.stringify(data)) > MAX_DRAFT_BYTES) return sendError(res, 400, "Form data is too large. Files cannot be saved in a draft.");
+
+        const year = currentTaxYear();
+        const draft = await saveDraft({ coach, year, data, source: "draft" });
+        return sendOk(res, "Form 101 saved.", { savedAt: draft.savedAt, expiresAt: draft.expiresAt, keepDays: DRAFT_DAYS });
+    } catch (e) {
+        return sendServerError(res, "saveMyForm101Draft", e);
+    }
+};
+
+/**
+ * GET /user/coach/form101/saved   (coach)
+ * Form wapas aaya (rejected / returned) ya adhoora chhoda: coach ne jo bhara tha wo + reject ka reason.
+ * App isse form pre-fill kare, coach sirf galat cheez theek karke dobara submit kare.
+ *   hasSavedForm false = kuch save nahi (1 mahina nikal gaya / approve ho gaya / kabhi bhara nahi) -> khali form
+ *   form = wahi JSON structure jo submit ke "data" mein jaata hai
+ *   reupload = ye cheezein save nahi hoti, submit pe dobara lagani hongi
+ */
+const getMyForm101Saved = async (req, res) => {
+    try {
+        const { coach, club, status, message } = await coachOf(req);
+        if (!coach) return sendError(res, status, message);
+
+        const year = currentTaxYear();
+        const [current, draft] = await Promise.all([Form101Submission.findOne({ coachId: coach._id, year }), draftOf(coach._id, year)]);
+        const st = formatStatus(current, year, settingsOf(club));
+
+        return sendOk(res, draft ? "Saved Form 101 fetched." : "No saved Form 101 data.", {
+            year,
+            status: st.status, // not_submitted | submitted | approved | returned
+            isReturned: st.isReturned,
+            returnReason: st.returnReason, // club admin ne kya theek karne ko kaha
+            returnedAt: st.isReturned ? current.reviewedAt : null,
+            hasSavedForm: !!draft,
+            source: draft?.source || null, // draft = adhoora save, submitted = pichhla bheja hua form
+            savedAt: draft?.savedAt || null,
+            expiresAt: draft?.expiresAt || null, // is date ke baad data delete, shuru se bharna hoga
+            form: draft?.data || null,
+            reupload: draft ? ["signature", "idCard", "documents"] : [],
+        });
+    } catch (e) {
+        return sendServerError(res, "getMyForm101Saved", e);
+    }
+};
+
+/**
+ * DELETE /user/coach/form101/draft   (coach)  saved data hatao, form shuru se.
+ */
+const deleteMyForm101Draft = async (req, res) => {
+    try {
+        const { coach, status, message } = await coachOf(req);
+        if (!coach) return sendError(res, status, message);
+        await deleteDraft(coach._id, currentTaxYear());
+        return sendOk(res, "Saved Form 101 data deleted.");
+    } catch (e) {
+        return sendServerError(res, "deleteMyForm101Draft", e);
     }
 };
 
@@ -206,7 +330,9 @@ const getMyForm101 = async (req, res) => {
  *               doc_disabledChildren (zaroori), doc_alimony, doc_dischargedSoldier, doc_academicDegree, doc_reserveCombat
  *   doc_taxCoordination  section ט: assessor approval (reason assessorApproved pe zaroori) / salary slips
  *   attachments 0-5 files: koi aur document
- * Kuch save nahi hota. Email fail = status nahi badalta, coach dobara bheje.
+ * Email fail = status nahi badalta, coach dobara bheje.
+ * Success pe: PDF (encrypted) + status save, aur bhara hua data 1 mahine ke liye (wapas aaye toh pre-fill).
+ * Approve hote hi data delete.
  */
 const submitMyForm101 = async (req, res) => {
     try {
@@ -355,6 +481,14 @@ const submitMyForm101 = async (req, res) => {
             throw e;
         }
         if (oldFileId && String(oldFileId) !== String(fileId)) await deletePdf(oldFileId);
+
+        // Bhara hua data 1 mahina rakho: club admin wapas bheje toh coach ko sirf galat field theek karna ho.
+        // Fail hua toh bhi submit ho chuka hai, isliye sirf log.
+        try {
+            await saveDraft({ coach, year, data: cleanDraftData(body) || {}, source: "submitted" });
+        } catch (e) {
+            console.error("Form 101 data save failed:", e?.message || e);
+        }
 
         return sendOk(res, "Form 101 submitted.", {
             status: formatStatus(sub, year, settingsOf(club)),
@@ -514,6 +648,11 @@ const reviewForm101 = async (req, res) => {
         sub.returnReason = action === "return" ? reason : "";
         sub.history.push({ status: sub.status, at: now, by: req.user._id, reason: sub.returnReason });
         await sub.save();
+
+        // Client rule: approve = successfully finished -> bhara hua data delete (status row + PDF rehte hain).
+        // Wapas bheja -> data 1 mahina aur, coach ko theek karne ka time.
+        if (action === "approve") await deleteDraft(sub.coachId, sub.year);
+        else await Form101Draft.updateOne({ coachId: sub.coachId, year: sub.year }, { expiresAt: draftExpiry(now) });
 
         return sendOk(res, action === "approve" ? "Form 101 approved." : "Form 101 sent back to the coach.", { status: formatStatus(sub, sub.year, await settingsFor(sub.clubId), { admin: true }) });
     } catch (e) {
@@ -816,6 +955,9 @@ const updateForm101Mandatory = async (req, res) => {
 
 module.exports = {
     getMyForm101,
+    saveMyForm101Draft,
+    deleteMyForm101Draft,
+    getMyForm101Saved,
     submitMyForm101,
     listForm101Status,
     listSubmittedForm101,

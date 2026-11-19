@@ -7,7 +7,7 @@ const round = (n) => Math.round(n * 100) / 100;
 // Club ka saal ka Fee Plan (Subscription Plan screen). Ek club + season ka ek hi chalu plan.
 //   pricingMode "same"          -> subscriptionAmount sab age groups ke liye
 //   pricingMode "per_age_group" -> ageGroups: har age group (team category) ki alag fee
-//   jerseyAmount                -> sabke liye (0 = jersey ka paisa nahi)
+//   jerseyAmount                -> "same" mode mein sabki jersey (0 = jersey ka paisa nahi). per_age_group mein har group ki apni.
 // Bill banate waqt (POST /user/payments/charges/issue) player ki team ki category se uski fee nikalti hai.
 // Plan badalne se pehle bane bills nahi badalte (bill mein items copy hote hain).
 const PRICING_MODES = ["same", "per_age_group"];
@@ -47,7 +47,7 @@ const AgeGroupFeeSchema = new mongoose.Schema(
     {
         categoryId: { type: mongoose.Schema.Types.ObjectId, ref: "TeamCategory", required: true },
         amount: { type: Number, min: 0, default: 0 }, // saal ki subscription (0 = is group ki fee nahi)
-        // Is age group ki jersey (0 = jersey nahi). null = purana plan, plan ki jerseyAmount chalegi.
+        // Is age group ki jersey (0 = jersey nahi), amount jaisi. null = sirf purane plan, plan ki jerseyAmount chalegi.
         jerseyAmount: { type: Number, min: 0, default: null },
     },
     { _id: false }
@@ -67,7 +67,7 @@ const FeePlanSchema = new mongoose.Schema(
         pricingMode: { type: String, enum: PRICING_MODES, default: "same" },
         subscriptionAmount: { type: Number, min: 0, default: 0 }, // "same" mode ki fee
         ageGroups: { type: [AgeGroupFeeSchema], default: [] }, // "per_age_group" mode ki fees
-        // "same" mode mein sabki jersey. "per_age_group" mein har group ki apni (ageGroups[].jerseyAmount).
+        // Sirf "same" mode ki jersey (sabki ek). "per_age_group" mein har group ki apni (ageGroups[].jerseyAmount).
         jerseyAmount: { type: Number, min: 0, default: 0 },
         // true: season ke beech mein join kare toh bache mahino ki fee (1200 saal, Nov mein join -> 9 mahine -> 900). Jersey poori.
         proRate: { type: Boolean, default: true },
@@ -116,13 +116,16 @@ FeePlanSchema.methods.subscriptionFor = function (categoryId) {
     return group ? group.amount : 0;
 };
 
-// Is age group ki jersey. "same" mode = sabki ek. Group pe jersey set nahi (purana plan) = plan ki jerseyAmount.
+// Is age group ki jersey. "same" mode = sabki ek (plan ki jerseyAmount).
+// "per_age_group" = sirf group ki apni jersey (amount jaisi), group nahi = 0.
+// Sirf purane plan (group pe jersey kabhi save hi nahi hui, null) mein plan ki jerseyAmount, taaki purane plan na badlein.
 FeePlanSchema.methods.jerseyFor = function (categoryId) {
     if (this.productType === "camp") return 0;
     if (this.pricingMode === "same") return this.jerseyAmount || 0;
     const group = categoryId ? (this.ageGroups || []).find((g) => String(g.categoryId) === String(categoryId)) : null;
-    if (group && group.jerseyAmount !== null && group.jerseyAmount !== undefined) return group.jerseyAmount;
-    return this.jerseyAmount || 0;
+    if (!group) return 0;
+    if (group.jerseyAmount === null || group.jerseyAmount === undefined) return this.jerseyAmount || 0;
+    return group.jerseyAmount;
 };
 
 // Is age group + join date ka hisaab. proRate on: saal ki fee / 12 x bache mahine (join wala mahina bhi).
