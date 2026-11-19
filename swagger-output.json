@@ -6080,12 +6080,9 @@
         ]
       }
     },
-    "/user/form101/{id}/pdf": {
+    "/user/form101/{id}/pdf-link": {
       "get": {
-        "description": "**Access:** Super admin or club admin\n\nsaved PDF (sirf club admin / super admin)\n\n```\nSaved (encrypted) PDF decrypt karke download. Response: application/pdf (attachment).\n```",
-        "produces": [
-          "application/pdf"
-        ],
+        "description": "**Access:** Super admin or club admin\n\n5 min ka download link (JSON)\n\n```\nResponse: { url, filename, expiresAt }. url 5 minute tak chalta hai, bina token ke PDF download.\n```",
         "parameters": [
           {
             "name": "id",
@@ -6097,22 +6094,46 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "OK"
-          },
           "401": {
             "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
           }
         },
         "tags": [
           "Form 101"
         ],
-        "summary": "Download form101 pdf",
+        "summary": "Get form101 pdf link",
         "security": [
           {
             "bearerAuth": []
           }
         ]
+      }
+    },
+    "/form101/pdf/{token}": {
+      "get": {
+        "description": "**Access:** Public (no token)\n\nbina token: link wala download",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "Download form101 pdf by link"
       }
     },
     "/user/clubs/{id}/form101-settings": {

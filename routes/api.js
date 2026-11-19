@@ -135,7 +135,8 @@ const {
     listForm101Status,
     reviewForm101,
     getCoachForm101,
-    downloadForm101Pdf,
+    getForm101PdfLink,
+    downloadForm101PdfByLink,
     getForm101Settings,
     updateForm101Settings,
     getForm101Mandatory,
@@ -337,7 +338,8 @@ router.post("/user/coach/form101/submit", authentication, submitMyForm101);     
 router.get("/user/form101", superAdminOrClubAdminAuthentication, listForm101Status); // ?year=&status=&clubId= (superAdmin)
 router.put("/user/form101/:id/review", superAdminOrClubAdminAuthentication, reviewForm101); // approve / return + reason
 router.get("/user/coaches/:id/form101", superAdminOrClubAdminAuthentication, getCoachForm101); // ek coach: status + timeline
-router.get("/user/form101/:id/pdf", superAdminOrClubAdminAuthentication, downloadForm101Pdf); // saved PDF (sirf club admin / super admin)
+router.get("/user/form101/:id/pdf-link", superAdminOrClubAdminAuthentication, getForm101PdfLink); // 5 min ka download link (JSON)
+router.get("/form101/pdf/:token", downloadForm101PdfByLink); // bina token: link wala download
 router.get("/user/clubs/:id/form101-settings", superAdminOrClubAdminAuthentication, getForm101Settings);
 router.put("/user/clubs/:id/form101-settings", superAdminOrClubAdminAuthentication, updateForm101Settings); // accounting email
 router.get("/user/clubs/:id/form101-mandatory", superAdminOrClubAdminAuthentication, getForm101Mandatory); // mandatory on/off + count

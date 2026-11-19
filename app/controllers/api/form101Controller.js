@@ -1,3 +1,4 @@
+const jwt = require("jsonwebtoken");
 const Club = require("../../models/Club");
 const Coach = require("../../models/Coach");
 const ClubAdmin = require("../../models/ClubAdmin");
@@ -14,7 +15,8 @@ const { savePdf, readPdf, deletePdf, Form101StorageError } = require("../../help
 //   POST /user/coach/form101/submit            coach: form + signature + ID photo -> PDF -> email
 //   GET  /user/form101?year=&clubId=           club admin / super admin: coaches ka status
 //   PUT  /user/form101/:id/review              club admin / super admin: approve / send back (reason)
-//   GET  /user/form101/:id/pdf                 club admin / super admin: saved PDF download
+//   GET  /user/form101/:id/pdf-link            club admin / super admin: 5 min ka download link (JSON)
+//   GET  /form101/pdf/:token                   bina login: link wala download
 //   GET  /user/clubs/:id/form101-settings      club admin / super admin
 //   PUT  /user/clubs/:id/form101-settings      club admin / super admin: mandatory, accounting email, approval on/off
 //   GET  /user/clubs/:id/form101-mandatory     club admin / super admin: mandatory on/off + is saal ka count
@@ -120,7 +122,7 @@ const formatStatus = (sub, year, settings = {}, { admin = false } = {}) => {
         resubmitted: !!fixedReturn && status !== "returned",
         lastReturnReason: status !== "returned" ? fixedReturn?.reason || "" : "",
         submissions: history.filter((h) => h.status === "submitted").length,
-        hasPdf: !!sub?.pdf?.fileId, // download button: GET /user/form101/:id/pdf
+        hasPdf: !!sub?.pdf?.fileId, // download button: GET /user/form101/:id/pdf-link
     };
 };
 
@@ -442,37 +444,94 @@ const reviewForm101 = async (req, res) => {
     }
 };
 
-/**
- * GET /user/form101/:id/pdf   (club admin: apne club ka, super admin: koi bhi). Coach ko nahi.
- * Saved (encrypted) PDF decrypt karke download. Response: application/pdf (attachment).
- */
-const downloadForm101Pdf = async (req, res) => {
+// Club admin (apna club) / super admin ke liye submission + PDF check. Galat ho toh { status, message }.
+const findPdfSubmission = async (req, id) => {
+    if (!isValidId(id)) return { status: 400, message: "Invalid submission id." };
+    const sub = await Form101Submission.findById(id).select("clubId pdf year");
+    if (!sub || (req.user.role !== ROLES.SUPER_ADMIN && String(sub.clubId) !== String(req.clubId))) {
+        return { status: 404, message: "Submission not found." };
+    }
+    if (!sub.pdf?.fileId) return { status: 404, message: "No saved PDF for this form (it was submitted before PDFs were saved)." };
+    return { sub };
+};
+
+// PDF bhejna (decrypt karke). Direct download aur link wala download dono yahi use karte hain.
+const sendPdf = async (res, sub) => {
+    let pdf;
     try {
-        const { id } = req.params;
-        if (!isValidId(id)) return sendError(res, 400, "Invalid submission id.");
-        const sub = await Form101Submission.findById(id).select("clubId pdf year");
-        if (!sub || (req.user.role !== ROLES.SUPER_ADMIN && String(sub.clubId) !== String(req.clubId))) {
-            return sendError(res, 404, "Submission not found.");
-        }
-        if (!sub.pdf?.fileId) return sendError(res, 404, "No saved PDF for this form (it was submitted before PDFs were saved).");
-
-        let pdf;
-        try {
-            pdf = await readPdf(sub.pdf.fileId);
-        } catch (e) {
-            console.error("Form 101 PDF read failed:", e?.message || e);
-            return sendError(res, 410, "The saved PDF could not be opened. Please ask the coach to submit the form again.");
-        }
-
-        const filename = sub.pdf.filename || `Form101_${sub.year}.pdf`;
-        const ascii = filename.replace(/[^\x20-\x7E]+/g, "_").replace(/"/g, "");
-        res.setHeader("Content-Type", "application/pdf");
-        res.setHeader("Content-Length", pdf.length);
-        res.setHeader("Content-Disposition", `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
-        res.setHeader("Cache-Control", "no-store");
-        return res.status(200).end(pdf);
+        pdf = await readPdf(sub.pdf.fileId);
     } catch (e) {
-        return sendServerError(res, "downloadForm101Pdf", e);
+        console.error("Form 101 PDF read failed:", e?.message || e);
+        return sendError(res, 410, "The saved PDF could not be opened. Please ask the coach to submit the form again.");
+    }
+
+    const filename = sub.pdf.filename || `Form101_${sub.year}.pdf`;
+    const ascii = filename.replace(/[^\x20-\x7E]+/g, "_").replace(/"/g, "");
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Length", pdf.length);
+    res.setHeader("Content-Disposition", `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(200).end(pdf);
+};
+
+// ---------- download link (5 minute) ----------
+// Link mein ek chhota JWT hota hai (sirf ye submission + ye PDF file, 5 min). Link khulne pe token nahi chahiye,
+// isliye frontend / app seedha window.open / <a href> kar sakta hai. Coach dobara submit kare toh purana link band.
+const LINK_MINUTES = 5;
+const LINK_TYPE = "form101-pdf";
+
+// Backend ka public address: API_PUBLIC_URL (.env) warna request se (proxy ke peeche x-forwarded-proto)
+const apiBaseOf = (req) => {
+    const fromEnv = String(process.env.API_PUBLIC_URL || "").replace(/\/+$/, "");
+    if (fromEnv) return fromEnv;
+    const proto = String(req.get("x-forwarded-proto") || req.protocol || "http").split(",")[0].trim();
+    return `${proto}://${req.get("host")}`;
+};
+
+/**
+ * GET /user/form101/:id/pdf-link   (club admin: apne club ka, super admin: koi bhi). Coach ko nahi.
+ * Response: { url, filename, expiresAt }. url 5 minute tak chalta hai, bina token ke PDF download.
+ */
+const getForm101PdfLink = async (req, res) => {
+    try {
+        const { sub, status, message } = await findPdfSubmission(req, req.params.id);
+        if (!sub) return sendError(res, status, message);
+
+        const token = jwt.sign({ type: LINK_TYPE, sid: String(sub._id), fid: String(sub.pdf.fileId), by: String(req.user._id) }, process.env.JWTKEY, {
+            algorithm: "HS256",
+            expiresIn: `${LINK_MINUTES}m`,
+        });
+        return sendOk(res, "Download link created.", {
+            url: `${apiBaseOf(req)}/api/form101/pdf/${token}`,
+            filename: sub.pdf.filename || `Form101_${sub.year}.pdf`,
+            expiresAt: new Date(Date.now() + LINK_MINUTES * 60 * 1000),
+        });
+    } catch (e) {
+        return sendServerError(res, "getForm101PdfLink", e);
+    }
+};
+
+/**
+ * GET /form101/pdf/:token   (bina login, link hi permission hai). /pdf-link se mila url.
+ */
+const downloadForm101PdfByLink = async (req, res) => {
+    try {
+        let payload;
+        try {
+            payload = jwt.verify(req.params.token, process.env.JWTKEY, { algorithms: ["HS256"] });
+        } catch (e) {
+            return sendError(res, e.name === "TokenExpiredError" ? 410 : 400, e.name === "TokenExpiredError" ? "This download link has expired. Please download again." : "Invalid download link.");
+        }
+        if (payload.type !== LINK_TYPE || !isValidId(payload.sid)) return sendError(res, 400, "Invalid download link.");
+
+        const sub = await Form101Submission.findById(payload.sid).select("clubId pdf year");
+        // Coach ne dobara bhar diya (nayi PDF) toh purana link kaam nahi karega
+        if (!sub?.pdf?.fileId || String(sub.pdf.fileId) !== payload.fid) {
+            return sendError(res, 410, "This form has been updated. Please download again.");
+        }
+        return await sendPdf(res, sub);
+    } catch (e) {
+        return sendServerError(res, "downloadForm101PdfByLink", e);
     }
 };
 
@@ -623,7 +682,8 @@ module.exports = {
     listForm101Status,
     reviewForm101,
     getCoachForm101,
-    downloadForm101Pdf,
+    getForm101PdfLink,
+    downloadForm101PdfByLink,
     getForm101Settings,
     updateForm101Settings,
     getForm101Mandatory,
