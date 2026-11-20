@@ -296,10 +296,18 @@ const getMyForm101 = async (req, res) => {
     }
 };
 
+// Draft mein har field ki max files (submit jaisa). Signature draft mein kabhi nahi.
+const draftFieldLimit = (field) => (field === "idCard" ? 2 : field === "attachments" ? MAX_ATTACHMENTS : MAX_FILES_PER_REASON);
+
 /**
  * PUT /user/coach/form101/draft   (coach)
- * body (JSON): { data: { employee, children, ... } }   wahi structure jo submit mein "data" hai, adhoora bhi chalega.
- * 1 mahina rehta hai (har save pe phir se 1 mahina). Files yahan nahi aati (pichhle submit ki saved files rehti hain).
+ * Do tarike:
+ *   JSON:       { data: { employee, children, ... } }          -> sirf fields, pehle se saved documents waise hi rehte hain
+ *   form-data:  data (JSON string) + documents (submit wale keys: idCard, doc_<reason>, doc_taxCoordination, attachments)
+ *               + keepFiles (JSON array, /saved ke files[]._id jo rakhne hain)
+ *               -> documents ki list = keepFiles + nayi files. Jo na kept na naya, wo delete.
+ * Adhoora form chalega (koi validation nahi, reason select ho ya na ho). Signature save nahi hota.
+ * 1 mahina rehta hai (har save pe phir se 1 mahina).
  */
 const saveMyForm101Draft = async (req, res) => {
     try {
@@ -316,11 +324,65 @@ const saveMyForm101Draft = async (req, res) => {
         }
         data = cleanDraftData(data);
         if (!data) return sendError(res, 400, "Please send the form data as an object in \"data\".");
-        if (Buffer.byteLength(JSON.stringify(data)) > MAX_DRAFT_BYTES) return sendError(res, 400, "Form data is too large. Files cannot be saved in a draft.");
+        if (Buffer.byteLength(JSON.stringify(data)) > MAX_DRAFT_BYTES) return sendError(res, 400, "Form data is too large. Please send documents as files, not inside data.");
 
         const year = currentTaxYear();
-        const draft = await saveDraft({ coach, year, data, source: "draft" });
-        return sendOk(res, "Form 101 saved.", { savedAt: draft.savedAt, expiresAt: draft.expiresAt, keepDays: DRAFT_DAYS });
+        const fields = SAVED_FILE_FIELDS();
+
+        // Documents bheje ya keepFiles bheja? Tabhi documents ki list badlo, warna purani list waisi hi.
+        let keepIds = req.body?.keepFiles;
+        if (typeof keepIds === "string") {
+            try {
+                keepIds = keepIds.trim() ? JSON.parse(keepIds) : [];
+            } catch (e) {
+                return sendError(res, 400, "keepFiles must be a JSON array of saved file ids.");
+            }
+        }
+        if (keepIds !== undefined && keepIds !== null && !Array.isArray(keepIds)) return sendError(res, 400, "keepFiles must be a JSON array of saved file ids.");
+        const unknown = Object.keys(req.files || {}).find((k) => !fields.includes(k));
+        if (unknown) return sendError(res, 400, unknown === "signature" ? "The signature is not saved in a draft. Add it when you submit." : `Unknown document field "${unknown}".`);
+        const uploads = fields.flatMap((field) => filesOf(req, field).map((file) => ({ field, file })));
+        const touchFiles = uploads.length > 0 || Array.isArray(keepIds);
+
+        if (!touchFiles) {
+            const draft = await saveDraft({ coach, year, data, source: "draft" });
+            return sendOk(res, "Form 101 saved.", { savedAt: draft.savedAt, expiresAt: draft.expiresAt, keepDays: DRAFT_DAYS, files: savedFilesOf(req, coach._id, draft.files) });
+        }
+
+        // keepFiles: sirf abhi saved files (purani / expire id chhod do)
+        const existing = await Form101Draft.findOne({ coachId: coach._id, year }).select("files expiresAt");
+        const usable = existing && existing.expiresAt > new Date() ? existing.files : [];
+        const keepSet = new Set((keepIds || []).map(String));
+        const kept = usable.filter((f) => keepSet.has(String(f.fileId)));
+
+        // Checks: type, har field ki ginti, kul size
+        if (uploads.some(({ file }) => !DOC_TYPES.includes(file.mimetype))) return sendError(res, 400, "Documents must be PNG, JPG or PDF files.");
+        for (const field of fields) {
+            const count = kept.filter((f) => f.field === field).length + uploads.filter((u) => u.field === field).length;
+            if (count > draftFieldLimit(field)) return sendError(res, 400, `Too many files for "${field}" (maximum ${draftFieldLimit(field)}).`);
+        }
+        const totalBytes = kept.reduce((n, f) => n + (f.size || 0), 0) + uploads.reduce((n, { file }) => n + (file.size || file.data?.length || 0), 0);
+        if (totalBytes > MAX_TOTAL_BYTES) return sendError(res, 400, "The documents are too large in total (maximum 20MB). Please use smaller photos.");
+
+        // Nayi files save, phir list = kept + nayi. Fail hua toh nayi wapas delete.
+        const expiresAt = draftExpiry();
+        const newlySaved = [];
+        let draft;
+        try {
+            for (const { field, file } of uploads) {
+                const meta = await saveDraftFile(file, { field, coachId: coach._id, year, expiresAt });
+                newlySaved.push(meta);
+            }
+            const files = [...kept.map((f) => ({ fileId: f.fileId, field: f.field, filename: f.filename, mimetype: f.mimetype, size: f.size })), ...newlySaved];
+            draft = await saveDraft({ coach, year, data, source: "draft", files });
+        } catch (e) {
+            await deleteDraftFiles(newlySaved.map((f) => f.fileId));
+            throw e;
+        }
+        const keepNow = new Set(draft.files.map((f) => String(f.fileId)));
+        await deleteDraftFiles(usable.map((f) => f.fileId).filter((id) => !keepNow.has(String(id))));
+
+        return sendOk(res, "Form 101 saved.", { savedAt: draft.savedAt, expiresAt: draft.expiresAt, keepDays: DRAFT_DAYS, files: savedFilesOf(req, coach._id, draft.files) });
     } catch (e) {
         return sendServerError(res, "saveMyForm101Draft", e);
     }

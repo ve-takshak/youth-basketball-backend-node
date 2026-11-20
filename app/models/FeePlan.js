@@ -9,7 +9,7 @@ const round = (n) => Math.round(n * 100) / 100;
 //   pricingMode "per_age_group" -> ageGroups: har age group (team category) ki alag fee
 //   jerseyAmount                -> "same" mode mein sabki jersey (0 = jersey ka paisa nahi). per_age_group mein har group ki apni.
 // Bill banate waqt (POST /user/payments/charges/issue) player ki team ki category se uski fee nikalti hai.
-// Plan badalne se pehle bane bills nahi badalte (bill mein items copy hote hain).
+// Plan badle toh unpaid bills naye price pe aa jaate hain (helpers/autoBill syncPlanBills). Paid / pay ho rahe bills nahi badalte.
 const PRICING_MODES = ["same", "per_age_group"];
 // Parent kaise pay kar sakta hai: ek baar | har mahine (Standing Order) | dono
 const PAYMENT_OPTIONS = ["one_time", "standing_order", "both"];

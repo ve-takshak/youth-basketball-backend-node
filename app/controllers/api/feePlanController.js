@@ -12,6 +12,8 @@ const { ROLES } = require("../../helpers/constants");
 const { isValidId } = require("../../helpers/common");
 const { parseSeason } = require("../../helpers/season");
 const { splitPlan, round } = require("../../helpers/paymentStatus");
+const { syncClubSeason } = require("../../helpers/autoBill");
+const { ageGroupsFor } = require("../../helpers/ageGroup");
 
 // Club ka saal ka Fee Plan (Subscription Plan screen). Ek club + season ka ek hi chalu plan.
 //   GET    /user/payments/fee-plans          list + saare age groups (naya plan banane ke liye)
@@ -348,6 +350,8 @@ const createFeePlan = async (req, res) => {
         }
 
         const plan = await FeePlan.create({ ...data, clubId, createdBy: req.user._id });
+        // Naya plan (purana band karke): unpaid bills naye price pe
+        if (type !== "camp") await syncClubSeason(clubId, plan.season);
         return sendOk(res, "Fee plan created.", { feePlan: formatPlan(plan, { groups: await clubAgeGroups(clubId), issuedCount: 0 }) });
     } catch (e) {
         return sendServerError(res, "createFeePlan", e);
@@ -374,7 +378,7 @@ const getFeePlan = async (req, res) => {
 
 /**
  * Plan badalna (jo field bhejo wahi badlega). ageGroups bhejo toh poori list badal jaati hai.
- * Pehle bane bills nahi badalte, sirf naye bills naye price se.
+ * Unpaid bills (parent ne pay shuru nahi kiya) naye price pe aa jaate hain (same _id). Paid / Standing Order / abhi pay ho rahe / custom fee wale nahi badalte.
  * productType bills bane hon toh nahi badalta.
  * body: { season?, productType?, pricingMode?, subscriptionAmount?, ageGroups?, jerseyAmount?, proRate?, paymentOptions?, campStartDate?, campDays?, name?, currency?, dueDate?, isActive? }
  */
@@ -389,6 +393,7 @@ const updateFeePlan = async (req, res) => {
             return sendError(res, 409, "This plan already has bills, so its type can't change. Create a new plan instead.");
         }
 
+        const oldSeason = plan.season;
         Object.entries(parsed.data).forEach(([key, value]) => plan.set(key, value));
         plan.updatedBy = req.user._id;
         const feeError = checkFees(plan);
@@ -399,12 +404,17 @@ const updateFeePlan = async (req, res) => {
             if (other) return sendError(res, 409, `Another active fee plan for ${plan.season} already exists.`, { feePlanId: other._id });
         }
         await plan.save();
+        // Price badla: jin bills ko parent ne abhi pay nahi kiya, woh naye price pe (paid / chal rahe nahi badalte)
+        if (plan.productType !== "camp") {
+            await syncClubSeason(plan.clubId, plan.season);
+            if (oldSeason && oldSeason !== plan.season) await syncClubSeason(plan.clubId, oldSeason);
+        }
 
         const [issuedCount, groups] = await Promise.all([
             Charge.countDocuments({ feePlanId: plan._id, status: { $nin: ["cancelled"] } }),
             clubAgeGroups(plan.clubId),
         ]);
-        return sendOk(res, issuedCount ? "Fee plan updated. Bills already sent keep the old price." : "Fee plan updated.", {
+        return sendOk(res, issuedCount ? "Fee plan updated. Unpaid bills now show the new price. Paid bills keep their price." : "Fee plan updated.", {
             feePlan: formatPlan(plan, { groups, issuedCount }),
         });
     } catch (e) {
@@ -430,11 +440,9 @@ const quoteFeePlan = async (req, res) => {
         if (query.playerId) {
             if (!isValidId(query.playerId)) return sendError(res, 400, "Invalid player id.");
             player = await Player.findOne({ _id: query.playerId, clubId: plan.clubId })
-                .select("teamId categoryId createdAt")
-                .populate({ path: "teamId", select: "name categoryId", populate: { path: "categoryId", select: "name" } })
-                .populate({ path: "categoryId", select: "name" });
+                .select("teamId createdAt");
             if (!player) return sendError(res, 404, "Player not found.");
-            const group = player.teamId?.categoryId || player.categoryId; // team nahi toh player ka age group
+            const group = (await ageGroupsFor([player._id], plan.season)).get(String(player._id)); // team | chuna hua | birth date se
             categoryId = group?._id || null;
             categoryName = group?.name || "";
             joinDate = player.createdAt;
@@ -452,7 +460,7 @@ const quoteFeePlan = async (req, res) => {
             joinDate = m.toDate();
         }
         if (plan.pricingMode === "per_age_group" && !categoryId) {
-            return sendError(res, 400, player ? "This player has no age group (no team and no age group set)." : "Send playerId or categoryId.");
+            return sendError(res, 400, player ? "This player has no age group (no team, none chosen, and none from the birth date)." : "Send playerId or categoryId.");
         }
         joinDate = joinDate || new Date();
 
@@ -485,6 +493,7 @@ const deleteFeePlan = async (req, res) => {
             plan.isActive = false;
             plan.updatedBy = req.user._id;
             await plan.save();
+            if (plan.productType !== "camp") await syncClubSeason(plan.clubId, plan.season); // unpaid bills: naya plan ho toh uska price, warna hat jaate hain
             return sendOk(res, "This plan already has bills, so it was turned off instead of deleted.", { deleted: false, isActive: false });
         }
         await plan.deleteOne();

@@ -270,7 +270,7 @@ const validateChild = (body, partial = false) => {
  * multipart/form-data (file ho toh) ya JSON:
  *   firstname, lastname, birthDate, idNumber          (zaroori)
  *   gender?, gameWearSize?, trainingWearSize?, winterWearSize?, medicalNotes?, relation?   (optional)
- *   categoryId? (age group, jaise U12 Minis): isi se season fee ka bill turant. Pehle payment, phir club team deta hai.
+ *   categoryId? (age group): na bhejo toh date of birth + gender se apne aap. Bill turant banta hai. Pehle payment, phir club team deta hai.
  *   profile_image (file, optional) JPG / PNG, max 5MB      -> User.profile_image
  *   idDocument  (file, optional) JPG / PNG / PDF, max 5MB  -> Player.idDocument
  * Club parent ke club se aata hai, body se nahi. registrationNumber server khud banata hai.
@@ -368,7 +368,7 @@ const createYouthPlayer = async (req, res) => {
             status: 201,
             message: "Player registered successfully. The club will review the registration.",
             message_desc: "Player registered successfully. The club will review the registration.",
-            data: formatPlayer(saved),
+            data: (await withSubscriptions([formatPlayer(saved)]))[0], // + ageGroup + subscription (fee, pay ka chargeId)
         });
     } catch (e) {
         // Adhoora data na bache (User + S3 files)

@@ -11,6 +11,7 @@ const { ROLES } = require("../../helpers/constants");
 const { isValidId, getPagination } = require("../../helpers/common");
 const { parseSeason } = require("../../helpers/season");
 const { chargeBadge, playerBadge, jerseyPaid, amounts, upfrontTypes, round } = require("../../helpers/paymentStatus");
+const { ageGroupsFor } = require("../../helpers/ageGroup");
 const { refundQuote } = require("../../helpers/refundQuote");
 const { formatCharge, PLAYER_POPULATE } = require("../../helpers/chargeFormat");
 const { addEvent, syncStandingOrder, latestReceipt, stopStandingOrder, executeRefund } = require("../../payments/service");
@@ -128,6 +129,8 @@ const issueCharges = async (req, res) => {
         const title = String(plan ? plan.name : body.title || `Season registration ${season.value}`).trim().slice(0, 120);
 
         const filter = { clubId, status: { $nin: ["left", "inactive"] } };
+        // Fee Plan (season fee) sirf youth players ki. Senior se nahi leni (client). Haath ka bill (items) senior ko bhi ja sakta hai.
+        if (plan) filter.playerType = { $ne: "senior" };
         if (body.teamId) {
             if (!isValidId(body.teamId)) return sendError(res, 400, "Invalid team id.");
             if (!(await Team.exists({ _id: body.teamId, clubId }))) return sendError(res, 404, "Team not found.");
@@ -151,17 +154,16 @@ const issueCharges = async (req, res) => {
         }
 
         const players = await Player.find(filter)
-            .select("_id season teamId categoryId createdAt")
-            .populate({ path: "teamId", select: "categoryId", populate: { path: "categoryId", select: "name" } })
-            .populate({ path: "categoryId", select: "name" });
+            .select("_id season teamId createdAt");
+        const groups = plan ? await ageGroupsFor(players.map((p) => p._id), plan.season) : new Map();
         if (!players.length) return sendError(res, 404, "No players found.");
 
-        // Plan: har player ki fee uske age group se (team ki category, team nahi toh player ka categoryId). Fee nahi toh bill nahi.
+        // Plan: har player ki fee uske age group se (team | chuna hua | birth date se). Fee nahi toh bill nahi.
         const billsByPlayer = new Map();
         let noFee = 0;
         players.forEach((player) => {
             if (!plan) return billsByPlayer.set(String(player._id), billsFromItems(items, title));
-            const category = player.teamId?.categoryId || player.categoryId;
+            const category = groups.get(String(player._id));
             const planBills = plan.chargesFor(
                 category?._id,
                 plan.pricingMode === "per_age_group" ? category?.name : "",

@@ -18,11 +18,12 @@ const { uploadPrivateFile, getSignedFileUrl, deleteStoredFile, isS3Stored, SIGNE
 const { withSubscriptions } = require("../../helpers/subscriptionStatus");
 const { billPlayersQuietly } = require("../../helpers/autoBill");
 const { resolveAgeGroup, checkTeamPayment } = require("../../helpers/teamPayment");
+const { ageGroupsFor } = require("../../helpers/ageGroup");
 
 // Youth team mein tabhi jab season ki fee paid ho. Rukne par bill ready kar do taaki parent pay kar sake:
-// player ka age group nahi toh team ki category se, phir bill.
+// age group nikla hi nahi (na chuna, na birth date se) toh team ki category, phir bill.
 const billBeforeTeam = async (player, team) => {
-    if (!player.categoryId && team?.categoryId) {
+    if (!player.categoryId && team?.categoryId && !(await ageGroupsFor([player._id])).get(String(player._id))) {
         player.categoryId = team.categoryId;
         await player.save();
     }
@@ -412,8 +413,8 @@ const formatPlayer = (player) => {
         season: player.season || "",
         club: player.clubId && player.clubId._id ? { _id: player.clubId._id, name: player.clubId.name } : null,
         team: player.teamId && player.teamId._id ? { _id: player.teamId._id, name: player.teamId.name } : null,
-        // Age group (fee isi se, team milne se pehle bhi). null = set nahi
-        ageGroup: player.categoryId && player.categoryId._id ? { _id: player.categoryId._id, name: player.categoryId.name } : null,
+        // Khud chuna hua age group (manual). Asli age group (team / birth date se bhi) withSubscriptions deta hai.
+        ageGroup: player.categoryId && player.categoryId._id ? { _id: player.categoryId._id, name: player.categoryId.name, source: "manual" } : null,
         // Team ka coach (team nahi ya coach assign nahi toh null)
         coach:
             player.teamId && player.teamId.coachId && player.teamId.coachId._id
@@ -644,13 +645,13 @@ const createPlayer = async (req, res) => {
         });
         if (ruleError) return sendError(res, ruleError.status, ruleError.message);
 
-        // Age group (optional). Team ho toh default team ki category.
+        // Age group (optional, sirf jab khud chunna ho). Na bhejo = team ki category / date of birth se apne aap.
         const ageGroup = await resolveAgeGroup(body.categoryId);
         if (ageGroup.message) return sendError(res, ageGroup.status, ageGroup.message);
-        const categoryId = ageGroup.categoryId || teamResult.team?.categoryId || null;
+        const categoryId = ageGroup.categoryId || null;
 
         // Youth: naya player ne abhi pay nahi kiya, toh fee wale club mein seedha team nahi
-        const payError = await checkTeamPayment({ playerType, categoryId, clubId }, teamResult.team);
+        const payError = await checkTeamPayment({ playerType, categoryId: categoryId || teamResult.team?.categoryId, clubId }, teamResult.team);
         if (payError) {
             return sendError(
                 res,
@@ -721,7 +722,7 @@ const createPlayer = async (req, res) => {
             status: 201,
             message: "Player created successfully.",
             message_desc: "Player created successfully.",
-            data: formatPlayer(saved),
+            data: (await withSubscriptions([formatPlayer(saved)]))[0],
         });
     } catch (e) {
         // Adhoora data na bache (S3 file bhi)
@@ -1185,7 +1186,6 @@ const updatePlayer = async (req, res) => {
         // 14. Player update (parents ko chhod ke)
         Object.assign(player, values);
         if (body.teamId !== undefined) player.teamId = team ? team._id : null;
-        if (team && !player.categoryId) player.categoryId = team.categoryId; // age group team se
         await player.save();
         if (body.teamId !== undefined) await billPlayersQuietly([player._id]); // team mili toh age group ki fee ka bill
 
@@ -1200,7 +1200,7 @@ const updatePlayer = async (req, res) => {
             status: 200,
             message: "Player updated successfully.",
             message_desc: "Player updated successfully.",
-            data: formatPlayer(saved),
+            data: (await withSubscriptions([formatPlayer(saved)]))[0],
         });
     } catch (e) {
         if (uploadedDoc) await removeIdDocument(uploadedDoc);
@@ -1476,7 +1476,6 @@ const assignPlayerToTeam = async (req, res) => {
             }
 
             player.teamId = team._id;
-            if (!player.categoryId) player.categoryId = team.categoryId;
             if (!player.season) player.season = team.season || "";
             await player.save();
             await billPlayersQuietly([player._id]); // team mili toh age group ki fee ka bill

@@ -12,9 +12,6 @@ const { currentSeason } = require("./season");
 //   - Paid = subscription bill "paid": ek baar pura, Standing Order ki pehli kisht, ya admin ka mark-paid (cash).
 //   - Jersey ka bill zaroori nahi.
 
-// Player ka age group: team ho toh team ki category, warna player ki apni (categoryId)
-const ageGroupOf = (player) => player?.teamId?.categoryId || player?.categoryId || null;
-
 // body ka categoryId check. undefined = bheja hi nahi, "" / null = hatao
 const resolveAgeGroup = async (value) => {
     if (value === undefined) return {};
@@ -66,4 +63,4 @@ const checkTeamPayment = async (player, team) => {
     };
 };
 
-module.exports = { ageGroupOf, resolveAgeGroup, checkTeamPayment, PAYMENT_REQUIRED };
+module.exports = { resolveAgeGroup, checkTeamPayment, PAYMENT_REQUIRED };

@@ -11,6 +11,7 @@ const Club = require("../models/Club");
 const Player = require("../models/Player");
 const { chargeBadge, amounts } = require("./paymentStatus");
 const { currentSeason } = require("./season");
+const { ageGroupsFor } = require("./ageGroup");
 
 const round = (n) => Math.round(n * 100) / 100;
 
@@ -29,7 +30,7 @@ const NO_SUBSCRIPTION = {
     currency: "ILS",
     plan: "",
     paidAt: null,
-    noBillReason: null, // bill nahi: no_plan | no_team | no_fee
+    noBillReason: null, // bill nahi: no_plan | no_team | no_fee | senior
     paymentOptions: "both", // parent kaise pay kar sakta hai: one_time | standing_order | both
 };
 
@@ -66,8 +67,8 @@ const plannedFor = async (playerIds) => {
     if (!playerIds.length) return map;
     const season = currentSeason();
     const players = await Player.find({ _id: { $in: playerIds } })
-        .select("clubId teamId categoryId createdAt")
-        .populate({ path: "teamId", select: "categoryId" });
+        .select("clubId teamId playerType createdAt");
+    const groups = await ageGroupsFor(players.map((p) => p._id), season);
     const plans = await FeePlan.find({
         clubId: { $in: [...new Set(players.map((p) => String(p.clubId)))] },
         season,
@@ -80,8 +81,9 @@ const plannedFor = async (playerIds) => {
     players.forEach((player) => {
         const plan = planByClub.get(String(player.clubId));
         const base = { ...NO_SUBSCRIPTION, season, _clubId: String(player.clubId), _planOptions: plan?.paymentOptions }; // _ wale subscriptionsFor hata deta hai
+        if (player.playerType === "senior") return map.set(String(player._id), { ...base, noBillReason: "senior" }); // senior season fee nahi deta
         if (!plan) return map.set(String(player._id), { ...base, noBillReason: "no_plan" });
-        const categoryId = player.teamId?.categoryId || player.categoryId || null; // team nahi toh player ka age group
+        const categoryId = groups.get(String(player._id))?._id || null; // team | chuna hua | birth date se
         if (plan.pricingMode === "per_age_group" && !categoryId) {
             return map.set(String(player._id), { ...base, currency: plan.currency, noBillReason: "no_team" });
         }
@@ -165,9 +167,15 @@ const subscriptionsFor = async (playerIds) => {
 };
 
 // formatted players [{ _id, ... }] mein "subscription" jodna
+// + ageGroup: is season ka age group { _id, name, source: team | manual | birthDate } ya null
 const withSubscriptions = async (players) => {
-    const map = await subscriptionsFor(players.map((p) => p._id));
-    return players.map((p) => ({ ...p, subscription: map.get(String(p._id)) || { ...NO_SUBSCRIPTION } }));
+    const ids = players.map((p) => p._id);
+    const [map, groups] = await Promise.all([subscriptionsFor(ids), ageGroupsFor(ids)]);
+    return players.map((p) => ({
+        ...p,
+        ageGroup: groups.get(String(p._id)) || null,
+        subscription: map.get(String(p._id)) || { ...NO_SUBSCRIPTION },
+    }));
 };
 
 module.exports = { subscriptionsFor, withSubscriptions, formatSubscription };

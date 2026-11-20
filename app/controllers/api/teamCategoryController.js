@@ -1,4 +1,5 @@
 const TeamCategory = require("../../models/TeamCategory");
+const { CATEGORY_GENDERS } = require("../../models/TeamCategory");
 const Team = require("../../models/Team");
 const { isValidId, escapeRegex, getPagination } = require("../../helpers/common");
 
@@ -10,15 +11,41 @@ const formatCategory = (category) => {
     return {
         _id: category._id,
         name: category.name,
+        maxAge: category.maxAge ?? null, // "U14" = 14. Player ka age group date of birth se isi se
+        gender: category.gender || "", // boys | girls | "" (sabke liye)
         createdBy: category.createdBy,
         createdAt: category.createdAt,
         updatedAt: category.updatedAt,
     };
 };
 
+// maxAge / gender body se (age group date of birth se nikalne ke liye). undefined = bheja nahi
+const parseAgeFields = (body = {}) => {
+    const out = {};
+    if (body.maxAge !== undefined) {
+        if (body.maxAge === null || body.maxAge === "") out.maxAge = null;
+        else {
+            const n = Number(body.maxAge);
+            if (!Number.isInteger(n) || n < 1 || n > 99) return { message: "Max age must be a whole number from 1 to 99 (U14 = 14)." };
+            out.maxAge = n;
+        }
+    }
+    if (body.gender !== undefined) {
+        const g = String(body.gender || "").trim().toLowerCase();
+        if (!CATEGORY_GENDERS.includes(g)) return { message: "Gender must be boys, girls or empty (for everyone)." };
+        out.gender = g;
+    }
+    return { values: out };
+};
+
+const ageFieldError = (res, message) =>
+    res.status(400).json({ error: true, status: 400, message, message_desc: message, data: {} });
+
 /**
  * POST /api/user/createTeamCategory
- * Body: { name }
+ * Body: { name, maxAge?, gender? }
+ *   maxAge: "U14" = 14 (season shuru 1 Aug ko umar 14 se kam). Senior = 99. Khaali = date of birth se kabhi nahi.
+ *   gender: boys | girls | "" (sabke liye, default)
  */
 const createTeamCategory = async (req, res) => {
     try {
@@ -60,8 +87,12 @@ const createTeamCategory = async (req, res) => {
             });
         }
 
+        const ageFields = parseAgeFields(req.body);
+        if (ageFields.message) return ageFieldError(res, ageFields.message);
+
         const category = await TeamCategory.create({
             name: trimmedName,
+            ...ageFields.values,
             createdBy: req.user ? req.user._id : null,
         });
 
@@ -208,7 +239,7 @@ const getTeamCategory = async (req, res) => {
 
 /**
  * PUT /api/user/updateTeamCategory/:id
- * Body: { name }
+ * Body: { name?, maxAge?, gender? }  (jo bhejo wahi badlega)
  */
 const updateTeamCategory = async (req, res) => {
     try {
@@ -233,6 +264,21 @@ const updateTeamCategory = async (req, res) => {
                 message: "Team category not found.",
                 message_desc: "Team category not found.",
                 data: {},
+            });
+        }
+
+        const ageFields = parseAgeFields(req.body);
+        if (ageFields.message) return ageFieldError(res, ageFields.message);
+        Object.assign(category, ageFields.values);
+        // Sirf maxAge / gender badla (naam nahi bheja)
+        if (name === undefined && Object.keys(ageFields.values).length) {
+            await category.save();
+            return res.status(200).json({
+                error: false,
+                status: 200,
+                message: "Team category updated successfully.",
+                message_desc: "Team category updated successfully.",
+                data: formatCategory(category),
             });
         }
 

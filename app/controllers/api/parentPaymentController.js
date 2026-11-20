@@ -15,7 +15,7 @@ const { chargeBadge, amounts, splitPlan, round } = require("../../helpers/paymen
 const { formatCharge, PLAYER_POPULATE } = require("../../helpers/chargeFormat");
 const { providerForClub, returnUrls, addEvent, syncStandingOrder, planDates, latestReceipt } = require("../../payments/service");
 const { PaymentError } = require("../../payments");
-const { ensureSeasonCharges } = require("../../helpers/autoBill");
+const { ensureSeasonCharges, syncPlanBills } = require("../../helpers/autoBill");
 const { parseSeason, currentSeason } = require("../../helpers/season");
 
 // Parent (mobile app): apne bachchon ke bills dekhna aur pay karna. Senior player apna khud.
@@ -80,6 +80,7 @@ const listMyPayments = async (req, res) => {
         const ids = await myPlayerIds(req.user);
         if (ids === null) return sendError(res, 403, "Only parents and senior players can see payments.");
 
+        await syncPlanBills(ids); // unpaid bill abhi ke Fee Plan ke price pe (admin ne price badla ho)
         await ensureSeasonCharges(ids); // is season ka bill nahi bana toh Fee Plan se ab ban jaayega
 
         const filter = { playerId: { $in: ids }, status: { $ne: "cancelled" } };
@@ -157,6 +158,7 @@ const NO_BILL_MESSAGES = {
     no_team: "Your child has no age group yet. The fee will show once an age group is set for your child.",
     no_fee: "There is no fee for your child's age group.",
     inactive: "This player is not active.",
+    senior: "Senior players don't pay the season fee.",
 };
 
 /**
@@ -182,6 +184,7 @@ const listMyChildrenPayments = async (req, res) => {
             if (!ids.length) return sendError(res, 404, "Player not found.");
         }
 
+        await syncPlanBills(ids, season.value); // unpaid bill abhi ke Fee Plan ke price pe
         const reasons = await ensureSeasonCharges(ids, season.value);
         const [players, charges] = await Promise.all([
             Player.find({ _id: { $in: ids } })
@@ -216,7 +219,7 @@ const listMyChildrenPayments = async (req, res) => {
                 paidAmount: round(totalAmount - outstanding),
                 outstandingAmount: outstanding,
                 message: subscriptionBill ? "" : NO_BILL_MESSAGES[reason] || "",
-                noBillReason: subscriptionBill ? null : reason, // no_plan | no_team | no_fee | inactive
+                noBillReason: subscriptionBill ? null : reason, // no_plan | no_team | no_fee | inactive | senior
                 bills, // har bill: items, badge, options (pay once / monthly)
             };
         });
@@ -243,8 +246,15 @@ const listMyChildrenPayments = async (req, res) => {
  */
 const checkoutCharge = async (req, res) => {
     try {
-        const { charge, status, message } = await findMyCharge(req, req.params.id, "+events");
+        let { charge, status, message } = await findMyCharge(req, req.params.id, "+events");
         if (!charge) return sendError(res, status, message);
+
+        // Pay se theek pehle: Fee Plan ka price badla ho toh bill abhi ke price pe (same _id). Fee hi hat gayi toh bill bhi nahi.
+        if (charge.feePlanId) {
+            await syncPlanBills([charge.playerId?._id || charge.playerId], charge.season);
+            ({ charge } = await findMyCharge(req, req.params.id, "+events"));
+            if (!charge) return sendError(res, 409, "This fee is no longer due. Please refresh your payments.");
+        }
 
         const badge = chargeBadge(charge);
         if (!["unpaid", "overdue", "pending"].includes(badge) && charge.status !== "failed") {
