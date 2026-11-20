@@ -874,6 +874,7 @@ const appendDocuments = async (pdf, fonts, docs) => {
  * @param {object} form      parseForm101() ka output
  * @param {object} employer  { name, address, phone, taxId, deductionFileNumber }
  * @param {object} files     { signature: { data, mimetype }, idCard: [file], attachments: [file], signedAt: "dd/mm/yyyy" }
+ *                           preview: true = draft preview (signature nahi, jagah khaali)
  *                           file = express-fileupload object ({ data: Buffer, mimetype, name })
  * @returns {Promise<Buffer>}
  */
@@ -889,15 +890,20 @@ const buildForm101Pdf = async (form, employer, files) => {
         bold: await pdf.embedFont(bytes.bold, { subset: true }),
     };
 
+    // Draft preview mein signature nahi hota (kabhi save nahi), jagah khaali rehti hai
     let signatureImage = null;
-    try {
-        signatureImage = files.signature.mimetype === "image/png" ? await pdf.embedPng(files.signature.data) : await pdf.embedJpg(files.signature.data);
-    } catch (e) {
-        throw new Form101AttachmentError("Signature could not be read as an image.");
+    if (files.signature) {
+        try {
+            signatureImage = files.signature.mimetype === "image/png" ? await pdf.embedPng(files.signature.data) : await pdf.embedJpg(files.signature.data);
+        } catch (e) {
+            throw new Form101AttachmentError("Signature could not be read as an image.");
+        }
+    } else if (!files.preview) {
+        throw new Form101AttachmentError("Signature is required.");
     }
 
     drawPage1(new Sheet(pdf.addPage(A4), fonts), form, employer);
-    drawPage2(new Sheet(pdf.addPage(A4), fonts), form, signatureImage, files.signedAt);
+    drawPage2(new Sheet(pdf.addPage(A4), fonts), form, signatureImage, files.signedAt || "");
     if (form.children.length > CHILD_ROWS) drawChildrenContinuation(new Sheet(pdf.addPage(A4), fonts), form);
 
     await appendDocuments(pdf, fonts, [

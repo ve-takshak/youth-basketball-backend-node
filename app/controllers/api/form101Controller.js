@@ -5,7 +5,7 @@ const ClubAdmin = require("../../models/ClubAdmin");
 const Form101Submission = require("../../models/Form101Submission");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId } = require("../../helpers/common");
-const { parseForm101, Form101Error, CREDIT_DOCUMENTS } = require("../../helpers/form101Fields");
+const { parseForm101, parseForm101Draft, Form101Error, CREDIT_DOCUMENTS } = require("../../helpers/form101Fields");
 const { buildForm101Pdf, Form101PdfNotReady, Form101AttachmentError } = require("../../helpers/form101Pdf");
 const { sendMail } = require("../../../utils/mailer");
 const { savePdf, readPdf, deletePdf, Form101StorageError } = require("../../helpers/form101Storage");
@@ -16,7 +16,10 @@ const { saveDraftFile, readDraftFile, deleteDraftFiles, setDraftFilesExpiry } = 
 
 // Form 101 (טופס 101) — coach mobile app se bharta hai.
 //   GET  /user/coach/form101                   coach: club ka employer data (read-only) + profile prefill + status + saved data
-//   PUT  /user/coach/form101/draft             coach: adhoora form save (1 mahina rehta hai)
+//   PUT  /user/coach/form101/draft             coach: adhoora form save (7 din rehta hai)
+//   GET  /user/coach/form101/preview-link      coach: apne saved form (draft / submitted) ka PDF preview, 5 min link
+//   GET  /user/coaches/:id/form101/preview-link  club admin: coach ke saved form ka PDF preview, 5 min link
+//   GET  /form101/preview/:token               bina login: preview link wala PDF (abhi ke saved data se banta hai)
 //   DELETE /user/coach/form101/draft           coach: saved data hatao, shuru se bharo
 //   GET  /user/coach/form101/saved             coach: reject hua form / adhoora form ka bhara data + documents + reason
 //   GET  /form101/saved-file/:token            bina login: saved document ka 30 min link (coach ke liye)
@@ -32,9 +35,10 @@ const { saveDraftFile, readDraftFile, deleteDraftFiles, setDraftFilesExpiry } = 
 //   GET  /user/clubs/:id/form101-mandatory     club admin: mandatory on/off + is saal ka count
 //   PUT  /user/clubs/:id/form101-mandatory     club admin: { mandatory: true|false }
 //
-// STORAGE: PDF club admin (+ accounting) ko email hoti hai, aur (client ke kehne pe) encrypted save hoti hai
+// STORAGE: PDF club admin (+ accounting) aur coach (employee) ko email hoti hai, aur (client ke kehne pe) encrypted save hoti hai
 // (GridFS, helpers/form101Storage.js). Har coach ka har saal sirf aakhri PDF. Download sirf club admin (super admin ko abhi Form 101 ka access nahi).
-// Form ke fields (client ke kehne pe): models/Form101Draft mein ENCRYPTED, sirf 1 mahina (TTL), approve hote hi delete.
+// Form ke fields (client ke kehne pe): models/Form101Draft mein ENCRYPTED, sirf 7 din (TTL), status kuch bhi ho (draft /
+// submitted / returned / approved). Har save / submit / return / approve pe 7 din phir se.
 // Coach ko wapas pre-fill ke liye. Logs mein kabhi nahi. Files (signature, ID, documents) save nahi hoti.
 
 const TIME_ZONE = "Asia/Jerusalem";
@@ -151,7 +155,7 @@ const formatStatus = (sub, year, settings = {}, { admin = false } = {}) => {
 };
 
 // ---------- Saved form data (draft) ----------
-// Client: bhara hua data 1 mahina DB mein (encrypted), approve hote hi delete. Files kabhi save nahi.
+// Client: bhara hua data 7 din DB mein (encrypted), status kuch bhi ho. Signature kabhi save nahi.
 const MAX_DRAFT_BYTES = 200 * 1024;
 
 // App jo JSON bhejta hai wahi rakhte hain (adhoora bhi chalega), bas signature / base64 files hata ke
@@ -174,7 +178,7 @@ const saveDraft = async ({ coach, year, data, source, files }) => {
     return draft;
 };
 
-// Return pe: data + files 1 mahina aur
+// Return / approve pe: data + files 7 din aur
 const extendDraft = async (coachId, year) => {
     const expiresAt = draftExpiry();
     const draft = await Form101Draft.findOneAndUpdate({ coachId, year }, { expiresAt }, { new: true });
@@ -307,7 +311,7 @@ const draftFieldLimit = (field) => (field === "idCard" ? 2 : field === "attachme
  *               + keepFiles (JSON array, /saved ke files[]._id jo rakhne hain)
  *               -> documents ki list = keepFiles + nayi files. Jo na kept na naya, wo delete.
  * Adhoora form chalega (koi validation nahi, reason select ho ya na ho). Signature save nahi hota.
- * 1 mahina rehta hai (har save pe phir se 1 mahina).
+ * 7 din rehta hai (har save pe phir se 7 din).
  */
 const saveMyForm101Draft = async (req, res) => {
     try {
@@ -392,7 +396,7 @@ const saveMyForm101Draft = async (req, res) => {
  * GET /user/coach/form101/saved   (coach)
  * Form wapas aaya (rejected / returned) ya adhoora chhoda: coach ne jo bhara tha wo + reject ka reason.
  * App isse form pre-fill kare, coach sirf galat cheez theek karke dobara submit kare.
- *   hasSavedForm false = kuch save nahi (1 mahina nikal gaya / approve ho gaya / kabhi bhara nahi) -> khali form
+ *   hasSavedForm false = kuch save nahi (7 din nikal gaye / kabhi bhara nahi) -> khali form
  *   form = wahi JSON structure jo submit ke "data" mein jaata hai
  *   files = pichhle submit ke documents (ID card, ח / ט documents, attachments), har ek ka 30 min ka link.
  *           Resubmit pe jo rakhni hai unke _id "keepFiles" mein bhejo, dobara upload nahi karni.
@@ -463,8 +467,8 @@ const deleteMyForm101Draft = async (req, res) => {
  *               Jo id ab saved nahi (purani / expire) wo chhod di jaati hai, response mein skippedKeepFiles.
  *               Document badla? Us purani file ki id keepFiles se hata do, nayi file us field mein bhejo.
  * Email fail = status nahi badalta, coach dobara bheje.
- * Success pe: PDF (encrypted) + status save, aur bhara hua data + documents (signature nahi) 1 mahine ke liye
- * (wapas aaye toh pre-fill). Approve hote hi data + documents delete.
+ * Success pe: PDF (encrypted) + status save, aur bhara hua data + documents (signature nahi) 7 din ke liye
+ * (wapas aaye toh pre-fill / preview). Approve ke baad bhi 7 din. Email: club admin (+ accounting) aur coach dono ko.
  */
 const submitMyForm101 = async (req, res) => {
     try {
@@ -626,10 +630,33 @@ const submitMyForm101 = async (req, res) => {
         } catch (e) {
             console.error("Form 101 email failed:", e?.message || e);
             await deletePdf(fileId);
-            return sendError(res, 502, "We could not send your form. Please try again.");
-        } finally {
             pdf = null;
+            return sendError(res, 502, "We could not send your form. Please try again.");
         }
+
+        // ---- employee (coach) ko bhi copy. Alag email, taaki club admins ke email coach ko na dikhein. ----
+        // Form ka email + account ka email (jo club admin list mein pehle se hai wo nahi). Fail hua toh bhi submit ho chuka, sirf log.
+        const sent = new Set(recipients.map((e) => String(e).toLowerCase()));
+        const employeeTo = [...new Set([form.employee.email, req.user.email].filter(Boolean).map((e) => String(e).trim().toLowerCase()))].filter((e) => !sent.has(e));
+        let employeeEmailSent = false;
+        if (employeeTo.length) {
+            try {
+                await sendMail({
+                    to: employeeTo,
+                    subject: `Your Form 101 ${year}${isResubmit ? " (resubmitted)" : ""} - ${club.legalName || club.name || "your club"}`,
+                    text:
+                        `Hi ${form.employee.firstName || fullName},\n\n` +
+                        `Your Form 101 for ${year} has been ${isResubmit ? "resubmitted" : "submitted"} to ${club.legalName || club.name || "your club"}.\n` +
+                        `A copy of the completed form is attached for your records.` +
+                        (club.form101Settings?.requireApproval ? `\nYour club admin will review it. You will see the result in the app.` : ""),
+                    attachments: [{ filename, content: pdf, contentType: "application/pdf" }],
+                });
+                employeeEmailSent = true;
+            } catch (e) {
+                console.error("Form 101 employee email failed:", e?.message || e);
+            }
+        }
+        pdf = null;
 
         // ---- status + PDF reference (purani PDF delete) ----
         const now = new Date();
@@ -651,7 +678,7 @@ const submitMyForm101 = async (req, res) => {
         }
         if (oldFileId && String(oldFileId) !== String(fileId)) await deletePdf(oldFileId);
 
-        // Bhara hua data + documents (signature nahi) 1 mahina rakho: club admin wapas bheje toh coach ko sirf galat
+        // Bhara hua data + documents (signature nahi) 7 din rakho: club admin wapas bheje toh coach ko sirf galat
         // cheez theek karni ho. keepFiles wali files pehle se saved hain, sirf nayi upload save hoti hain.
         // Fail hua toh bhi submit ho chuka hai, isliye sirf log.
         const newlySaved = [];
@@ -680,7 +707,8 @@ const submitMyForm101 = async (req, res) => {
 
         return sendOk(res, "Form 101 submitted.", {
             status: formatStatus(sub, year, settingsOf(club)),
-            sentTo: recipients.length,
+            sentTo: recipients.length, // club admins + accounting
+            employeeEmailSent, // coach ko copy gayi (form / account ka email)
             requiresApproval: !!club.form101Settings?.requireApproval,
             ...(mail?.skipped ? { emailSkipped: true } : {}),
             // keepFiles ki jo id ab saved nahi thi (purani / expire), chhod di gayi. App apni list refresh kare.
@@ -703,10 +731,11 @@ const listForm101Status = async (req, res) => {
         const year = Number(req.query.year) || currentTaxYear();
         if (year < 2000 || year > 2100) return sendError(res, 400, "Invalid year.");
 
-        const [coaches, subs, settings] = await Promise.all([
+        const [coaches, subs, settings, saved] = await Promise.all([
             Coach.find({ clubId }).populate("userId", "firstname lastname profile_image"),
             Form101Submission.find({ clubId, year }),
             settingsFor(clubId),
+            savedFormsOf(clubId, year),
         ]);
         const subByCoach = new Map(subs.map((s) => [String(s.coachId), s]));
 
@@ -718,6 +747,7 @@ const listForm101Status = async (req, res) => {
                 lastname: c.userId?.lastname || "",
                 profile_image: c.userId?.profile_image || "",
                 ...formatStatus(sub, year, settings, { admin: true }),
+                ...savedFormFields(saved.get(String(c._id))),
                 timeline: timelineOf(sub),
             };
         });
@@ -759,12 +789,13 @@ const listSubmittedForm101 = async (req, res) => {
         const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
         const search = String(req.query.search || "").trim().toLowerCase().slice(0, 100);
 
-        const [subs, settings] = await Promise.all([
+        const [subs, settings, saved] = await Promise.all([
             Form101Submission.find({ clubId, year, ...(status ? { status } : {}) })
                 .sort({ submittedAt: -1 })
                 .populate({ path: "coachId", select: "userId", populate: { path: "userId", select: "firstname lastname email countryCode mobileNumber profile_image" } })
                 .populate("reviewedBy", "firstname lastname"),
             settingsFor(clubId),
+            savedFormsOf(clubId, year),
         ]);
 
         // Sirf zaroori fields. Poori timeline / history: GET /user/coaches/:coachId/form101/history
@@ -786,6 +817,7 @@ const listSubmittedForm101 = async (req, res) => {
                 reviewedAt: sub.reviewedAt || null,
                 reviewedBy: reviewer ? `${reviewer.firstname || ""} ${reviewer.lastname || ""}`.trim() : "",
                 hasPdf: !!sub.pdf?.fileId,
+                ...savedFormFields(saved.get(String(sub.coachId?._id))),
             };
         });
 
@@ -839,10 +871,9 @@ const reviewForm101 = async (req, res) => {
         sub.history.push({ status: sub.status, at: now, by: req.user._id, reason: sub.returnReason });
         await sub.save();
 
-        // Client rule: approve = successfully finished -> bhara hua data delete (status row + PDF rehte hain).
-        // Wapas bheja -> data 1 mahina aur, coach ko theek karne ka time.
-        if (action === "approve") await deleteDraft(sub.coachId, sub.year);
-        else await extendDraft(sub.coachId, sub.year);
+        // Client rule (Nov 2026): status kuch bhi ho, bhara hua data 7 din rehta hai. Approve / wapas bheja -> 7 din aur,
+        // phir apne aap delete (status row + PDF rehte hain).
+        await extendDraft(sub.coachId, sub.year);
 
         return sendOk(res, action === "approve" ? "Form 101 approved." : "Form 101 sent back to the coach.", { status: formatStatus(sub, sub.year, await settingsFor(sub.clubId), { admin: true }) });
     } catch (e) {
@@ -975,6 +1006,158 @@ const downloadForm101PdfByLink = async (req, res) => {
     }
 };
 
+// ---------- draft preview (saved data ka PDF, 5 min link) ----------
+// Coach ne jo bhara hai (adhoora draft ya aakhri submit ka data) usi se PDF abhi banta hai. Kahin save nahi hota.
+// Signature kabhi save nahi hota, isliye uski jagah khaali.
+const PREVIEW_LINK_TYPE = "form101-preview";
+
+// Saved data check (PDF nahi): kya preview ho sakta hai + kya kya abhi bharna baaki hai
+const previewInfoOf = (draft, year) => {
+    const { issues } = parseForm101Draft(draft.data, year);
+    return { source: draft.source, savedAt: draft.savedAt, savedUntil: draft.expiresAt, missing: [...new Set(issues)] };
+};
+
+const previewLinkOf = (req, coachId, year) => {
+    const token = jwt.sign({ type: PREVIEW_LINK_TYPE, cid: String(coachId), year, by: String(req.user._id) }, process.env.JWTKEY, {
+        algorithm: "HS256",
+        expiresIn: `${LINK_MINUTES}m`,
+    });
+    return { url: `${apiBaseOf(req)}/api/form101/preview/${token}`, expiresAt: new Date(Date.now() + LINK_MINUTES * 60 * 1000) };
+};
+
+// Draft ki saved files -> PDF ke documents (submit jaisa label). File na khule toh chhod do.
+const previewDocumentsOf = async (files, form) => {
+    const out = { idCard: [], creditDocs: [], attachments: [] };
+    const coordLabel = form.taxCoordination.reason === "assessorApproved" ? "אישור פקיד השומה לתיאום מס" : "תלושי שכר מהכנסות נוספות";
+    for (const meta of files || []) {
+        let data;
+        try {
+            data = await readDraftFile(meta.fileId);
+        } catch (e) {
+            console.error("Form 101 preview file read failed:", e?.message || e);
+            continue;
+        }
+        const file = { data, mimetype: meta.mimetype, name: meta.filename };
+        if (meta.field === "idCard") out.idCard.push(file);
+        else if (meta.field === "attachments") out.attachments.push(file);
+        else if (meta.field === "doc_taxCoordination") out.creditDocs.push({ ...file, label: `חלק ט: ${coordLabel}` });
+        else if (meta.field.startsWith("doc_") && CREDIT_DOCUMENTS[meta.field.slice(4)]) {
+            const info = CREDIT_DOCUMENTS[meta.field.slice(4)];
+            out.creditDocs.push({ ...file, label: `חלק ח סעיף ${info.num}: ${info.label}` });
+        }
+    }
+    out.idCard = out.idCard.slice(0, 2);
+    return out;
+};
+
+/**
+ * GET /user/coach/form101/preview-link   (coach: apna form)
+ * Saved form (adhoora draft ya bheja hua) ka PDF preview. Response:
+ *   { url, expiresAt, filename, source: draft | submitted, savedAt, savedUntil, missing: ["Last name is required.", ...] }
+ *   url 5 min, bina token khulta hai (browser mein dikhta hai). missing = submit se pehle kya bharna baaki.
+ * Kuch saved nahi -> 404.
+ */
+const getMyForm101PreviewLink = async (req, res) => {
+    try {
+        const { coach, status, message } = await coachOf(req);
+        if (!coach) return sendError(res, status, message);
+        const year = currentTaxYear();
+        const draft = await draftOf(coach._id, year);
+        if (!draft) return sendError(res, 404, "No saved Form 101 to preview. Please fill and save the form first.");
+
+        return sendOk(res, "Preview link created.", {
+            ...previewLinkOf(req, coach._id, year),
+            filename: pdfFilename(year, `${req.user.firstname || ""} ${req.user.lastname || ""}`.trim()).replace(/\.pdf$/, "_DRAFT.pdf"),
+            ...previewInfoOf(draft, year),
+        });
+    } catch (e) {
+        return sendServerError(res, "getMyForm101PreviewLink", e);
+    }
+};
+
+/**
+ * GET /user/coaches/:id/form101/preview-link?year=   (club admin: apne club ka coach)
+ * Coach ka saved form (adhoora / bheja hua) PDF mein. Response coach wale jaisa. Kuch saved nahi -> 404.
+ */
+const getCoachForm101PreviewLink = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isValidId(id)) return sendError(res, 400, "Invalid coach id.");
+        const coach = await Coach.findById(id).select("clubId userId").populate("userId", "firstname lastname");
+        if (!coach || String(coach.clubId) !== String(req.clubId)) return sendError(res, 404, "Coach not found.");
+
+        const year = Number(req.query.year) || currentTaxYear();
+        if (year < 2000 || year > 2100) return sendError(res, 400, "Invalid year.");
+        const draft = await draftOf(coach._id, year);
+        if (!draft) return sendError(res, 404, "This coach has no saved Form 101 data to preview.");
+
+        return sendOk(res, "Preview link created.", {
+            ...previewLinkOf(req, coach._id, year),
+            filename: pdfFilename(year, `${coach.userId?.firstname || ""} ${coach.userId?.lastname || ""}`.trim()).replace(/\.pdf$/, "_DRAFT.pdf"),
+            ...previewInfoOf(draft, year),
+        });
+    } catch (e) {
+        return sendServerError(res, "getCoachForm101PreviewLink", e);
+    }
+};
+
+/**
+ * GET /form101/preview/:token   (bina login, link hi permission hai). preview-link se mila url.
+ * Har baar abhi ka saved data (link ke baad coach ne save kiya toh naya data dikhega). inline = browser mein khulta hai.
+ */
+const downloadForm101Preview = async (req, res) => {
+    try {
+        let payload;
+        try {
+            payload = jwt.verify(req.params.token, process.env.JWTKEY, { algorithms: ["HS256"] });
+        } catch (e) {
+            return sendError(res, e.name === "TokenExpiredError" ? 410 : 400, e.name === "TokenExpiredError" ? "This preview link has expired. Please open the preview again." : "Invalid preview link.");
+        }
+        if (payload.type !== PREVIEW_LINK_TYPE || !isValidId(payload.cid) || !Number.isInteger(payload.year)) return sendError(res, 400, "Invalid preview link.");
+
+        const coach = await Coach.findById(payload.cid).select("clubId");
+        const club = coach ? await Club.findById(coach.clubId) : null;
+        if (!club) return sendError(res, 404, "Coach not found.");
+        const draft = await draftOf(coach._id, payload.year);
+        if (!draft) return sendError(res, 410, "This saved form is no longer available.");
+
+        const { form } = parseForm101Draft(draft.data, payload.year);
+        let pdf;
+        try {
+            pdf = await buildForm101Pdf(form, employerOf(club), { preview: true, ...(await previewDocumentsOf(draft.files, form)) });
+        } catch (e) {
+            if (e instanceof Form101AttachmentError) return sendError(res, 422, e.message);
+            if (e instanceof Form101PdfNotReady) return sendError(res, 503, "Form 101 is not available yet. Please try again later.");
+            throw e;
+        }
+
+        const fullName = `${form.employee.firstName} ${form.employee.lastName}`.trim();
+        const filename = pdfFilename(payload.year, fullName).replace(/\.pdf$/, "_DRAFT.pdf");
+        const ascii = filename.replace(/[^\x20-\x7E]+/g, "_").replace(/"/g, "");
+        res.set({
+            "Content-Type": "application/pdf",
+            "Content-Length": pdf.length,
+            "Content-Disposition": `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        });
+        return res.status(200).end(pdf);
+    } catch (e) {
+        return sendServerError(res, "downloadForm101Preview", e);
+    }
+};
+
+// Admin lists ke liye: kis coach ka saved form hai (preview button). Map(coachId -> { source, savedAt, savedUntil })
+const savedFormsOf = async (clubId, year) => {
+    const rows = await Form101Draft.find({ clubId, year, expiresAt: { $gt: new Date() } }).select("coachId source savedAt expiresAt").lean();
+    return new Map(rows.map((r) => [String(r.coachId), { source: r.source, savedAt: r.savedAt, savedUntil: r.expiresAt }]));
+};
+const savedFormFields = (saved) => ({
+    hasSavedForm: !!saved, // preview button: GET /user/coaches/:coachId/form101/preview-link
+    savedFormSource: saved?.source || null, // draft = adhoora, submitted = bheja hua data
+    savedFormUntil: saved?.savedUntil || null,
+});
+
 /**
  * GET /user/coaches/:id/form101   (club admin: apne club ka coach)
  * Ek coach ka is saal ka status + timeline + pichhle saalon ka record. Form ka data nahi (wo save hi nahi hota).
@@ -989,9 +1172,10 @@ const getCoachForm101 = async (req, res) => {
         }
 
         const year = currentTaxYear();
-        const [subs, settings] = await Promise.all([
+        const [subs, settings, saved] = await Promise.all([
             Form101Submission.find({ coachId: coach._id }).sort({ year: -1 }),
             settingsFor(coach.clubId),
+            savedFormsOf(coach.clubId, year),
         ]);
         const current = subs.find((s) => s.year === year);
 
@@ -999,6 +1183,7 @@ const getCoachForm101 = async (req, res) => {
             taxYear: year,
             ...settings,
             status: formatStatus(current, year, settings, { admin: true }),
+            ...savedFormFields(saved.get(String(coach._id))),
             timeline: timelineOf(current),
             years: subs.map((s) => ({ ...formatStatus(s, s.year, settings, { admin: true }), timeline: timelineOf(s) })),
         });
@@ -1191,6 +1376,9 @@ module.exports = {
     getCoachForm101History,
     getForm101PdfLink,
     downloadForm101PdfByLink,
+    getMyForm101PreviewLink,
+    getCoachForm101PreviewLink,
+    downloadForm101Preview,
     getForm101Settings,
     updateForm101Settings,
     getForm101Mandatory,

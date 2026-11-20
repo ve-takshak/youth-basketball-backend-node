@@ -30,7 +30,14 @@ const COORDINATION_REASONS = ["", "noIncomeSinceYearStart", "additionalIncome", 
 const CHILD_AGE_GROUPS = ["bornThisYear", "age1to2", "age3", "age4to5", "age6to17", "age18"];
 
 class Form101Error extends Error {}
-const fail = (message) => {
+// Draft preview (adhoora form ka PDF): error nahi, message "issues" mein jaata hai aur field khaali (fallback) rehta hai.
+// Submit mein hamesha throw. Parsing sync hai, isliye module ka flag safe hai.
+let draftIssues = null;
+const fail = (message, fallback) => {
+    if (draftIssues) {
+        draftIssues.push(message);
+        return fallback;
+    }
     throw new Form101Error(message);
 };
 
@@ -40,7 +47,7 @@ const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
 const str = (value, label, { required = false, max = 100 } = {}) => {
     const out = value === undefined || value === null ? "" : String(value).trim();
     if (required && !out) fail(`${label} is required.`);
-    if (out.length > max) fail(`${label} must be ${max} characters or fewer.`);
+    if (out.length > max) return fail(`${label} must be ${max} characters or fewer.`, out.slice(0, max));
     return out;
 };
 
@@ -52,7 +59,7 @@ const oneOf = (value, list, label, { required = false } = {}) => {
         if (required) fail(`${label} is required.`);
         return "";
     }
-    if (!list.includes(out)) fail(`${label} must be one of: ${list.filter(Boolean).join(", ")}.`);
+    if (!list.includes(out)) return fail(`${label} must be one of: ${list.filter(Boolean).join(", ")}.`, "");
     return out;
 };
 
@@ -63,9 +70,9 @@ const date = (value, label, { required = false, notFuture = false } = {}) => {
         if (required) fail(`${label} is required.`);
         return "";
     }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(out)) fail(`${label} must be a date in YYYY-MM-DD format.`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(out)) return fail(`${label} must be a date in YYYY-MM-DD format.`, "");
     const d = new Date(`${out}T00:00:00Z`);
-    if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== out) fail(`${label} is not a valid date.`);
+    if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== out) return fail(`${label} is not a valid date.`, "");
     if (notFuture && d.getTime() > Date.now()) fail(`${label} cannot be in the future.`);
     return out;
 };
@@ -73,7 +80,7 @@ const date = (value, label, { required = false, notFuture = false } = {}) => {
 const count = (value, label, max = 20) => {
     if (value === undefined || value === null || value === "") return 0;
     const n = Number(value);
-    if (!Number.isInteger(n) || n < 0 || n > max) fail(`${label} must be a whole number from 0 to ${max}.`);
+    if (!Number.isInteger(n) || n < 0 || n > max) return fail(`${label} must be a whole number from 0 to ${max}.`, 0);
     return n;
 };
 
@@ -83,20 +90,20 @@ const digits = (value, label, { required = false, min = 1, max = 15 } = {}) => {
         if (required) fail(`${label} is required.`);
         return "";
     }
-    if (!new RegExp(`^\\d{${min},${max}}$`).test(out)) fail(`${label} must be ${min === max ? min : `${min} to ${max}`} digits.`);
+    if (!new RegExp(`^\\d{${min},${max}}$`).test(out)) return fail(`${label} must be ${min === max ? min : `${min} to ${max}`} digits.`, "");
     return out;
 };
 
 const money = (value, label) => {
     if (value === undefined || value === null || value === "") return "";
     const n = Number(String(value).replace(/,/g, ""));
-    if (!Number.isFinite(n) || n < 0 || n > 10000000) fail(`${label} must be a valid amount.`);
+    if (!Number.isFinite(n) || n < 0 || n > 10000000) return fail(`${label} must be a valid amount.`, "");
     return n;
 };
 
 const email = (value, label, { required = false } = {}) => {
     const out = str(value, label, { required, max: 150 }).toLowerCase();
-    if (out && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(out)) fail(`${label} is not a valid email.`);
+    if (out && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(out)) return fail(`${label} is not a valid email.`, "");
     return out;
 };
 
@@ -106,7 +113,7 @@ const phone = (value, label, { required = false } = {}) => {
         if (required) fail(`${label} is required.`);
         return "";
     }
-    if (!/^\+?\d{9,15}$/.test(out)) fail(`${label} must be 9 to 15 digits.`);
+    if (!/^\+?\d{9,15}$/.test(out)) return fail(`${label} must be 9 to 15 digits.`, "");
     return out;
 };
 
@@ -129,7 +136,7 @@ const israeliId = (value, label, { required = false } = {}) => {
         if (required) fail(`${label} is required.`);
         return "";
     }
-    if (!isValidIsraeliId(out)) fail(`${label} is not a valid Israeli ID number.`);
+    if (!isValidIsraeliId(out)) return fail(`${label} is not a valid Israeli ID number.`, "");
     return out.padStart(9, "0");
 };
 
@@ -137,7 +144,7 @@ const israeliId = (value, label, { required = false } = {}) => {
 // identifyBy na bheja ho toh: idNumber hai = "id", warna "passport".
 const idOrPassport = (src, label) => {
     const identifyBy = oneOf(src.identifyBy || (src.idNumber ? "id" : src.passportNumber ? "passport" : ""), IDENTIFY_BY, `${label} identify by`, { required: true });
-    if (identifyBy === "id") {
+    if (identifyBy !== "passport") {
         return { identifyBy, idNumber: israeliId(src.idNumber, `${label} ID number`, { required: true }), passportNumber: "", passportCountry: "" };
     }
     return {
@@ -151,7 +158,7 @@ const idOrPassport = (src, label) => {
 // Kibbutz / moshav: { member: true, incomeTransferred: true|false }. Purana string ("no"/"transferred"/"notTransferred") bhi chalta hai.
 const parseKibbutz = (value) => {
     if (typeof value === "string") {
-        const old = oneOf(value || "no", KIBBUTZ_OPTIONS, "Kibbutz / cooperative moshav member");
+        const old = oneOf(value || "no", KIBBUTZ_OPTIONS, "Kibbutz / cooperative moshav member") || "no";
         return { member: old !== "no", incomeTransferred: old === "transferred" };
     }
     const k = isObj(value) ? value : {};
@@ -179,7 +186,7 @@ const contactOf = (src) => {
 
 // ב. פרטי העובד/ת
 const parseEmployee = (src) => {
-    if (!isObj(src)) fail("Employee details are required.");
+    if (!isObj(src)) src = fail("Employee details are required.", {});
     const address = isObj(src.address) ? src.address : {};
     const healthFund = isObj(src.healthFund) ? src.healthFund : {};
     if (healthFund.member === undefined) fail("Health fund member (yes / no) is required.");
@@ -202,7 +209,7 @@ const parseEmployee = (src) => {
         email: email(src.email, "Email", { required: true }),
         gender: oneOf(src.gender, GENDERS, "Gender", { required: true }),
         maritalStatus: oneOf(src.maritalStatus, MARITAL_STATUSES, "Marital status", { required: true }),
-        israeliResident: src.israeliResident === undefined ? fail("Israeli resident (yes / no) is required.") : bool(src.israeliResident),
+        israeliResident: src.israeliResident === undefined ? fail("Israeli resident (yes / no) is required.", false) : bool(src.israeliResident),
         kibbutz: parseKibbutz(src.kibbutz),
         healthFund: {
             member,
@@ -214,14 +221,14 @@ const parseEmployee = (src) => {
 // ג. ילדים שבשנת המס טרם מלאו להם 19
 const parseChildren = (list, taxYear) => {
     if (list === undefined || list === null || list === "") return [];
-    if (!Array.isArray(list)) fail("Children must be a list.");
+    if (!Array.isArray(list)) return fail("Children must be a list.", []);
     if (list.length > 15) fail("A maximum of 15 children can be listed.");
 
     return list.map((c, i) => {
         const label = `Child ${i + 1}`;
-        if (!isObj(c)) fail(`${label}: details are missing.`);
+        if (!isObj(c)) c = fail(`${label}: details are missing.`, {});
         const birthDate = date(c.birthDate, `${label} date of birth`, { required: true, notFuture: true });
-        if (taxYear - Number(birthDate.slice(0, 4)) > 18) fail(`${label}: only children under 19 in the tax year are listed.`);
+        if (birthDate && taxYear - Number(birthDate.slice(0, 4)) > 18) fail(`${label}: only children under 19 in the tax year are listed.`);
         return {
             firstName: str(c.firstName, `${label} first name`, { required: true, max: 50 }),
             idNumber: israeliId(c.idNumber, `${label} ID number`, { required: true }),
@@ -234,7 +241,7 @@ const parseChildren = (list, taxYear) => {
 
 // ד. פרטים על הכנסותיי ממעסיק זה
 const parseEmployerIncome = (src) => {
-    if (!isObj(src)) fail("Income from this employer is required.");
+    if (!isObj(src)) src = fail("Income from this employer is required.", {});
     return {
         type: oneOf(src.type, INCOME_TYPES, "Income type from this employer", { required: true }),
         startDate: date(src.startDate, "Work start date in the tax year", { required: true }),
@@ -244,6 +251,7 @@ const parseEmployerIncome = (src) => {
 // ה. פרטים על הכנסות אחרות
 const parseOtherIncome = (src) => {
     if (!isObj(src) || src.hasOther === undefined) fail("Please answer whether you have other incomes.");
+    if (!isObj(src)) src = {}; // sirf draft preview mein yahan tak aata hai
     const hasOther = bool(src.hasOther);
     if (!hasOther) return { hasOther: false, types: [], creditPoints: "", noStudyFund: false, noPension: false };
 
@@ -270,7 +278,7 @@ const spouseIncomeTypes = (src) => {
 // ו. פרטים על בן/בת הזוג (sirf married)
 const parseSpouse = (src, maritalStatus) => {
     if (maritalStatus !== "married") return null;
-    if (!isObj(src)) fail("Spouse details are required for married employees.");
+    if (!isObj(src)) src = fail("Spouse details are required for married employees.", {});
     const hasIncome = src.hasIncome === undefined ? fail("Please answer whether your spouse has income.") : bool(src.hasIncome);
 
     return {
@@ -288,7 +296,7 @@ const parseSpouse = (src, maritalStatus) => {
 // ז. שינויים במהלך השנה (optional)
 const parseChanges = (list) => {
     if (list === undefined || list === null || list === "") return [];
-    if (!Array.isArray(list)) fail("Changes must be a list.");
+    if (!Array.isArray(list)) return fail("Changes must be a list.", []);
     if (list.length > 3) fail("A maximum of 3 changes can be listed.");
     return list.map((c, i) => ({
         date: date(c?.date, `Change ${i + 1} date`, { required: true }),
@@ -392,9 +400,10 @@ const parseTaxCoordination = (src) => {
     let incomes = [];
 
     if (reason === "additionalIncome") {
-        if (!Array.isArray(t.incomes) || !t.incomes.length) fail("Please list your additional salary incomes.");
-        if (t.incomes.length > 3) fail("A maximum of 3 additional incomes can be listed.");
-        incomes = t.incomes.map((row, i) => {
+        const rows = Array.isArray(t.incomes) ? t.incomes : [];
+        if (!rows.length) fail("Please list your additional salary incomes.");
+        if (rows.length > 3) fail("A maximum of 3 additional incomes can be listed.");
+        incomes = rows.slice(0, 3).map((row, i) => {
             const label = `Additional income ${i + 1}`;
             const r = isObj(row) ? row : {};
             return {
@@ -432,7 +441,7 @@ const CREDIT_DOCUMENTS = {
  * @returns saaf kiya hua form object (sirf PDF banane ke liye, save nahi hota)
  */
 const parseForm101 = (body, taxYear) => {
-    if (!isObj(body)) fail("Form data is missing.");
+    if (!isObj(body)) body = fail("Form data is missing.", {});
 
     const employee = parseEmployee(body.employee);
     const otherIncome = parseOtherIncome(body.otherIncome);
@@ -455,8 +464,24 @@ const parseForm101 = (body, taxYear) => {
     };
 };
 
+/**
+ * Draft preview ke liye: adhoora form bhi chalega, kabhi error nahi.
+ * Galat / khaali field PDF mein khaali, aur unke messages "issues" mein. Declaration (י) ki zarurat nahi.
+ * @returns { form, issues: [string] }
+ */
+const parseForm101Draft = (body, taxYear) => {
+    draftIssues = [];
+    try {
+        const form = parseForm101(body, taxYear);
+        return { form, issues: draftIssues.filter((m) => !/declaration/i.test(m)) };
+    } finally {
+        draftIssues = null;
+    }
+};
+
 module.exports = {
     parseForm101,
+    parseForm101Draft,
     CREDIT_DOCUMENTS,
     IDENTIFY_BY,
     HEALTH_FUNDS,

@@ -2,10 +2,10 @@ const mongoose = require("../../config/database");
 const { encryptBuffer, decryptBuffer } = require("./secretBox");
 
 // Form 101 ke documents (signature NAHI): ID card, ח ke documents, ט ka document, attachments.
-// Client: bhara hua form 1 mahina rakho, taaki wapas aaye (returned) toh coach ko sab dobara na lagana pade.
+// Client: bhara hua form 7 din rakho (status kuch bhi ho), taaki wapas aaye (returned) toh coach ko sab dobara na lagana pade.
 // MongoDB GridFS bucket "form101DraftFiles", AES-256-GCM encrypted (PDF jaisa).
 // Har file ke metadata mein expiresAt: sweepExpiredDraftFiles() purani files delete karta hai (index.js har ghante).
-// Approve / coach "shuru se" -> controller turant delete karta hai.
+// Coach "shuru se" -> controller turant delete karta hai. Approve pe 7 din aur, phir sweep.
 
 const BUCKET = "form101DraftFiles";
 const bucket = () => new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: BUCKET });

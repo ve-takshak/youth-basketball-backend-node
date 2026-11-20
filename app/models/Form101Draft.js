@@ -3,16 +3,16 @@ const mongoose = require("../../config/database");
 // Form 101 ke bhare hue fields (client ke kehne pe): coach adhoora chhode ya form wapas aaye (returned),
 // toh dobara poora na bharna pade. Har coach ka har saal ek record.
 //
-// Rules (client):
-//   - Data sirf 1 mahina rehta hai (aakhri save / submit / return se). Uske baad MongoDB khud delete karta hai
+// Rules (client, Nov 2026):
+//   - Data sirf 7 din rehta hai (aakhri save / submit / return / approve se), status kuch bhi ho. Uske baad MongoDB khud delete karta hai
 //     (TTL index on expiresAt). Phir coach ko shuru se bharna hoga.
-//   - Form approve ho gaya (successfully finished) -> ye record turant delete. Status row (Form101Submission) rehta hai.
+//   - Approve pe bhi turant delete nahi, 7 din aur (phir apne aap). Status row (Form101Submission) aur PDF rehte hain.
 //
 // data ENCRYPTED hai (helpers/secretBox, AES-256-GCM): ID number, bachche, income... plain text mein kabhi nahi.
 // Documents (ID card, ח / ט documents, attachments) submit pe GridFS "form101DraftFiles" mein encrypted
 // (helpers/form101DraftFiles), yahan sirf unka reference. Signature kabhi save nahi (har submit pe naya).
 
-const DRAFT_DAYS = 30;
+const DRAFT_DAYS = 7;
 
 const Form101DraftSchema = new mongoose.Schema(
     {

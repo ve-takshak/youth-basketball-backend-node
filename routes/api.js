@@ -144,6 +144,9 @@ const {
     getCoachForm101History,
     getForm101PdfLink,
     downloadForm101PdfByLink,
+    getMyForm101PreviewLink,
+    getCoachForm101PreviewLink,
+    downloadForm101Preview,
     getForm101Settings,
     updateForm101Settings,
     getForm101Mandatory,
@@ -343,7 +346,7 @@ router.get("/user/parent/refund-requests", authentication, listMyRefundRequests)
 
 // ---------- Form 101 (form store nahi hota, sirf email + status) ----------
 router.get("/user/coach/form101", authentication, getMyForm101);                 // coach: employer prefill + is saal ka status
-router.put("/user/coach/form101/draft", authentication, saveMyForm101Draft);        // coach: adhoora form save (1 mahina)
+router.put("/user/coach/form101/draft", authentication, saveMyForm101Draft);        // coach: adhoora form save (7 din)
 router.delete("/user/coach/form101/draft", authentication, deleteMyForm101Draft);  // coach: saved data hatao
 router.get("/user/coach/form101/saved", authentication, getMyForm101Saved);        // coach: reject hua form ka bhara data + documents + reason
 router.get("/form101/saved-file/:token", downloadSavedForm101File);                // bina login: saved document (30 min link)
@@ -355,6 +358,9 @@ router.get("/user/coaches/:id/form101", clubAdminAuthentication, getCoachForm101
 router.get("/user/coaches/:id/form101/history", clubAdminAuthentication, getCoachForm101History); // poori history (kisne, kab, reason)
 router.get("/user/form101/:id/pdf-link", clubAdminAuthentication, getForm101PdfLink); // 5 min ka download link (JSON)
 router.get("/form101/pdf/:token", downloadForm101PdfByLink); // bina token: link wala download
+router.get("/user/coach/form101/preview-link", authentication, getMyForm101PreviewLink); // coach: saved form (draft / bheja hua) ka PDF preview link
+router.get("/user/coaches/:id/form101/preview-link", clubAdminAuthentication, getCoachForm101PreviewLink); // club admin: coach ke saved form ka PDF preview link
+router.get("/form101/preview/:token", downloadForm101Preview); // bina token: preview PDF (abhi ke saved data se)
 router.get("/user/clubs/:id/form101-settings", clubAdminAuthentication, getForm101Settings);
 router.put("/user/clubs/:id/form101-settings", clubAdminAuthentication, updateForm101Settings); // accounting email
 router.get("/user/clubs/:id/form101-mandatory", clubAdminAuthentication, getForm101Mandatory); // mandatory on/off + count
