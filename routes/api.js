@@ -145,7 +145,6 @@ const {
     getForm101PdfLink,
     downloadForm101PdfByLink,
     getMyForm101PreviewLink,
-    getCoachForm101PreviewLink,
     downloadForm101Preview,
     getForm101Settings,
     updateForm101Settings,
@@ -359,7 +358,6 @@ router.get("/user/coaches/:id/form101/history", clubAdminAuthentication, getCoac
 router.get("/user/form101/:id/pdf-link", clubAdminAuthentication, getForm101PdfLink); // 5 min ka download link (JSON)
 router.get("/form101/pdf/:token", downloadForm101PdfByLink); // bina token: link wala download
 router.get("/user/coach/form101/preview-link", authentication, getMyForm101PreviewLink); // coach: saved form (draft / bheja hua) ka PDF preview link
-router.get("/user/coaches/:id/form101/preview-link", clubAdminAuthentication, getCoachForm101PreviewLink); // club admin: coach ke saved form ka PDF preview link
 router.get("/form101/preview/:token", downloadForm101Preview); // bina token: preview PDF (abhi ke saved data se)
 router.get("/user/coach/form101/draft", authentication, getMyForm101Saved); // coach: apna saved form (= /saved)
 router.get("/user/clubs/:id/form101-settings", clubAdminAuthentication, getForm101Settings);

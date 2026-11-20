@@ -18,7 +18,6 @@ const { saveDraftFile, readDraftFile, deleteDraftFiles, setDraftFilesExpiry } = 
 //   GET  /user/coach/form101                   coach: club ka employer data (read-only) + profile prefill + status + saved data
 //   PUT  /user/coach/form101/draft             coach: adhoora form save (7 din rehta hai)
 //   GET  /user/coach/form101/preview-link      coach: apne saved form (draft / submitted) ka PDF preview, 5 min link
-//   GET  /user/coaches/:id/form101/preview-link  club admin: coach ke saved form ka PDF preview, 5 min link
 //   GET  /form101/preview/:token               bina login: preview link wala PDF (abhi ke saved data se banta hai)
 //   GET  /user/coach/form101/draft             coach: apna saved form (= /saved, same response)
 //   DELETE /user/coach/form101/draft           coach: saved data hatao, shuru se bharo
@@ -1077,32 +1076,6 @@ const getMyForm101PreviewLink = async (req, res) => {
 };
 
 /**
- * GET /user/coaches/:id/form101/preview-link?year=   (club admin: apne club ka coach)
- * Coach ka saved form (adhoora / bheja hua) PDF mein. Response coach wale jaisa. Kuch saved nahi -> 404.
- */
-const getCoachForm101PreviewLink = async (req, res) => {
-    try {
-        const { id } = req.params;
-        if (!isValidId(id)) return sendError(res, 400, "Invalid coach id.");
-        const coach = await Coach.findById(id).select("clubId userId").populate("userId", "firstname lastname");
-        if (!coach || String(coach.clubId) !== String(req.clubId)) return sendError(res, 404, "Coach not found.");
-
-        const year = Number(req.query.year) || currentTaxYear();
-        if (year < 2000 || year > 2100) return sendError(res, 400, "Invalid year.");
-        const draft = await draftOf(coach._id, year);
-        if (!draft) return sendError(res, 404, "This coach has no saved Form 101 data to preview.");
-
-        return sendOk(res, "Preview link created.", {
-            ...previewLinkOf(req, coach._id, year),
-            filename: pdfFilename(year, `${coach.userId?.firstname || ""} ${coach.userId?.lastname || ""}`.trim()).replace(/\.pdf$/, "_DRAFT.pdf"),
-            ...previewInfoOf(draft, year),
-        });
-    } catch (e) {
-        return sendServerError(res, "getCoachForm101PreviewLink", e);
-    }
-};
-
-/**
  * GET /form101/preview/:token   (bina login, link hi permission hai). preview-link se mila url.
  * Har baar abhi ka saved data (link ke baad coach ne save kiya toh naya data dikhega). inline = browser mein khulta hai.
  */
@@ -1154,7 +1127,7 @@ const savedFormsOf = async (clubId, year) => {
     return new Map(rows.map((r) => [String(r.coachId), { source: r.source, savedAt: r.savedAt, savedUntil: r.expiresAt }]));
 };
 const savedFormFields = (saved) => ({
-    hasSavedForm: !!saved, // preview button: GET /user/coaches/:coachId/form101/preview-link
+    hasSavedForm: !!saved, // coach ne form bharna shuru kiya / data saved hai (form ka data admin ko nahi dikhta)
     savedFormSource: saved?.source || null, // draft = adhoora, submitted = bheja hua data
     savedFormUntil: saved?.savedUntil || null,
 });
@@ -1378,7 +1351,6 @@ module.exports = {
     getForm101PdfLink,
     downloadForm101PdfByLink,
     getMyForm101PreviewLink,
-    getCoachForm101PreviewLink,
     downloadForm101Preview,
     getForm101Settings,
     updateForm101Settings,
