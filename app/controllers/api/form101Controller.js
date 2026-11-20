@@ -398,6 +398,8 @@ const deleteMyForm101Draft = async (req, res) => {
  *   attachments 0-5 files: koi aur document
  *   keepFiles   (optional) JSON array: pichhle submit ki saved files ke _id (GET /user/coach/form101/saved -> files[]).
  *               Wo file apne purane field mein lagti hai, dobara upload nahi karni. Limits mein ginti hoti hai.
+ *               Jo id ab saved nahi (purani / expire) wo chhod di jaati hai, response mein skippedKeepFiles.
+ *               Document badla? Us purani file ki id keepFiles se hata do, nayi file us field mein bhejo.
  * Email fail = status nahi badalta, coach dobara bheje.
  * Success pe: PDF (encrypted) + status save, aur bhara hua data + documents (signature nahi) 1 mahine ke liye
  * (wapas aaye toh pre-fill). Approve hote hi data + documents delete.
@@ -447,19 +449,26 @@ const submitMyForm101 = async (req, res) => {
         }
         if (keepIds !== undefined && keepIds !== null && !Array.isArray(keepIds)) return sendError(res, 400, "keepFiles must be a JSON array of saved file ids.");
         keepIds = [...new Set((keepIds || []).map(String))];
+        // Purani / expire / replace ho chuki id (app ke paas purana /saved tha) -> error nahi, chhod do.
+        // Zaroori document (ID card, newImmigrant ...) na bache toh neeche wali normal check sahi message deti hai.
+        const skippedKeepFiles = [];
         if (keepIds.length) {
             const saved = await Form101Draft.findOne({ coachId: coach._id, year });
             const usable = saved && saved.expiresAt > new Date() ? saved.files : [];
             req.files = req.files || {};
             for (const id of keepIds) {
                 const meta = usable.find((f) => String(f.fileId) === id);
-                if (!meta) return sendError(res, 400, "A saved document was not found (it may have expired). Please upload it again.");
+                if (!meta) {
+                    skippedKeepFiles.push(id);
+                    continue;
+                }
                 let kept;
                 try {
                     kept = await keptFileOf(meta);
                 } catch (e) {
                     console.error("Form 101 saved file read failed:", e?.message || e);
-                    return sendError(res, 400, "A saved document could not be opened. Please upload it again.");
+                    skippedKeepFiles.push(id);
+                    continue;
                 }
                 req.files[meta.field] = [kept, ...filesOf(req, meta.field)];
             }
@@ -612,6 +621,8 @@ const submitMyForm101 = async (req, res) => {
             sentTo: recipients.length,
             requiresApproval: !!club.form101Settings?.requireApproval,
             ...(mail?.skipped ? { emailSkipped: true } : {}),
+            // keepFiles ki jo id ab saved nahi thi (purani / expire), chhod di gayi. App apni list refresh kare.
+            ...(skippedKeepFiles.length ? { skippedKeepFiles } : {}),
         });
     } catch (e) {
         return sendServerError(res, "submitMyForm101", e);
