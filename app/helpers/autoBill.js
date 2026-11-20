@@ -1,11 +1,12 @@
 // Parent app khule toh bachche ka is season ka bill apne aap (admin ko "issue" nahi karna padta).
-// Club ka chalu season ka Fee Plan (yearly / seasonal, camp nahi) + bachche ki team ka age group -> fee (registration date se pro-rated) + jersey.
+// Club ka chalu season ka Fee Plan (yearly / seasonal, camp nahi) + bachche ka age group -> fee (registration date se pro-rated) + jersey.
+// Age group = team ki category, team nahi toh player ka apna age group (categoryId). Youth pehle pay karta hai, phir team milti hai.
 // Subscription aur jersey ke ALAG bill bante hain (alag pay, alag Standing Order): subscription band ho toh jersey chalta rahe.
 // Season ka bill pehle se hai (koi bhi status, cancelled bhi) toh naya nahi banta - admin ne cancel kiya toh wapas nahi aata.
 // Har player ka result:
 //   billed      bill hai (pehle se ya abhi bana)
 //   no_plan     club ka is season ka chalu Fee Plan nahi
-//   no_team     "per_age_group" plan, par bachcha abhi kisi team mein nahi (coach / admin team de tab bill banega)
+//   no_team     "per_age_group" plan, par bachche ka age group nahi (na team, na categoryId)
 //   no_fee      us age group ki fee plan mein 0
 //   inactive    player left / inactive
 const Charge = require("../models/Charge");
@@ -13,6 +14,7 @@ const FeePlan = require("../models/FeePlan");
 const { SUBSCRIPTION_PRODUCTS } = require("../models/FeePlan");
 const Player = require("../models/Player");
 const { currentSeason } = require("./season");
+const { ageGroupOf } = require("./teamPayment");
 
 const round = (n) => Math.round(n * 100) / 100;
 const inFlight = new Set(); // ek hi player ke do request ek saath aayein toh do bill na banein
@@ -22,8 +24,9 @@ const ensureSeasonCharges = async (playerIds, season = currentSeason()) => {
     if (!playerIds.length) return result;
 
     const players = await Player.find({ _id: { $in: playerIds } })
-        .select("_id clubId teamId status createdAt")
-        .populate({ path: "teamId", select: "categoryId", populate: { path: "categoryId", select: "name" } });
+        .select("_id clubId teamId categoryId status createdAt")
+        .populate({ path: "teamId", select: "categoryId", populate: { path: "categoryId", select: "name" } })
+        .populate({ path: "categoryId", select: "name" });
 
     const clubIds = [...new Set(players.map((p) => String(p.clubId)))];
     const plans = await FeePlan.find({ clubId: { $in: clubIds }, season, isActive: true, productType: { $in: [...SUBSCRIPTION_PRODUCTS, null] } }).sort({ createdAt: -1 });
@@ -55,7 +58,7 @@ const ensureSeasonCharges = async (playerIds, season = currentSeason()) => {
             result.set(key, "no_plan");
             continue;
         }
-        const category = player.teamId?.categoryId;
+        const category = ageGroupOf(player);
         if (plan.pricingMode === "per_age_group" && !category) {
             result.set(key, "no_team");
             continue;

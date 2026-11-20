@@ -9,6 +9,8 @@ const { ROLES } = require("../../helpers/constants");
 const { isValidId } = require("../../helpers/common");
 const { upload_files, uploadPrivateFile } = require("../../../utils/s3");
 const { withSubscriptions } = require("../../helpers/subscriptionStatus");
+const { billPlayersQuietly } = require("../../helpers/autoBill");
+const { resolveAgeGroup } = require("../../helpers/teamPayment");
 // Ye functions playerController (isi folder) mein pehle se hain, wahin se le rahe hain
 const { removeIdDocument, populatePlayer, formatPlayer } = require("./Playercontroller");
 
@@ -268,6 +270,7 @@ const validateChild = (body, partial = false) => {
  * multipart/form-data (file ho toh) ya JSON:
  *   firstname, lastname, birthDate, idNumber          (zaroori)
  *   gender?, gameWearSize?, trainingWearSize?, winterWearSize?, medicalNotes?, relation?   (optional)
+ *   categoryId? (age group, jaise U12 Minis): isi se season fee ka bill turant. Pehle payment, phir club team deta hai.
  *   profile_image (file, optional) JPG / PNG, max 5MB      -> User.profile_image
  *   idDocument  (file, optional) JPG / PNG / PDF, max 5MB  -> Player.idDocument
  * Club parent ke club se aata hai, body se nahi. registrationNumber server khud banata hai.
@@ -294,6 +297,8 @@ const createYouthPlayer = async (req, res) => {
         const checked = validateChild(req.body);
         if (checked.message) return sendError(res, 400, checked.message);
         const child = checked.values;
+        const ageGroup = await resolveAgeGroup(req.body?.categoryId);
+        if (ageGroup.message) return sendError(res, ageGroup.status, ageGroup.message);
 
         // 4. Files check
         const photo = getFile(req, "profile_image", PHOTO_TYPES, "a JPG or PNG file", "photo", "Profile image");
@@ -340,7 +345,8 @@ const createYouthPlayer = async (req, res) => {
             registrationNumber,
             userId: childUser._id,
             clubId,
-            teamId: null, // team clubAdmin dega
+            teamId: null, // team clubAdmin dega (youth: season fee paid hone ke baad)
+            categoryId: ageGroup.categoryId || null,
             season: "",
             playerType: "youth",
             gameWearSize: child.gameWearSize,
@@ -353,6 +359,7 @@ const createYouthPlayer = async (req, res) => {
             parents: [{ parentId: parent._id, relation: child.relation, isPrimary: true }],
             createdBy: req.user._id,
         });
+        await billPlayersQuietly([player._id]); // age group ki season fee ka bill abhi
 
         const saved = await populatePlayer(Player.findById(player._id));
 

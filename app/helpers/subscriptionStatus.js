@@ -66,7 +66,7 @@ const plannedFor = async (playerIds) => {
     if (!playerIds.length) return map;
     const season = currentSeason();
     const players = await Player.find({ _id: { $in: playerIds } })
-        .select("clubId teamId createdAt")
+        .select("clubId teamId categoryId createdAt")
         .populate({ path: "teamId", select: "categoryId" });
     const plans = await FeePlan.find({
         clubId: { $in: [...new Set(players.map((p) => String(p.clubId)))] },
@@ -81,7 +81,7 @@ const plannedFor = async (playerIds) => {
         const plan = planByClub.get(String(player.clubId));
         const base = { ...NO_SUBSCRIPTION, season, _clubId: String(player.clubId), _planOptions: plan?.paymentOptions }; // _ wale subscriptionsFor hata deta hai
         if (!plan) return map.set(String(player._id), { ...base, noBillReason: "no_plan" });
-        const categoryId = player.teamId?.categoryId || null;
+        const categoryId = player.teamId?.categoryId || player.categoryId || null; // team nahi toh player ka age group
         if (plan.pricingMode === "per_age_group" && !categoryId) {
             return map.set(String(player._id), { ...base, currency: plan.currency, noBillReason: "no_team" });
         }

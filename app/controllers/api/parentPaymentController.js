@@ -154,7 +154,7 @@ const withPayOptions = async (charges) => {
 
 const NO_BILL_MESSAGES = {
     no_plan: "The club hasn't set the fees for this season yet.",
-    no_team: "Your child isn't in a team yet. The fee will show once the club adds them to a team.",
+    no_team: "Your child has no age group yet. The fee will show once an age group is set for your child.",
     no_fee: "There is no fee for your child's age group.",
     inactive: "This player is not active.",
 };

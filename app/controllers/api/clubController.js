@@ -1011,13 +1011,20 @@ const clubOptions = async (req, res) => {
 const legalReply = (res, status, message, data = {}) =>
     res.status(status).json({ error: status >= 400, status, message, message_desc: message, data });
 
-const legalOf = (club) => ({
+// Employer email = club admin ka email (Form 101 isi pe jaata hai). Club ki apni email field nahi, isliye read-only.
+const clubEmailOf = async (clubId) => {
+    const admin = await ClubAdmin.findOne({ clubId }).sort({ createdAt: 1 }).populate("userId", "email");
+    return admin?.userId?.email ? admin.userId.email.toLowerCase() : "";
+};
+
+const legalOf = async (club) => ({
     clubId: club._id,
     legalName: club.legalName || "",
     taxId: club.taxId || "",
     deductionFileNumber: club.deductionFileNumber || "",
     officialAddress: club.officialAddress || "",
     phone: club.phone || "",
+    email: await clubEmailOf(club._id), // read-only (club admin ka email), PUT se nahi badalta
 });
 
 const findLegalClub = async (req, id) => {
@@ -1035,7 +1042,7 @@ const getClubLegalDetails = async (req, res) => {
     try {
         const { club, status, message } = await findLegalClub(req, req.params.id);
         if (!club) return legalReply(res, status, message);
-        return legalReply(res, 200, "Legal details fetched.", legalOf(club));
+        return legalReply(res, 200, "Legal details fetched.", await legalOf(club));
     } catch (e) {
         console.error("getClubLegalDetails error:", e?.message || e);
         return legalReply(res, 500, "Something went wrong.");
@@ -1058,7 +1065,7 @@ const updateClubLegalDetails = async (req, res) => {
 
         Object.assign(club, fields);
         await club.save();
-        return legalReply(res, 200, "Legal details saved.", legalOf(club));
+        return legalReply(res, 200, "Legal details saved.", await legalOf(club));
     } catch (e) {
         console.error("updateClubLegalDetails error:", e?.message || e);
         return legalReply(res, 500, "Something went wrong.");

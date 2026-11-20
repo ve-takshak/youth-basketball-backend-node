@@ -17,6 +17,17 @@ const { validatePersonInput, applyPersonUpdates } = require("../../helpers/userH
 const { uploadPrivateFile, getSignedFileUrl, deleteStoredFile, isS3Stored, SIGNED_URL_TTL } = require("../../../utils/s3");
 const { withSubscriptions } = require("../../helpers/subscriptionStatus");
 const { billPlayersQuietly } = require("../../helpers/autoBill");
+const { resolveAgeGroup, checkTeamPayment } = require("../../helpers/teamPayment");
+
+// Youth team mein tabhi jab season ki fee paid ho. Rukne par bill ready kar do taaki parent pay kar sake:
+// player ka age group nahi toh team ki category se, phir bill.
+const billBeforeTeam = async (player, team) => {
+    if (!player.categoryId && team?.categoryId) {
+        player.categoryId = team.categoryId;
+        await player.save();
+    }
+    await billPlayersQuietly([player._id]);
+};
 
 // Player do tarah ke (playerType):
 //   senior -> User role "seniorPlayer": mobile zaroori (khud login), koi parent nahi
@@ -353,6 +364,7 @@ const populatePlayer = (query) =>
     query
         .populate("userId", "firstname lastname birthDate gender idNumber email countryCode mobileNumber is_verify profile_image")
         .populate("clubId", "name")
+        .populate("categoryId", "name")
         // Team ke saath uska coach (Coach -> User) bhi
         .populate({
             path: "teamId",
@@ -400,6 +412,8 @@ const formatPlayer = (player) => {
         season: player.season || "",
         club: player.clubId && player.clubId._id ? { _id: player.clubId._id, name: player.clubId.name } : null,
         team: player.teamId && player.teamId._id ? { _id: player.teamId._id, name: player.teamId.name } : null,
+        // Age group (fee isi se, team milne se pehle bhi). null = set nahi
+        ageGroup: player.categoryId && player.categoryId._id ? { _id: player.categoryId._id, name: player.categoryId.name } : null,
         // Team ka coach (team nahi ya coach assign nahi toh null)
         coach:
             player.teamId && player.teamId.coachId && player.teamId.coachId._id
@@ -440,6 +454,7 @@ const populatePlayerDetail = (query) =>
     query
         .populate("userId", "firstname lastname birthDate gender idNumber email countryCode mobileNumber is_verify profile_image")
         .populate("clubId", "name logo theme")
+        .populate("categoryId", "name")
         .populate({
             path: "teamId",
             select: "name season gender teamType teamCapacity status categoryId coachId",
@@ -567,7 +582,8 @@ const sendServerError = (res, label, e) => {
  *   playerType: "youth" (default) | "senior"
  *   firstname, lastname, birthDate, gender, idNumber?, email?, countryCode?, mobileNumber?,   -> User
  *     (senior ke liye mobileNumber zaroori)
- *   clubId (sirf superAdmin), teamId?, season?, shirtNumber?, status?, medicalNotes?,         -> Player
+ *   clubId (sirf superAdmin), teamId?, categoryId? (age group), season?, shirtNumber?, status?, medicalNotes?, -> Player
+ *     youth + teamId: club ki season fee ho toh team nahi milti (pehle payment). Bina team + categoryId se banao.
  *   gameWearSize?, trainingWearSize?, winterWearSize?                                         -> Player
  *   parents (sirf youth, zaroori): [{ firstname, lastname, countryCode, mobileNumber, email?, relation?, isPrimary? }]
  * }
@@ -628,6 +644,22 @@ const createPlayer = async (req, res) => {
         });
         if (ruleError) return sendError(res, ruleError.status, ruleError.message);
 
+        // Age group (optional). Team ho toh default team ki category.
+        const ageGroup = await resolveAgeGroup(body.categoryId);
+        if (ageGroup.message) return sendError(res, ageGroup.status, ageGroup.message);
+        const categoryId = ageGroup.categoryId || teamResult.team?.categoryId || null;
+
+        // Youth: naya player ne abhi pay nahi kiya, toh fee wale club mein seedha team nahi
+        const payError = await checkTeamPayment({ playerType, categoryId, clubId }, teamResult.team);
+        if (payError) {
+            return sendError(
+                res,
+                payError.status,
+                "A youth player joins a team only after the season fee is paid. Create the player without a team (choose the age group), then add them to the team after payment.",
+                { code: payError.code }
+            );
+        }
+
         const duplicate = await findDuplicate(person);
         if (duplicate) return sendError(res, duplicate.status, duplicate.message);
 
@@ -674,6 +706,7 @@ const createPlayer = async (req, res) => {
             userId: playerUser._id,
             clubId,
             teamId: teamResult.team ? teamResult.team._id : null,
+            categoryId,
             season: values.season ?? (teamResult.team ? teamResult.team.season : ""),
             parents: parentResult.links,
             idDocument: uploadedDoc,
@@ -1037,7 +1070,8 @@ const getPlayer = async (req, res) => {
 
 /**
  * PUT /api/user/players/:id/update   (superAdmin ya clubAdmin, :id = Player ki _id)
- * body: jo badalna hai wahi. teamId: "" = team se hatana.
+ * body: jo badalna hai wahi. teamId: "" = team se hatana. categoryId = age group ("" = hatana).
+ * Youth ko pehli baar team: season fee paid honi chahiye (warna 409, code PAYMENT_REQUIRED, aur parent ko bill).
  * idDocument (file) = nayi file. removeIdDocument=true = file hatana.
  * NOTE: parents is API se update NAHI hote (uske liye link / unlink APIs).
  */
@@ -1104,6 +1138,22 @@ const updatePlayer = async (req, res) => {
             team = teamResult.team;
         }
 
+        // 10b. Age group + youth payment check (pehli baar team mil rahi ho tab)
+        const ageGroup = await resolveAgeGroup(body.categoryId);
+        if (ageGroup.message) return sendError(res, ageGroup.status, ageGroup.message);
+        if (ageGroup.categoryId !== undefined) player.categoryId = ageGroup.categoryId;
+        const teamChanging = body.teamId !== undefined && team && String(team._id) !== String(player.teamId || "");
+        if (teamChanging) {
+            const payError = await checkTeamPayment(
+                { _id: player._id, playerType: newType, teamId: player.teamId, categoryId: player.categoryId },
+                team
+            );
+            if (payError) {
+                await billBeforeTeam(player, team);
+                return sendError(res, payError.status, payError.message, { code: payError.code });
+            }
+        }
+
         // 11. Team rules (shirt number duplicate, capacity)
         const ruleError = await checkTeamRules({
             team,
@@ -1135,6 +1185,7 @@ const updatePlayer = async (req, res) => {
         // 14. Player update (parents ko chhod ke)
         Object.assign(player, values);
         if (body.teamId !== undefined) player.teamId = team ? team._id : null;
+        if (team && !player.categoryId) player.categoryId = team.categoryId; // age group team se
         await player.save();
         if (body.teamId !== undefined) await billPlayersQuietly([player._id]); // team mili toh age group ki fee ka bill
 
@@ -1359,6 +1410,7 @@ const listOtherTeamPlayers = async (req, res) => {
  * Har player ka purana shirt number aur status rehta hai.
  * body: { teamId, playerIds: ["id1", "id2", "id3"] }
  * Har player alag se check hota hai. Jo sahi hain wo assign, jinme problem hai wo "failed" mein wajah ke saath.
+ * Youth jisne season fee nahi di: failed (code PAYMENT_REQUIRED), parent ke app mein bill aa jaata hai.
  */
 const assignPlayerToTeam = async (req, res) => {
     try {
@@ -1415,7 +1467,16 @@ const assignPlayerToTeam = async (req, res) => {
                 continue;
             }
 
+            // Youth: pehle season fee, phir team. Rukne par parent ke liye bill ready.
+            const payError = await checkTeamPayment(player, team);
+            if (payError) {
+                await billBeforeTeam(player, team);
+                failed.push({ playerId, message: payError.message, code: payError.code });
+                continue;
+            }
+
             player.teamId = team._id;
+            if (!player.categoryId) player.categoryId = team.categoryId;
             if (!player.season) player.season = team.season || "";
             await player.save();
             await billPlayersQuietly([player._id]); // team mili toh age group ki fee ka bill

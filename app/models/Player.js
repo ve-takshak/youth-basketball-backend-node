@@ -34,6 +34,9 @@ const PlayerSchema = new mongoose.Schema(
         clubId: { type: mongoose.Schema.Types.ObjectId, ref: "Club", required: true },
         // Waitlisted player ki team abhi tay nahi ho sakti, isliye optional
         teamId: { type: mongoose.Schema.Types.ObjectId, ref: "Team", default: null },
+        // Age group (team category, jaise U12 Minis). Team milne se pehle isi se fee ka bill banta hai
+        // (youth: pehle payment, phir team). Team ho toh team ki category hi chalti hai.
+        categoryId: { type: mongoose.Schema.Types.ObjectId, ref: "TeamCategory", default: null },
         season: { type: String, trim: true, default: "" }, // "2026 / 2027"
 
         // youth = parent ke under (parent zaroori), senior = khud login, parent nahi

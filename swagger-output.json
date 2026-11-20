@@ -635,6 +635,68 @@
         ]
       }
     },
+    "/user/clubs/{id}/legal-details": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\nlegal & tax details (Form 101 employer)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Club"
+        ],
+        "summary": "Get club legal details",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "description": "**Access:** Super admin or club admin\n\nclubAdmin apne club ki\n\n```\nbody (JSON): jo badalna hai wahi { legalName?, taxId?, deductionFileNumber?, officialAddress?, phone? }\n\"\" bhejo toh field khali. taxId / deductionFileNumber 5-15 digits, phone 9-15 digits.\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Club"
+        ],
+        "summary": "Update club legal details",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/user/deleteClub/{id}": {
       "delete": {
         "description": "**Access:** Super admin only\n\n```\nDefault: club ARCHIVE hota hai (isArchived: true), data bacha rehta hai, uske club admins / coaches /\nparents login nahi kar paate. Wapas laane ke liye PUT /api/user/restoreClub/:id.\nPermanent delete: DELETE /api/user/deleteClub/:id?permanent=true\nPermanent delete mein club ke saath:\n1. Club admins aur Coaches ke User accounts delete hote hain (user table)\n2. ClubAdmin, Coach aur Team records delete hote hain\n3. Club ka logo S3 se delete hota hai (purana local file ho toh disk se)\n4. Club document delete hota hai (club table)\n```",
@@ -1290,7 +1352,7 @@
     },
     "/user/coaches": {
       "get": {
-        "description": "**Access:** Any logged-in user\n\n```\nsearch: naam ya mobile number se\n```",
+        "description": "**Access:** Any logged-in user\n\n```\nsearch: naam ya mobile number se\nclubAdmin ke liye har coach mein form101: { year, status, isSubmitted, submittedAt } (is saal bhara ya nahi)\n```",
         "parameters": [
           {
             "name": "search",
@@ -2279,7 +2341,7 @@
     },
     "/user/players/assign": {
       "post": {
-        "description": "**Access:** Super admin or club admin\n\n```\nPehle se bane EK YA ZYADA players ko ek team mein daalna. Naya player NAHI banta.\nPlayer bina team ka ho ya kisi doosri team mein ho, dono chalega (doosri team se move ho jayega).\nHar player ka purana shirt number aur status rehta hai.\nbody: { teamId, playerIds: [\"id1\", \"id2\", \"id3\"] }\nHar player alag se check hota hai. Jo sahi hain wo assign, jinme problem hai wo \"failed\" mein wajah ke saath.\n```",
+        "description": "**Access:** Super admin or club admin\n\n```\nPehle se bane EK YA ZYADA players ko ek team mein daalna. Naya player NAHI banta.\nPlayer bina team ka ho ya kisi doosri team mein ho, dono chalega (doosri team se move ho jayega).\nHar player ka purana shirt number aur status rehta hai.\nbody: { teamId, playerIds: [\"id1\", \"id2\", \"id3\"] }\nHar player alag se check hota hai. Jo sahi hain wo assign, jinme problem hai wo \"failed\" mein wajah ke saath.\nYouth jisne season fee nahi di: failed (code PAYMENT_REQUIRED), parent ke app mein bill aa jaata hai.\n```",
         "responses": {
           "200": {
             "description": "OK"
@@ -2322,7 +2384,7 @@
     },
     "/user/players/create": {
       "post": {
-        "description": "**Access:** Super admin or club admin\n\n```\nJSON ya multipart/form-data (file ke saath). Multipart mein parents JSON string mein bhejo.\nidDocument (file, optional): JPG / PNG / PDF, max 5MB\nbody: {\n  playerType: \"youth\" (default) | \"senior\"\n  firstname, lastname, birthDate, gender, idNumber?, email?, countryCode?, mobileNumber?,   -> User\n    (senior ke liye mobileNumber zaroori)\n  clubId (sirf superAdmin), teamId?, season?, shirtNumber?, status?, medicalNotes?,         -> Player\n  gameWearSize?, trainingWearSize?, winterWearSize?                                         -> Player\n  parents (sirf youth, zaroori): [{ firstname, lastname, countryCode, mobileNumber, email?, relation?, isPrimary? }]\n}\n```",
+        "description": "**Access:** Super admin or club admin\n\n```\nJSON ya multipart/form-data (file ke saath). Multipart mein parents JSON string mein bhejo.\nidDocument (file, optional): JPG / PNG / PDF, max 5MB\nbody: {\n  playerType: \"youth\" (default) | \"senior\"\n  firstname, lastname, birthDate, gender, idNumber?, email?, countryCode?, mobileNumber?,   -> User\n    (senior ke liye mobileNumber zaroori)\n  clubId (sirf superAdmin), teamId?, categoryId? (age group), season?, shirtNumber?, status?, medicalNotes?, -> Player\n    youth + teamId: club ki season fee ho toh team nahi milti (pehle payment). Bina team + categoryId se banao.\n  gameWearSize?, trainingWearSize?, winterWearSize?                                         -> Player\n  parents (sirf youth, zaroori): [{ firstname, lastname, countryCode, mobileNumber, email?, relation?, isPrimary? }]\n}\n```",
         "responses": {
           "201": {
             "description": "Created"
@@ -2368,6 +2430,9 @@
                     "type": "string"
                   },
                   "teamId": {
+                    "type": "string"
+                  },
+                  "categoryId": {
                     "type": "string"
                   },
                   "season": {
@@ -2501,7 +2566,7 @@
     },
     "/user/players/{id}/update": {
       "put": {
-        "description": "**Access:** Super admin or club admin\n\n```\nbody: jo badalna hai wahi. teamId: \"\" = team se hatana.\nidDocument (file) = nayi file. removeIdDocument=true = file hatana.\nNOTE: parents is API se update NAHI hote (uske liye link / unlink APIs).\n```",
+        "description": "**Access:** Super admin or club admin\n\n```\nbody: jo badalna hai wahi. teamId: \"\" = team se hatana. categoryId = age group (\"\" = hatana).\nYouth ko pehli baar team: season fee paid honi chahiye (warna 409, code PAYMENT_REQUIRED, aur parent ko bill).\nidDocument (file) = nayi file. removeIdDocument=true = file hatana.\nNOTE: parents is API se update NAHI hote (uske liye link / unlink APIs).\n```",
         "parameters": [
           {
             "name": "id",
@@ -2530,6 +2595,9 @@
                     "example": "any"
                   },
                   "teamId": {
+                    "example": "any"
+                  },
+                  "categoryId": {
                     "example": "any"
                   },
                   "removeIdDocument": {
@@ -3253,7 +3321,7 @@
     },
     "/user/parent/players/create": {
       "post": {
-        "description": "**Access:** Any logged-in user\n\n```\nmultipart/form-data (file ho toh) ya JSON:\n  firstname, lastname, birthDate, idNumber          (zaroori)\n  gender?, gameWearSize?, trainingWearSize?, winterWearSize?, medicalNotes?, relation?   (optional)\n  profile_image (file, optional) JPG / PNG, max 5MB      -> User.profile_image\n  idDocument  (file, optional) JPG / PNG / PDF, max 5MB  -> Player.idDocument\nClub parent ke club se aata hai, body se nahi. registrationNumber server khud banata hai.\n```",
+        "description": "**Access:** Any logged-in user\n\n```\nmultipart/form-data (file ho toh) ya JSON:\n  firstname, lastname, birthDate, idNumber          (zaroori)\n  gender?, gameWearSize?, trainingWearSize?, winterWearSize?, medicalNotes?, relation?   (optional)\n  categoryId? (age group, jaise U12 Minis): isi se season fee ka bill turant. Pehle payment, phir club team deta hai.\n  profile_image (file, optional) JPG / PNG, max 5MB      -> User.profile_image\n  idDocument  (file, optional) JPG / PNG / PDF, max 5MB  -> Player.idDocument\nClub parent ke club se aata hai, body se nahi. registrationNumber server khud banata hai.\n```",
         "responses": {
           "201": {
             "description": "Created"
@@ -4673,7 +4741,7 @@
         ]
       },
       "post": {
-        "description": "**Access:** Super admin or club admin\n\nclub admin price set karta hai\n\n```\nSeason ka Fee Plan ek call mein (Subscription Plan screen ka Save).\npricingMode \"same\": subscriptionAmount + jerseyAmount (sabke liye).\n\"per_age_group\": ageGroups [{ categoryId, amount, jerseyAmount }] -> har group ki apni fee aur apni jersey (0 = nahi).\n  group ki jerseyAmount na bhejo toh plan ki jerseyAmount lagti hai.\nproRate (default true): season (Aug-Jul) ke beech join kare toh bache mahino ki fee. false = hamesha poore saal ki.\npaymentOptions (default \"both\"): one_time = sirf ek baar | standing_order = sirf har mahine | both\nproductType (default \"yearly\"): yearly | seasonal (paymentOptions apne aap standing_order) | camp (one_time, jersey / pro-rate nahi)\n  camp: subscriptionAmount = camp ki fee, campStartDate (YYYY-MM-DD), campDays (default 7)\nbody: { clubId?, season, productType?, pricingMode, subscriptionAmount?, ageGroups?, jerseyAmount?, proRate?, paymentOptions?, campStartDate?, campDays?, name?, currency?, dueDate? }\n```",
+        "description": "**Access:** Super admin or club admin\n\nclub admin price set karta hai\n\n```\nSeason ka Fee Plan ek call mein (Subscription Plan screen ka Save).\npricingMode \"same\": subscriptionAmount + jerseyAmount (sabke liye).\n\"per_age_group\": ageGroups [{ categoryId, amount, jerseyAmount }] -> har group ki apni fee aur apni jersey (na bhejo / 0 = jersey nahi).\n  per_age_group mein plan ki jerseyAmount nahi lagti, sirf group ki.\nproRate (default true): season (Aug-Jul) ke beech join kare toh bache mahino ki fee. false = hamesha poore saal ki.\npaymentOptions (default \"both\"): one_time = sirf ek baar | standing_order = sirf har mahine | both\nproductType (default \"yearly\"): yearly | seasonal (paymentOptions apne aap standing_order) | camp (one_time, jersey / pro-rate nahi)\n  camp: subscriptionAmount = camp ki fee, campStartDate (YYYY-MM-DD), campDays (default 7)\nbody: { clubId?, season, productType?, pricingMode, subscriptionAmount?, ageGroups?, jerseyAmount?, proRate?, paymentOptions?, campStartDate?, campDays?, name?, currency?, dueDate? }\n```",
         "responses": {
           "401": {
             "description": "Missing or invalid token"
@@ -5909,7 +5977,7 @@
     },
     "/user/coach/form101": {
       "get": {
-        "description": "**Access:** Any logged-in user\n\ncoach: employer prefill + is saal ka status\n\n```\nEmployer details sirf coach ke apne club se. employee = profile se suggestion (app form mein pehle se bhar de).\n```",
+        "description": "**Access:** Any logged-in user\n\ncoach: employer prefill + is saal ka status\n\n```\nEmployer details (א) sirf coach ke apne club se, READ-ONLY (club admin / super admin bharte hain).\nemployee = profile se suggestion (app form mein pehle se bhar de).\n```",
         "responses": {
           "401": {
             "description": "Missing or invalid token"
@@ -5929,15 +5997,117 @@
         ]
       }
     },
-    "/user/coach/form101/submit": {
-      "post": {
-        "description": "**Access:** Any logged-in user\n\ncoach: form + signature + ID -> email\n\n```\nmultipart/form-data:\n  data        JSON string: { employee, children, employerIncome, otherIncome, spouse, changes,\n                             taxCredits, taxCoordination, declaration: { agreed: true } }\n  signature   PNG / JPG file (signature pad se) YA text field: \"data:image/png;base64,...\"\n  idCard      1-2 files: ID card + ספח (photo ya PDF)\n  doc_<reason> section ח ke reason ki file(s), max 3 har reason: doc_disabled, doc_disabilityAllowance,\n              doc_qualifyingSettlement, doc_newImmigrant (zaroori), doc_spouseNoIncome, doc_supportsChildren,\n              doc_disabledChildren (zaroori), doc_alimony, doc_dischargedSoldier, doc_academicDegree, doc_reserveCombat\n  doc_taxCoordination  section ט: assessor approval (reason assessorApproved pe zaroori) / salary slips\n  attachments 0-5 files: koi aur document\nKuch save nahi hota. Email fail = status nahi badalta, coach dobara bheje.\n```",
+    "/user/coach/form101/draft": {
+      "put": {
+        "description": "**Access:** Any logged-in user\n\ncoach: adhoora form save (1 mahina)\n\n```\nbody (JSON): { data: { employee, children, ... } }   wahi structure jo submit mein \"data\" hai, adhoora bhi chalega.\n1 mahina rehta hai (har save pe phir se 1 mahina). Files yahan nahi aati (pichhle submit ki saved files rehti hain).\n```",
         "responses": {
           "401": {
             "description": "Missing or invalid token"
           },
           "default": {
             "description": ""
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "Save my form101 draft",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "description": "**Access:** Any logged-in user\n\ncoach: saved data hatao",
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "Delete my form101 draft",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/coach/form101/saved": {
+      "get": {
+        "description": "**Access:** Any logged-in user\n\ncoach: reject hua form ka bhara data + documents + reason\n\n```\nForm wapas aaya (rejected / returned) ya adhoora chhoda: coach ne jo bhara tha wo + reject ka reason.\nApp isse form pre-fill kare, coach sirf galat cheez theek karke dobara submit kare.\n  hasSavedForm false = kuch save nahi (1 mahina nikal gaya / approve ho gaya / kabhi bhara nahi) -> khali form\n  form = wahi JSON structure jo submit ke \"data\" mein jaata hai\n  files = pichhle submit ke documents (ID card, ח / ט documents, attachments), har ek ka 30 min ka link.\n          Resubmit pe jo rakhni hai unke _id \"keepFiles\" mein bhejo, dobara upload nahi karni.\n  reupload = sirf signature (kabhi save nahi hota)\n```",
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "Get my form101 saved",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/form101/saved-file/{token}": {
+      "get": {
+        "description": "**Access:** Public (no token)\n\nbina login: saved document (30 min link)\n\n```\nCoach ki apni saved document (ID card / documents). 30 min ka link. inline: app / browser preview kar sake.\n```",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "Download saved form101 file"
+      }
+    },
+    "/user/coach/form101/submit": {
+      "post": {
+        "description": "**Access:** Any logged-in user\n\ncoach: form + signature + ID -> email\n\n```\nmultipart/form-data:\n  data        JSON string: { employee, children, employerIncome, otherIncome, spouse, changes,\n                             taxCredits, taxCoordination, declaration: { agreed: true } }\n              employer (section א) app NAHI bhejta / bheje toh ignore: hamesha club ki legal details se.\n  signature   PNG / JPG file (signature pad se) YA text field: \"data:image/png;base64,...\"\n  idCard      1-2 files: ID card + ספח (photo ya PDF)\n  doc_<reason> section ח ke reason ki file(s), max 3 har reason: doc_disabled, doc_disabilityAllowance,\n              doc_qualifyingSettlement, doc_newImmigrant (zaroori), doc_spouseNoIncome, doc_supportsChildren,\n              doc_disabledChildren (zaroori), doc_alimony, doc_dischargedSoldier, doc_academicDegree, doc_reserveCombat\n  doc_taxCoordination  section ט: assessor approval (reason assessorApproved pe zaroori) / salary slips\n  attachments 0-5 files: koi aur document\n  keepFiles   (optional) JSON array: pichhle submit ki saved files ke _id (GET /user/coach/form101/saved -> files[]).\n              Wo file apne purane field mein lagti hai, dobara upload nahi karni. Limits mein ginti hoti hai.\nEmail fail = status nahi badalta, coach dobara bheje.\nSuccess pe: PDF (encrypted) + status save, aur bhara hua data + documents (signature nahi) 1 mahine ke liye\n(wapas aaye toh pre-fill). Approve hote hi data + documents delete.\n```",
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "length": {
+                    "example": "any"
+                  }
+                }
+              }
+            }
           }
         },
         "tags": [
@@ -5953,15 +6123,8 @@
     },
     "/user/form101": {
       "get": {
-        "description": "**Access:** Super admin or club admin\n\n?year=&status=&clubId= (superAdmin)\n\n```\nClub ke saare coaches + unka is saal ka status (jinka record nahi = not_submitted).\n```",
+        "description": "**Access:** Public (no token)\n\n?year=&status=\n\n```\nClub ke saare coaches + unka is saal ka status (jinka record nahi = not_submitted).\n```",
         "parameters": [
-          {
-            "name": "clubId",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "name": "year",
             "in": "query",
@@ -5978,9 +6141,6 @@
           }
         ],
         "responses": {
-          "401": {
-            "description": "Missing or invalid token"
-          },
           "default": {
             "description": ""
           }
@@ -5988,17 +6148,63 @@
         "tags": [
           "Form 101"
         ],
-        "summary": "List form101 status",
-        "security": [
+        "summary": "List form101 status"
+      }
+    },
+    "/user/form101/submitted": {
+      "get": {
+        "description": "**Access:** Public (no token)\n\nsirf jinhone bhara + coach details\n\n```\nSirf wo coaches jinhone is saal Form 101 bhara hai (submitted / approved / returned), naye submit pehle.\nHar row: coach (naam, email, phone) + status + dates + reviewer + hasPdf. Timeline nahi (wo history API mein).\nForm ke andar ka data nahi (wo save nahi hota, PDF mein hai).\n  status  submitted | approved | returned (khali = teeno)\n  search  coach ka naam / email / mobile\n```",
+        "parameters": [
           {
-            "bearerAuth": []
+            "name": "year",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
-        ]
+        ],
+        "responses": {
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "List submitted form101"
       }
     },
     "/user/form101/{id}/review": {
       "put": {
-        "description": "**Access:** Super admin or club admin\n\napprove / return + reason\n\n```\nbody: { action: \"approve\" | \"return\", reason? }   return pe reason zaroori (coach ko dikhta hai)\n```",
+        "description": "**Access:** Public (no token)\n\napprove / return + reason\n\n```\nbody: { action: \"approve\" | \"return\", reason? }   return pe reason zaroori (coach ko dikhta hai)\n```",
         "parameters": [
           {
             "name": "id",
@@ -6010,9 +6216,6 @@
           }
         ],
         "responses": {
-          "401": {
-            "description": "Missing or invalid token"
-          },
           "default": {
             "description": ""
           }
@@ -6021,11 +6224,6 @@
           "Form 101"
         ],
         "summary": "Review form101",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -6050,7 +6248,7 @@
     },
     "/user/coaches/{id}/form101": {
       "get": {
-        "description": "**Access:** Super admin or club admin\n\nek coach: status + timeline\n\n```\nEk coach ka is saal ka status + timeline + pichhle saalon ka record. Form ka data nahi (wo save hi nahi hota).\n```",
+        "description": "**Access:** Public (no token)\n\nek coach: status + timeline\n\n```\nEk coach ka is saal ka status + timeline + pichhle saalon ka record. Form ka data nahi (wo save hi nahi hota).\n```",
         "parameters": [
           {
             "name": "id",
@@ -6062,9 +6260,6 @@
           }
         ],
         "responses": {
-          "401": {
-            "description": "Missing or invalid token"
-          },
           "default": {
             "description": ""
           }
@@ -6072,17 +6267,36 @@
         "tags": [
           "Form 101"
         ],
-        "summary": "Get coach form101",
-        "security": [
+        "summary": "Get coach form101"
+      }
+    },
+    "/user/coaches/{id}/form101/history": {
+      "get": {
+        "description": "**Access:** Public (no token)\n\npoori history (kisne, kab, reason)\n\n```\nCoach ki details + har saal ka status + poori history (kab kisne submit / approve / wapas bheja, reason ke saath).\nNaya saal / naya event pehle. Form ka data nahi (PDF mein hai: GET /user/form101/:id/pdf-link).\n```",
+        "parameters": [
           {
-            "bearerAuth": []
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           }
-        ]
+        ],
+        "responses": {
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "Get coach form101 history"
       }
     },
     "/user/form101/{id}/pdf-link": {
       "get": {
-        "description": "**Access:** Super admin or club admin\n\n5 min ka download link (JSON)\n\n```\nResponse: { url, filename, expiresAt }. url 5 minute tak chalta hai, bina token ke PDF download.\n```",
+        "description": "**Access:** Public (no token)\n\n5 min ka download link (JSON)\n\n```\nResponse: { url, filename, expiresAt }. url 5 minute tak chalta hai, bina token ke PDF download.\n```",
         "parameters": [
           {
             "name": "id",
@@ -6094,9 +6308,6 @@
           }
         ],
         "responses": {
-          "401": {
-            "description": "Missing or invalid token"
-          },
           "default": {
             "description": ""
           }
@@ -6104,12 +6315,7 @@
         "tags": [
           "Form 101"
         ],
-        "summary": "Get form101 pdf link",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
+        "summary": "Get form101 pdf link"
       }
     },
     "/form101/pdf/{token}": {
@@ -6138,7 +6344,7 @@
     },
     "/user/clubs/{id}/form101-settings": {
       "get": {
-        "description": "**Access:** Super admin or club admin",
+        "description": "**Access:** Public (no token)",
         "parameters": [
           {
             "name": "id",
@@ -6150,9 +6356,6 @@
           }
         ],
         "responses": {
-          "401": {
-            "description": "Missing or invalid token"
-          },
           "default": {
             "description": ""
           }
@@ -6160,15 +6363,10 @@
         "tags": [
           "Form 101"
         ],
-        "summary": "Get form101 settings",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
+        "summary": "Get form101 settings"
       },
       "put": {
-        "description": "**Access:** Super admin or club admin\n\naccounting email\n\n```\nbody: { mandatory?: boolean, accountingEmail?: \"payroll@...\" (\"\" = band), requireApproval?: boolean }\n```",
+        "description": "**Access:** Public (no token)\n\naccounting email\n\n```\nbody: { mandatory?: boolean, accountingEmail?: \"payroll@...\" (\"\" = band), requireApproval?: boolean }\n```",
         "parameters": [
           {
             "name": "id",
@@ -6180,9 +6378,6 @@
           }
         ],
         "responses": {
-          "401": {
-            "description": "Missing or invalid token"
-          },
           "default": {
             "description": ""
           }
@@ -6211,17 +6406,12 @@
         "tags": [
           "Form 101"
         ],
-        "summary": "Update form101 settings",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
+        "summary": "Update form101 settings"
       }
     },
     "/user/clubs/{id}/form101-mandatory": {
       "get": {
-        "description": "**Access:** Super admin or club admin\n\nmandatory on/off + count\n\n```\nForm 101 coaches ke liye zaroori hai ya nahi + is saal ka count.\n```",
+        "description": "**Access:** Public (no token)\n\nmandatory on/off + count\n\n```\nForm 101 coaches ke liye zaroori hai ya nahi + is saal ka count.\n```",
         "parameters": [
           {
             "name": "id",
@@ -6233,9 +6423,6 @@
           }
         ],
         "responses": {
-          "401": {
-            "description": "Missing or invalid token"
-          },
           "default": {
             "description": ""
           }
@@ -6243,15 +6430,10 @@
         "tags": [
           "Form 101"
         ],
-        "summary": "Get form101 mandatory",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ]
+        "summary": "Get form101 mandatory"
       },
       "put": {
-        "description": "**Access:** Super admin or club admin\n\n{ mandatory: true|false }\n\n```\nbody: { mandatory: true | false }   true = har coach ko \"Action needed\" card, false = optional\n```",
+        "description": "**Access:** Public (no token)\n\n{ mandatory: true|false }\n\n```\nbody: { mandatory: true | false }   true = har coach ko \"Action needed\" card, false = optional\n```",
         "parameters": [
           {
             "name": "id",
@@ -6263,9 +6445,6 @@
           }
         ],
         "responses": {
-          "401": {
-            "description": "Missing or invalid token"
-          },
           "default": {
             "description": ""
           }
@@ -6274,11 +6453,6 @@
           "Form 101"
         ],
         "summary": "Update form101 mandatory",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {

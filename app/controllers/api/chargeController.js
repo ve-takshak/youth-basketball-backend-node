@@ -151,16 +151,17 @@ const issueCharges = async (req, res) => {
         }
 
         const players = await Player.find(filter)
-            .select("_id season teamId createdAt")
-            .populate({ path: "teamId", select: "categoryId", populate: { path: "categoryId", select: "name" } });
+            .select("_id season teamId categoryId createdAt")
+            .populate({ path: "teamId", select: "categoryId", populate: { path: "categoryId", select: "name" } })
+            .populate({ path: "categoryId", select: "name" });
         if (!players.length) return sendError(res, 404, "No players found.");
 
-        // Plan: har player ki fee uski team ke age group se. Fee nahi (team nahi / group ki fee 0) toh bill nahi.
+        // Plan: har player ki fee uske age group se (team ki category, team nahi toh player ka categoryId). Fee nahi toh bill nahi.
         const billsByPlayer = new Map();
         let noFee = 0;
         players.forEach((player) => {
             if (!plan) return billsByPlayer.set(String(player._id), billsFromItems(items, title));
-            const category = player.teamId?.categoryId;
+            const category = player.teamId?.categoryId || player.categoryId;
             const planBills = plan.chargesFor(
                 category?._id,
                 plan.pricingMode === "per_age_group" ? category?.name : "",

@@ -430,11 +430,13 @@ const quoteFeePlan = async (req, res) => {
         if (query.playerId) {
             if (!isValidId(query.playerId)) return sendError(res, 400, "Invalid player id.");
             player = await Player.findOne({ _id: query.playerId, clubId: plan.clubId })
-                .select("teamId createdAt")
-                .populate({ path: "teamId", select: "name categoryId", populate: { path: "categoryId", select: "name" } });
+                .select("teamId categoryId createdAt")
+                .populate({ path: "teamId", select: "name categoryId", populate: { path: "categoryId", select: "name" } })
+                .populate({ path: "categoryId", select: "name" });
             if (!player) return sendError(res, 404, "Player not found.");
-            categoryId = player.teamId?.categoryId?._id || null;
-            categoryName = player.teamId?.categoryId?.name || "";
+            const group = player.teamId?.categoryId || player.categoryId; // team nahi toh player ka age group
+            categoryId = group?._id || null;
+            categoryName = group?.name || "";
             joinDate = player.createdAt;
         }
         if (query.categoryId) {
@@ -450,7 +452,7 @@ const quoteFeePlan = async (req, res) => {
             joinDate = m.toDate();
         }
         if (plan.pricingMode === "per_age_group" && !categoryId) {
-            return sendError(res, 400, player ? "This player has no team, so no age group fee." : "Send playerId or categoryId.");
+            return sendError(res, 400, player ? "This player has no age group (no team and no age group set)." : "Send playerId or categoryId.");
         }
         joinDate = joinDate || new Date();
 
