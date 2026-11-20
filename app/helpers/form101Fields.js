@@ -2,7 +2,7 @@
 // yahan check + saaf hota hai, phir PDF banta hai. Kuch bhi DB mein save NAHI hota.
 //
 // Sections (official form ke hisaab se):
-//   א employer        -> form se (app bhejta hai): name, address, phone, deductionFileNumber, taxId, email
+//   א employer        -> coach nahi bharta, club record se aata hai (taxId, deductionFileNumber, phone...)
 //   ב employee        -> coach ki details
 //   ג children        -> 19 saal se chhote bachche (custody / child allowance checkbox)
 //   ד employerIncome  -> is club se income ka type + start date
@@ -427,20 +427,6 @@ const CREDIT_DOCUMENTS = {
     reserveCombat: { num: "16", required: false, label: 'אישור מצה"ל על ימי שירות מילואים' },
 };
 
-// א. פרטי המעסיק: form se aata hai (club record se nahi).
-// Official form: שם, כתובת, מספר טלפון, מספר תיק ניכויים. taxId (ח.פ.) optional, PDF ka extra chhota cell.
-const parseEmployer = (src) => {
-    const e = isObj(src) ? src : {};
-    return {
-        name: str(e.name, "Employer name", { required: true, max: 150 }),
-        address: str(e.address, "Employer address", { required: true, max: 250 }),
-        phone: phone(e.phone, "Employer phone"),
-        deductionFileNumber: digits(e.deductionFileNumber, "Employer deduction file number", { required: true, min: 5, max: 15 }),
-        taxId: digits(e.taxId, "Employer tax ID", { min: 5, max: 15 }),
-        email: email(e.email, "Employer email"), // app ka "Employer's email address"
-    };
-};
-
 /**
  * Pura form check karta hai. Galat ho toh Form101Error (message coach ko dikhane layak).
  * @returns saaf kiya hua form object (sirf PDF banane ke liye, save nahi hota)
@@ -448,7 +434,6 @@ const parseEmployer = (src) => {
 const parseForm101 = (body, taxYear) => {
     if (!isObj(body)) fail("Form data is missing.");
 
-    const employer = parseEmployer(body.employer);
     const employee = parseEmployee(body.employee);
     const otherIncome = parseOtherIncome(body.otherIncome);
     const children = parseChildren(body.children, taxYear);
@@ -457,7 +442,6 @@ const parseForm101 = (body, taxYear) => {
 
     return {
         taxYear,
-        employer,
         employee,
         children,
         employerIncome: parseEmployerIncome(body.employerIncome),

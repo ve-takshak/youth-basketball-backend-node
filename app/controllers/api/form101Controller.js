@@ -15,7 +15,7 @@ const { encrypt, decrypt } = require("../../helpers/secretBox");
 const { saveDraftFile, readDraftFile, deleteDraftFiles, setDraftFilesExpiry } = require("../../helpers/form101DraftFiles");
 
 // Form 101 (טופס 101) — coach mobile app se bharta hai.
-//   GET  /user/coach/form101                   coach: profile se prefill + is saal ka status + saved data
+//   GET  /user/coach/form101                   coach: club ka employer data (read-only) + profile prefill + status + saved data
 //   PUT  /user/coach/form101/draft             coach: adhoora form save (1 mahina rehta hai)
 //   DELETE /user/coach/form101/draft           coach: saved data hatao, shuru se bharo
 //   GET  /user/coach/form101/saved             coach: reject hua form / adhoora form ka bhara data + documents + reason
@@ -59,7 +59,20 @@ const sendServerError = (res, label, e) => {
 // Israel ka current tax year
 const currentTaxYear = () => Number(new Intl.DateTimeFormat("en-CA", { timeZone: TIME_ZONE, year: "numeric" }).format(new Date()));
 
-// Section א (employer details) form se aata hai: data.employer (helpers/form101Fields parseEmployer). Club record se nahi.
+// Section א: employer details hamesha coach ke APNE club se (club admin / super admin bharte hain,
+// GET/PUT /user/clubs/:id/legal-details). Coach ke liye read-only: app jo bheje wo ignore.
+const employerOf = (club) => ({
+    name: club.legalName || club.name || "",
+    address: club.officialAddress || "",
+    phone: club.phone || "",
+    taxId: club.taxId || "",
+    deductionFileNumber: club.deductionFileNumber || "",
+});
+
+const missingEmployerFields = (employer) => {
+    const labels = { name: "legal name", address: "official address", deductionFileNumber: "deduction file number (תיק ניכויים)" };
+    return Object.keys(labels).filter((k) => !employer[k]).map((k) => labels[k]);
+};
 
 // Kis kis ko email jayega: club ke saare club admins (jinka email hai) + accounting (agar set hai)
 const recipientsOf = async (club) => {
@@ -69,6 +82,18 @@ const recipientsOf = async (club) => {
     if (accounting) emails.push(accounting);
     return [...new Set(emails.map((e) => e.toLowerCase()))];
 };
+
+// Employer (club) ka email = club admin ka email (club ko Form 101 isi pe jaata hai). Club ki apni email field nahi hai.
+const clubEmailOf = async (club) => {
+    const admin = await ClubAdmin.findOne({ clubId: club._id }).sort({ createdAt: 1 }).populate("userId", "email");
+    return admin?.userId?.email ? admin.userId.email.toLowerCase() : "";
+};
+
+// Coach ko dikhane wala employer (read-only): club ki legal details + club ka email
+const employerForCoach = async (club) => ({ ...employerOf(club), email: await clubEmailOf(club) });
+
+// Saved form mein employer hamesha club wala (coach badal nahi sakta, purana / app ka bheja hua ignore)
+const withClubEmployer = (data, employer) => (data ? { ...data, employer } : data);
 
 // Timeline: submitted -> returned (reason) -> submitted (dobara) -> approved ... (naya pehle)
 const timelineOf = (sub) =>
@@ -230,7 +255,8 @@ const coachOf = async (req) => {
 
 /**
  * GET /user/coach/form101   (coach)
- * employee = profile se suggestion (app form mein pehle se bhar de). Employer details (א) app form mein bharta hai.
+ * Employer details (א) sirf coach ke apne club se, READ-ONLY (club admin / super admin bharte hain).
+ * employee = profile se suggestion (app form mein pehle se bhar de).
  */
 const getMyForm101 = async (req, res) => {
     try {
@@ -238,14 +264,19 @@ const getMyForm101 = async (req, res) => {
         if (!coach) return sendError(res, status, message);
 
         const year = currentTaxYear();
-        const [current, history, draft] = await Promise.all([
+        const [current, history, draft, employer] = await Promise.all([
             Form101Submission.findOne({ coachId: coach._id, year }),
             Form101Submission.find({ coachId: coach._id }).sort({ year: -1 }).select("year status submittedAt"),
             draftOf(coach._id, year),
+            employerForCoach(club),
         ]);
+        const missing = missingEmployerFields(employer);
 
         return sendOk(res, "Form 101 fetched.", {
             taxYear: year,
+            employer, // read-only: { name, address, phone, taxId, deductionFileNumber, email (club admin) }
+            employerReady: !missing.length, // false = club ne details nahi bhari, coach submit nahi kar sakta
+            employerMissing: missing,
             employee: {
                 firstName: req.user.firstname || "",
                 lastName: req.user.lastname || "",
@@ -258,7 +289,7 @@ const getMyForm101 = async (req, res) => {
             history: history.map((h) => ({ year: h.year, status: h.status, submittedAt: h.submittedAt })),
             // Pehle bhara hua data (adhoora save ya wapas aaya form): app isse form pre-fill kare. null = khali form.
             // files = saved documents (link ke saath). Signature kabhi save nahi, har submit pe naya.
-            savedForm: draft ? { ...draft, files: savedFilesOf(req, coach._id, draft.files) } : null,
+            savedForm: draft ? { ...draft, data: withClubEmployer(draft.data, employer), files: savedFilesOf(req, coach._id, draft.files) } : null,
         });
     } catch (e) {
         return sendServerError(res, "getMyForm101", e);
@@ -311,7 +342,11 @@ const getMyForm101Saved = async (req, res) => {
         if (!coach) return sendError(res, status, message);
 
         const year = currentTaxYear();
-        const [current, draft] = await Promise.all([Form101Submission.findOne({ coachId: coach._id, year }), draftOf(coach._id, year)]);
+        const [current, draft, employer] = await Promise.all([
+            Form101Submission.findOne({ coachId: coach._id, year }),
+            draftOf(coach._id, year),
+            employerForCoach(club),
+        ]);
         const st = formatStatus(current, year, settingsOf(club));
 
         return sendOk(res, draft ? "Saved Form 101 fetched." : "No saved Form 101 data.", {
@@ -324,7 +359,8 @@ const getMyForm101Saved = async (req, res) => {
             source: draft?.source || null, // draft = adhoora save, submitted = pichhla bheja hua form
             savedAt: draft?.savedAt || null,
             expiresAt: draft?.expiresAt || null, // is date ke baad data delete, shuru se bharna hoga
-            form: draft?.data || null,
+            form: draft ? withClubEmployer(draft.data, employer) : null, // employer hamesha club wala (read-only)
+            employer, // club ki details + email, form khali ho tab bhi (read-only)
             files: draft ? savedFilesOf(req, coach._id, draft.files) : [],
             reupload: ["signature"],
         });
@@ -350,9 +386,9 @@ const deleteMyForm101Draft = async (req, res) => {
 /**
  * POST /user/coach/form101/submit   (coach)
  * multipart/form-data:
- *   data        JSON string: { employer, employee, children, employerIncome, otherIncome, spouse, changes,
+ *   data        JSON string: { employee, children, employerIncome, otherIncome, spouse, changes,
  *                              taxCredits, taxCoordination, declaration: { agreed: true } }
- *               employer = { name, address, phone?, deductionFileNumber, taxId? }  (section א, form se)
+ *               employer (section א) app NAHI bhejta / bheje toh ignore: hamesha club ki legal details se.
  *   signature   PNG / JPG file (signature pad se) YA text field: "data:image/png;base64,..."
  *   idCard      1-2 files: ID card + ספח (photo ya PDF)
  *   doc_<reason> section ח ke reason ki file(s), max 3 har reason: doc_disabled, doc_disabilityAllowance,
@@ -372,6 +408,12 @@ const submitMyForm101 = async (req, res) => {
         if (!coach) return sendError(res, status, message);
 
         const year = currentTaxYear();
+        const employer = employerOf(club);
+        const missing = missingEmployerFields(employer);
+        if (missing.length) {
+            return sendError(res, 409, `Your club has not completed its employer details (${missing.join(", ")}). Please contact your club admin.`);
+        }
+
         const recipients = await recipientsOf(club);
         if (!recipients.length) return sendError(res, 409, "Your club admin has no email address set. Please contact your club admin.");
 
@@ -473,7 +515,7 @@ const submitMyForm101 = async (req, res) => {
         const signedAt = new Intl.DateTimeFormat("en-GB", { timeZone: TIME_ZONE, day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date());
         let pdf;
         try {
-            pdf = await buildForm101Pdf(form, form.employer, { signature, idCard, creditDocs, attachments, signedAt });
+            pdf = await buildForm101Pdf(form, employer, { signature, idCard, creditDocs, attachments, signedAt });
         } catch (e) {
             if (e instanceof Form101AttachmentError) return sendError(res, 400, e.message);
             if (e instanceof Form101PdfNotReady) return sendError(res, 503, "Form 101 is not available yet. Please try again later.");
@@ -965,6 +1007,8 @@ const formatSettings = (club) => ({
     mandatory: club.form101Settings?.mandatory !== false,
     accountingEmail: club.form101Settings?.accountingEmail || "",
     requireApproval: !!club.form101Settings?.requireApproval,
+    employer: employerOf(club),
+    employerMissing: missingEmployerFields(employerOf(club)),
 });
 
 /** GET /user/clubs/:id/form101-settings */

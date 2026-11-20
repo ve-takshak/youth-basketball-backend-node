@@ -363,14 +363,13 @@ const drawPage1 = (s, form, employer) => {
     );
     s.tc("{ראה הסברים (לפי המספרים) מעבר לדף}", cx, introEnd - 8.3, { size: 6.8 });
 
-    // א. פרטי המעסיק (ח.פ. official form mein nahi, client ke kehne pe chhota cell)
+    // א. פרטי המעסיק: official form jaisa sirf 4 box. taxId (ח.פ.) club mein save hota hai, PDF mein nahi.
     s.heading("א. פרטי המעסיק", 701, { sub: '(למילוי ע"י המעסיק)' });
     cellRow(s, 696, 26, [
-        { w: 0.31, label: "שם", value: employer.name },
-        { w: 0.27, label: "כתובת", value: employer.address },
-        { w: 0.13, label: "מספר טלפון", value: employer.phone },
-        { w: 0.17, label: "מספר תיק ניכויים", value: employer.deductionFileNumber, digits: 9 },
-        { w: 0.12, label: "ח.פ. / מס' עמותה", value: employer.taxId },
+        { w: 0.36, label: "שם", value: employer.name },
+        { w: 0.3, label: "כתובת", value: employer.address },
+        { w: 0.15, label: "מספר טלפון", value: employer.phone },
+        { w: 0.19, label: "מספר תיק ניכויים", value: employer.deductionFileNumber, digits: 9 },
     ]);
 
     // ב. פרטי העובד/ת

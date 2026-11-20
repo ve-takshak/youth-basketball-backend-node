@@ -81,6 +81,37 @@ const formatClubAdmin = (admin) => ({
     mobileNumber: admin.userId?.mobileNumber || "",
 });
 
+// Legal & tax fields (sab optional). Jo bheje gaye wahi wapas: { fields } ya { error }.
+// taxId / deductionFileNumber: sirf digits (5-15), khaali bhejne pe field saaf ho jaati hai.
+const LEGAL_DIGIT_FIELDS = { taxId: "Tax ID / registration number", deductionFileNumber: "Deduction file number" };
+const pickLegal = (body = {}) => {
+    const fields = {};
+
+    for (const key of ["legalName", "officialAddress"]) {
+        if (body[key] === undefined) continue;
+        const value = String(body[key] ?? "").trim();
+        const max = key === "legalName" ? 150 : 250;
+        if (value.length > max) return { error: `${key === "legalName" ? "Legal name" : "Official address"} must be ${max} characters or fewer.` };
+        fields[key] = value;
+    }
+
+    for (const [key, label] of Object.entries(LEGAL_DIGIT_FIELDS)) {
+        if (body[key] === undefined) continue;
+        const value = String(body[key] ?? "").replace(/[\s-]/g, "");
+        if (value && !/^\d{5,15}$/.test(value)) return { error: `${label} must be 5 to 15 digits.` };
+        fields[key] = value;
+    }
+
+    // Employer phone (Form 101 section א): 9-10 digits, jaise 097610611 / 0501234567
+    if (body.phone !== undefined) {
+        const value = String(body.phone ?? "").replace(/[\s()-]/g, "");
+        if (value && !/^\+?\d{9,15}$/.test(value)) return { error: "Club phone must be 9 to 15 digits." };
+        fields.phone = value;
+    }
+
+    return { fields };
+};
+
 // theme object se sirf valid colors nikalna, galat ho toh error
 const pickTheme = (theme = {}) => {
     const result = {};
@@ -104,6 +135,7 @@ const findClubByName = (name, excludeId = null) =>
  * Ek hi call mein 3 cheezein banti hain: Club + User (role: clubAdmin) + ClubAdmin record.
  * multipart/form-data: {
  *   name, logo? (file), theme?: { primary, secondary, background },
+ *   legalName?, taxId?, deductionFileNumber?, officialAddress?, phone?,
  *   clubAdmin: { firstname, lastname, countryCode, mobileNumber, email? }
  * }
  */
@@ -169,6 +201,17 @@ const createClub = async (req, res) => {
             });
         }
 
+        const legal = pickLegal(req.body);
+        if (legal.error) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: legal.error,
+                message_desc: legal.error,
+                data: {},
+            });
+        }
+
         const checked = validatePersonInput(clubAdmin || {});
         if (checked.message) {
             const message = `Club admin: ${checked.message}`;
@@ -218,6 +261,7 @@ const createClub = async (req, res) => {
             name,
             logo: String(logo).trim(),
             theme: picked.theme,
+            ...legal.fields,
             createdBy: req.user._id,
         });
 
@@ -523,7 +567,7 @@ const getClub = async (req, res) => {
 
 /**
  * PUT /api/user/updateClub/:id   (sirf superAdmin)
- * multipart/form-data: jo badalna hai wahi { name?, logo? (file), theme?, clubAdmin? }
+ * multipart/form-data: jo badalna hai wahi { name?, logo? (file), theme?, clubAdmin?, legalName?, taxId?, deductionFileNumber?, officialAddress?, phone? }
  * logo ko "" bhejo toh logo hat jayega
  */
 const updateClub = async (req, res) => {
@@ -589,6 +633,18 @@ const updateClub = async (req, res) => {
 
             club.name = newName;
         }
+
+        const legal = pickLegal(req.body);
+        if (legal.error) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: legal.error,
+                message_desc: legal.error,
+                data: {},
+            });
+        }
+        Object.assign(club, legal.fields);
 
         if (theme !== undefined) {
             let parsedTheme = theme;
@@ -950,4 +1006,63 @@ const clubOptions = async (req, res) => {
 };
 
 
-module.exports = { createClub, listClubs, getClub, getDashboardSummary, updateClub, deleteClub, restoreClub, clubOptions };
+// ---------- Legal & tax details (Form 101 section א ke employer details) ----------
+// Club admin apne club ki ye 5 fields khud bhar sake (baaki club settings sirf superAdmin: updateClub).
+const legalReply = (res, status, message, data = {}) =>
+    res.status(status).json({ error: status >= 400, status, message, message_desc: message, data });
+
+const legalOf = (club) => ({
+    clubId: club._id,
+    legalName: club.legalName || "",
+    taxId: club.taxId || "",
+    deductionFileNumber: club.deductionFileNumber || "",
+    officialAddress: club.officialAddress || "",
+    phone: club.phone || "",
+});
+
+const findLegalClub = async (req, id) => {
+    if (!isValidId(id)) return { status: 400, message: "Invalid club id." };
+    if (req.user.role === ROLES.CLUB_ADMIN && String(req.clubId) !== String(id)) return { status: 403, message: "You can only manage your own club." };
+    const club = await Club.findById(id);
+    if (!club) return { status: 404, message: "Club not found." };
+    return { club };
+};
+
+/**
+ * GET /api/user/clubs/:id/legal-details   (clubAdmin: apna club, superAdmin: koi bhi)
+ */
+const getClubLegalDetails = async (req, res) => {
+    try {
+        const { club, status, message } = await findLegalClub(req, req.params.id);
+        if (!club) return legalReply(res, status, message);
+        return legalReply(res, 200, "Legal details fetched.", legalOf(club));
+    } catch (e) {
+        console.error("getClubLegalDetails error:", e?.message || e);
+        return legalReply(res, 500, "Something went wrong.");
+    }
+};
+
+/**
+ * PUT /api/user/clubs/:id/legal-details   (clubAdmin: apna club, superAdmin: koi bhi)
+ * body (JSON): jo badalna hai wahi { legalName?, taxId?, deductionFileNumber?, officialAddress?, phone? }
+ * "" bhejo toh field khali. taxId / deductionFileNumber 5-15 digits, phone 9-15 digits.
+ */
+const updateClubLegalDetails = async (req, res) => {
+    try {
+        const { club, status, message } = await findLegalClub(req, req.params.id);
+        if (!club) return legalReply(res, status, message);
+
+        const { fields, error } = pickLegal(req.body || {});
+        if (error) return legalReply(res, 400, error);
+        if (!Object.keys(fields).length) return legalReply(res, 400, "Nothing to update. Send at least one legal field.");
+
+        Object.assign(club, fields);
+        await club.save();
+        return legalReply(res, 200, "Legal details saved.", legalOf(club));
+    } catch (e) {
+        console.error("updateClubLegalDetails error:", e?.message || e);
+        return legalReply(res, 500, "Something went wrong.");
+    }
+};
+
+module.exports = { createClub, listClubs, getClub, getDashboardSummary, updateClub, deleteClub, restoreClub, clubOptions, getClubLegalDetails, updateClubLegalDetails };
