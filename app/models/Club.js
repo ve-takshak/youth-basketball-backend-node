@@ -25,7 +25,7 @@ const ClubSchema = new mongoose.Schema(
 
         // Theme colors
         theme: {
-            primary: { type: String, default: "#1E40AF" },
+            primary: { type: String, default: "#0738A8" },
             secondary: { type: String, default: "#F59E0B" },
             background: { type: String, default: "#FFFFFF" },
         },

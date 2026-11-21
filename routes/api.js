@@ -10,7 +10,7 @@ const {
 } = require("../app/middleware/authentication");
 
 const { register, login, verifyOtp, getProfile, resendOtp, registerParent, updateParentProfile, updateProfile, refreshToken, logout } = require("../app/controllers/api/userController");
-const { createClub, listClubs, getClub, getDashboardSummary, updateClub, deleteClub, restoreClub, clubOptions, getClubLegalDetails, updateClubLegalDetails } = require("../app/controllers/api/clubController");
+const { createClub, listClubs, getClub, getDashboardSummary, updateClub, updateMyClubBranding, getMyClubLogo, deleteClub, restoreClub, clubOptions, getClubLegalDetails, updateClubLegalDetails } = require("../app/controllers/api/clubController");
 const {
     createClubAdmin,
     listClubAdmins,
@@ -173,6 +173,8 @@ router.post("/user/createClub", superAdminAuthentication, createClub);
 router.get("/user/listClubs", superAdminOrClubAdminAuthentication, listClubs);   // clubAdmin ko sirf apna club
 router.get("/user/getClub/:id", superAdminOrClubAdminAuthentication, getClub);
 router.put("/user/updateClub/:id", superAdminAuthentication, updateClub);
+router.put("/user/club/me", clubAdminAuthentication, updateMyClubBranding);
+router.get("/user/club/me/logo", clubAdminAuthentication, getMyClubLogo);      // logo bytes (Flutter web theme detect, S3 CORS nahi)      // clubAdmin apne club ka logo aur theme
 router.get("/user/clubs/:id/legal-details", superAdminOrClubAdminAuthentication, getClubLegalDetails);    // legal & tax details (Form 101 employer)
 router.put("/user/clubs/:id/legal-details", superAdminOrClubAdminAuthentication, updateClubLegalDetails); // clubAdmin apne club ki
 router.delete("/user/deleteClub/:id", superAdminAuthentication, deleteClub);
@@ -353,8 +355,8 @@ router.post("/user/coach/form101/submit", authentication, submitMyForm101);     
 router.get("/user/form101", clubAdminAuthentication, listForm101Status); // ?year=&status=
 router.get("/user/form101/submitted", clubAdminAuthentication, listSubmittedForm101); // sirf jinhone bhara + coach details
 router.put("/user/form101/:id/review", clubAdminAuthentication, reviewForm101); // approve / return + reason
-router.get("/user/coaches/:id/form101", clubAdminAuthentication, getCoachForm101); // ek coach: status + timeline
-router.get("/user/coaches/:id/form101/history", clubAdminAuthentication, getCoachForm101History); // poori history (kisne, kab, reason)
+router.get("/user/coaches/:id/form101", superAdminOrClubAdminAuthentication, getCoachForm101); // status + timeline
+router.get("/user/coaches/:id/form101/history", superAdminOrClubAdminAuthentication, getCoachForm101History); // poori history (kisne, kab, reason)
 router.get("/user/form101/:id/pdf-link", clubAdminAuthentication, getForm101PdfLink); // 5 min ka download link (JSON)
 router.get("/form101/pdf/:token", downloadForm101PdfByLink); // bina token: link wala download
 router.get("/user/coach/form101/preview-link", authentication, getMyForm101PreviewLink); // coach: saved form (draft / bheja hua) ka PDF preview link

@@ -10,7 +10,7 @@ const Parent = require("../../models/Parent");
 const { ROLES } = require("../../helpers/constants");
 const { isValidId, escapeRegex, getPagination } = require("../../helpers/common");
 const { validatePersonInput, findDuplicateUser } = require("../../helpers/userHelper");
-const { upload_files, deleteFiles } = require("../../../utils/s3");
+const { upload_files, deleteFiles, isBucketUrl, signBucketUrl } = require("../../../utils/s3");
 
 const isHexColor = (color) => /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/.test(color);
 
@@ -1072,4 +1072,148 @@ const updateClubLegalDetails = async (req, res) => {
     }
 };
 
-module.exports = { createClub, listClubs, getClub, getDashboardSummary, updateClub, deleteClub, restoreClub, clubOptions, getClubLegalDetails, updateClubLegalDetails };
+/**
+ * PUT /api/user/club/me   (sirf clubAdmin)
+ * Club admin updates their OWN club's logo and theme colors.
+ * multipart/form-data: { logo? (file), removeLogo?: "true", theme?: { primary, secondary, background } }
+ */
+const updateMyClubBranding = async (req, res) => {
+    try {
+        const clubId = req.clubId;
+        if (!clubId || !isValidId(clubId)) {
+            return res.status(404).json({
+                error: true,
+                status: 404,
+                message: "Club not found.",
+                message_desc: "Club not found.",
+                data: {},
+            });
+        }
+
+        const club = await Club.findById(clubId);
+        if (!club) {
+            return res.status(404).json({
+                error: true,
+                status: 404,
+                message: "Club not found.",
+                message_desc: "Club not found.",
+                data: {},
+            });
+        }
+
+        const logoCheck = getLogoFile(req);
+        if (logoCheck.error) {
+            return res.status(400).json({
+                error: true,
+                status: 400,
+                message: logoCheck.error,
+                message_desc: logoCheck.error,
+                data: {},
+            });
+        }
+
+        const { removeLogo: removeLogoParam, theme } = req.body || {};
+
+        if (theme !== undefined) {
+            let parsedTheme = theme;
+            if (typeof parsedTheme === "string") {
+                try {
+                    parsedTheme = JSON.parse(parsedTheme);
+                } catch (e) {
+                    parsedTheme = {};
+                }
+            }
+            const picked = pickTheme(parsedTheme || {});
+            if (picked.error) {
+                return res.status(400).json({
+                    error: true,
+                    status: 400,
+                    message: picked.error,
+                    message_desc: picked.error,
+                    data: {},
+                });
+            }
+            Object.assign(club.theme, picked.theme);
+            club.markModified("theme");
+        }
+
+        let oldLogoToDelete = null;
+        if (logoCheck.file) {
+            const uploadedLogo = await upload_files("clubs", logoCheck.file);
+            if (!uploadedLogo) {
+                return res.status(500).json({
+                    error: true,
+                    status: 500,
+                    message: "Logo upload failed. Please try again.",
+                    message_desc: "Logo upload failed. Please try again.",
+                    data: {},
+                });
+            }
+            oldLogoToDelete = club.logo;
+            club.logo = uploadedLogo;
+        } else if (removeLogoParam === "true" || removeLogoParam === true) {
+            if (club.logo) {
+                oldLogoToDelete = club.logo;
+            }
+            club.logo = "";
+        }
+
+        await club.save();
+
+        if (oldLogoToDelete && oldLogoToDelete !== club.logo) {
+            await removeLogo(oldLogoToDelete);
+        }
+
+        return res.status(200).json({
+            error: false,
+            status: 200,
+            message: "Club updated successfully.",
+            message_desc: "Club updated successfully.",
+            data: formatClub(club),
+        });
+    } catch (e) {
+        console.error("Update my club branding error:", e);
+        return res.status(500).json({
+            error: true,
+            status: 500,
+            message: "Something went wrong.",
+            message_desc: e.message,
+            data: {},
+        });
+    }
+};
+
+/**
+ * GET /api/user/club/me/logo   (sirf clubAdmin)
+ * Apne club ka logo, API ke through (image bytes). Flutter web ko logo ke pixels chahiye
+ * (theme colors nikalne ke liye) aur S3 bucket CORS nahi deta; API CORS deta hai.
+ */
+const getMyClubLogo = async (req, res) => {
+    try {
+        const club = await Club.findById(req.clubId).select("logo");
+        const logo = club?.logo || "";
+        if (!logo) return res.status(404).json({ error: true, status: 404, message: "Club has no logo.", message_desc: "Club has no logo.", data: {} });
+
+        // Purana local upload
+        if (!logo.startsWith("http")) {
+            const filePath = path.resolve(__dirname, "../../../", logo);
+            if (!fs.existsSync(filePath)) return res.status(404).json({ error: true, status: 404, message: "Logo file not found.", message_desc: "Logo file not found.", data: {} });
+            res.set("Cache-Control", "private, max-age=300");
+            return res.sendFile(filePath);
+        }
+
+        // S3 (private bucket) -> signed URL se laake bhejna
+        const url = isBucketUrl(logo) ? await signBucketUrl(logo) : logo;
+        const upstream = await fetch(url);
+        if (!upstream.ok) return res.status(502).json({ error: true, status: 502, message: "Could not load logo.", message_desc: `Upstream ${upstream.status}`, data: {} });
+        const buffer = Buffer.from(await upstream.arrayBuffer());
+        res.set("Content-Type", upstream.headers.get("content-type") || "image/png");
+        res.set("Cache-Control", "private, max-age=300");
+        return res.send(buffer);
+    } catch (e) {
+        console.error("Get my club logo error:", e);
+        return res.status(500).json({ error: true, status: 500, message: "Something went wrong.", message_desc: e.message, data: {} });
+    }
+};
+
+module.exports = { createClub, listClubs, getClub, getDashboardSummary, updateClub, updateMyClubBranding, getMyClubLogo, deleteClub, restoreClub, clubOptions, getClubLegalDetails, updateClubLegalDetails };

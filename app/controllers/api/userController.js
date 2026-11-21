@@ -115,19 +115,25 @@ const invalidOtp = (res, user) =>
         data: { attemptsLeft: Math.max(0, OTP_MAX_FAILED_ATTEMPTS - (user.otp_failed_attempts || 0)) },
     });
 
-// Club ka ek hi format, har API mein same: { _id, clubCode, name, theme }
-const formatClub = (club) =>
-    club && club._id
-        ? {
-              _id: club._id,
-              clubCode: club.clubCode || "",
-              name: club.name || "",
-              theme: club.theme || {},
-              isArchived: !!club.isArchived,
-          }
-        : null;
+// Club ka ek hi format, har API mein same: { _id, clubCode, name, logoUrl, theme }
+const formatClub = (club) => {
+    if (!club || !club._id) return null;
+    const appUrl = process.env.APP_URL || "http://localhost:5000";
+    let logoUrl = "";
+    if (club.logo) {
+        logoUrl = club.logo.startsWith("http") ? club.logo : `${appUrl}/${club.logo.replace(/\\/g, "/")}`;
+    }
+    return {
+        _id: club._id,
+        clubCode: club.clubCode || "",
+        name: club.name || "",
+        logoUrl,
+        theme: club.theme || { primary: "#0738A8", secondary: "#F59E0B", background: "#FFFFFF" },
+        isArchived: !!club.isArchived,
+    };
+};
 
-const CLUB_FIELDS = "_id clubCode name theme isArchived";
+const CLUB_FIELDS = "_id clubCode name logo theme isArchived";
 
 const ARCHIVED_MESSAGE = "Your club has been archived. Please contact the administrator.";
 
@@ -852,9 +858,9 @@ const getProfile = async (req, res) => {
 
 /**
  * PUT /api/user/profile
- * Web panel (superAdmin / clubAdmin) apni profile badle.
- * body: { firstname?, lastname?, email?, birthDate? }
- * Mobile yahan se nahi badalta (login usi se hota hai).
+ * Web panel / app: apni profile badle.
+ * body: { firstname?, lastname?, email?, birthDate?, countryCode?, mobileNumber? }
+ * Mobile number change sirf clubAdmin / superAdmin ke liye allowed hai.
  */
 const updateProfile = async (req, res) => {
     try {
@@ -870,9 +876,16 @@ const updateProfile = async (req, res) => {
             });
         }
 
-        // Sirf ye fields, baaki (mobile, role waghera) ignore
-        const { firstname, lastname, email, birthDate } = req.body || {};
-        const updateError = await applyPersonUpdates(user, { firstname, lastname, email, birthDate });
+        const { firstname, lastname, email, birthDate, countryCode, mobileNumber } = req.body || {};
+        const updates = { firstname, lastname, email, birthDate };
+
+        // Sirf clubAdmin aur superAdmin apna mobile number badal sakte hain
+        if ([ROLES.CLUB_ADMIN, ROLES.SUPER_ADMIN].includes(req.user?.role)) {
+            if (countryCode !== undefined) updates.countryCode = countryCode;
+            if (mobileNumber !== undefined) updates.mobileNumber = mobileNumber;
+        }
+
+        const updateError = await applyPersonUpdates(user, updates);
         if (updateError) {
             return res.status(updateError.status).json({
                 error: true,

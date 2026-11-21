@@ -19,6 +19,9 @@ const CoachSchema = new mongoose.Schema(
     {
         userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, unique: true },
         clubId: { type: mongoose.Schema.Types.ObjectId, ref: "Club", required: true },
+        // Self-employed coaches who issue invoices can be exempt from Form 101.
+        // Default true preserves the existing mandatory behavior for old records.
+        form101Required: { type: Boolean, default: true },
 
         // Coach kin dinon mein training lena pasand karta hai, jaise ["sun", "tue", "thu"]
         preferredTrainingDays: { type: [{ type: String, enum: WEEK_DAYS }], default: [] },

@@ -135,7 +135,7 @@ const formatClubData = async (clubDoc) => {
     delete obj.logo;
 
     if (!obj.theme) {
-        obj.theme = { primary: "#1E40AF", secondary: "#F59E0B", background: "#FFFFFF" };
+        obj.theme = { primary: "#0738A8", secondary: "#F59E0B", background: "#FFFFFF" };
     }
 
     // Club ka primary owner / admin (photo ke saath)
@@ -171,6 +171,7 @@ const getRoleData = async (user) => {
         const club = coach && coach.clubId ? await formatClubData(coach.clubId) : null;
         return {
             coachId: coach ? coach._id : null,
+            form101Required: coach ? coach.form101Required !== false : true,
             club,
         };
     }
