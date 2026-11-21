@@ -9,9 +9,6 @@ const signS3Urls = require("./app/middleware/signS3Urls");
 
 const app = express();
 
-// Purane local logos ke liye (jo S3 se pehle upload hue the)
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-
 // Kaun se frontend is API ko call kar sakte hain
 const allowedOrigins = [
     "http://13.63.166.225", "http://51.17.184.245"
@@ -34,6 +31,10 @@ app.use(cors({
     allowedHeaders: ["Content-Type", "Authorization"],
     exposedHeaders: ["Content-Disposition"], // web panel download (Form 101 PDF) ko file ka naam mile
 }));
+
+// Purane local logos ke liye (jo S3 se pehle upload hue the).
+// CORS ke BAAD, taaki Flutter web (fetch se image load karta hai) ko bhi CORS header mile.
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json({ limit: "1mb" })); // Terms (rich text) 100kb se bade ho sakte hain

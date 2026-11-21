@@ -71,7 +71,7 @@ const employerOf = (club) => ({
     phone: club.phone || "",
     taxId: club.taxId || "",
     deductionFileNumber: club.deductionFileNumber || "",
-});
+}).filter(Boolean);
 
 const missingEmployerFields = (employer) => {
     const labels = { name: "legal name", address: "official address", deductionFileNumber: "deduction file number (תיק ניכויים)" };
@@ -266,6 +266,7 @@ const getMyForm101 = async (req, res) => {
     try {
         const { coach, club, status, message } = await coachOf(req);
         if (!coach) return sendError(res, status, message);
+        if (coach.form101Required === false) return sendError(res, 403, "Form 101 is not required for this coach.");
 
         const year = currentTaxYear();
         const [current, history, draft, employer] = await Promise.all([
@@ -317,6 +318,7 @@ const saveMyForm101Draft = async (req, res) => {
     try {
         const { coach, status, message } = await coachOf(req);
         if (!coach) return sendError(res, status, message);
+        if (coach.form101Required === false) return sendError(res, 403, "Form 101 is not required for this coach.");
 
         let data = req.body?.data;
         if (typeof data === "string") {
@@ -406,6 +408,7 @@ const getMyForm101Saved = async (req, res) => {
     try {
         const { coach, club, status, message } = await coachOf(req);
         if (!coach) return sendError(res, status, message);
+        if (coach.form101Required === false) return sendError(res, 403, "Form 101 is not required for this coach.");
 
         const year = currentTaxYear();
         const [current, draft, employer] = await Promise.all([
@@ -474,6 +477,7 @@ const submitMyForm101 = async (req, res) => {
     try {
         const { coach, club, status, message } = await coachOf(req);
         if (!coach) return sendError(res, status, message);
+        if (coach.form101Required === false) return sendError(res, 403, "Form 101 is not required for this coach.");
 
         const year = currentTaxYear();
         const employer = employerOf(club);
@@ -732,7 +736,7 @@ const listForm101Status = async (req, res) => {
         if (year < 2000 || year > 2100) return sendError(res, 400, "Invalid year.");
 
         const [coaches, subs, settings, saved] = await Promise.all([
-            Coach.find({ clubId }).populate("userId", "firstname lastname profile_image"),
+            Coach.find({ clubId, form101Required: { $ne: false } }).populate("userId", "firstname lastname profile_image"),
             Form101Submission.find({ clubId, year }),
             settingsFor(clubId),
             savedFormsOf(clubId, year),
@@ -750,7 +754,7 @@ const listForm101Status = async (req, res) => {
                 ...savedFormFields(saved.get(String(c._id))),
                 timeline: timelineOf(sub),
             };
-        });
+        }).filter(Boolean);
 
         if (req.query.status) list = list.filter((row) => row.status === req.query.status);
 
@@ -792,7 +796,7 @@ const listSubmittedForm101 = async (req, res) => {
         const [subs, settings, saved] = await Promise.all([
             Form101Submission.find({ clubId, year, ...(status ? { status } : {}) })
                 .sort({ submittedAt: -1 })
-                .populate({ path: "coachId", select: "userId", populate: { path: "userId", select: "firstname lastname email countryCode mobileNumber profile_image" } })
+                .populate({ path: "coachId", select: "userId form101Required", populate: { path: "userId", select: "firstname lastname email countryCode mobileNumber profile_image" } })
                 .populate("reviewedBy", "firstname lastname"),
             settingsFor(clubId),
             savedFormsOf(clubId, year),
@@ -800,6 +804,7 @@ const listSubmittedForm101 = async (req, res) => {
 
         // Sirf zaroori fields. Poori timeline / history: GET /user/coaches/:coachId/form101/history
         let list = subs.map((sub) => {
+            if (sub.coachId?.form101Required === false) return null;
             const user = sub.coachId?.userId;
             const reviewer = sub.reviewedBy;
             const { resubmitted } = formatStatus(sub, year, settings, { admin: true });
@@ -855,6 +860,8 @@ const reviewForm101 = async (req, res) => {
         if (!sub || String(sub.clubId) !== String(req.clubId)) {
             return sendError(res, 404, "Submission not found.");
         }
+        const coach = await Coach.findById(sub.coachId).select("form101Required");
+        if (!coach || coach.form101Required === false) return sendError(res, 403, "Form 101 is not required for this coach.");
 
         const action = String(req.body?.action || "");
         const reason = String(req.body?.reason || "").trim();
@@ -1061,6 +1068,7 @@ const getMyForm101PreviewLink = async (req, res) => {
     try {
         const { coach, status, message } = await coachOf(req);
         if (!coach) return sendError(res, status, message);
+        if (coach.form101Required === false) return sendError(res, 403, "Form 101 is not required for this coach.");
         const year = currentTaxYear();
         const draft = await draftOf(coach._id, year);
         if (!draft) return sendError(res, 404, "No saved Form 101 to preview. Please fill and save the form first.");
@@ -1140,10 +1148,12 @@ const getCoachForm101 = async (req, res) => {
     try {
         const { id } = req.params;
         if (!isValidId(id)) return sendError(res, 400, "Invalid coach id.");
-        const coach = await Coach.findById(id).select("clubId");
-        if (!coach || String(coach.clubId) !== String(req.clubId)) {
+        const coach = await Coach.findById(id).select("clubId form101Required");
+        const isSuperAdmin = req.user.role === ROLES.SUPER_ADMIN;
+        if (!coach || (!isSuperAdmin && String(coach.clubId) !== String(req.clubId))) {
             return sendError(res, 404, "Coach not found.");
         }
+        if (coach.form101Required === false) return sendError(res, 403, "Form 101 is not required for this coach.");
 
         const year = currentTaxYear();
         const [subs, settings, saved] = await Promise.all([
@@ -1176,9 +1186,11 @@ const getCoachForm101History = async (req, res) => {
         const { id } = req.params;
         if (!isValidId(id)) return sendError(res, 400, "Invalid coach id.");
         const coach = await Coach.findById(id).populate("userId", "firstname lastname email countryCode mobileNumber profile_image");
-        if (!coach || String(coach.clubId) !== String(req.clubId)) {
+        const isSuperAdmin = req.user.role === ROLES.SUPER_ADMIN;
+        if (!coach || (!isSuperAdmin && String(coach.clubId) !== String(req.clubId))) {
             return sendError(res, 404, "Coach not found.");
         }
+        if (coach.form101Required === false) return sendError(res, 403, "Form 101 is not required for this coach.");
 
         const year = currentTaxYear();
         const [subs, settings] = await Promise.all([
@@ -1287,10 +1299,15 @@ const updateForm101Settings = async (req, res) => {
 // Mandatory ka response: setting + is saal kitne coaches ne bhara (club admin ko ek nazar mein dikhe)
 const mandatoryStatusOf = async (club) => {
     const year = currentTaxYear();
-    const [totalCoaches, submittedCoaches] = await Promise.all([
-        Coach.countDocuments({ clubId: club._id }),
-        Form101Submission.countDocuments({ clubId: club._id, year, status: { $in: ["submitted", "approved"] } }),
-    ]);
+    // Exempt coaches (form101Required: false) count nahi hote
+    const requiredCoaches = await Coach.find({ clubId: club._id, form101Required: { $ne: false } }).select("_id").lean();
+    const totalCoaches = requiredCoaches.length;
+    const submittedCoaches = await Form101Submission.countDocuments({
+        clubId: club._id,
+        year,
+        coachId: { $in: requiredCoaches.map((r) => r._id) },
+        status: { $in: ["submitted", "approved"] },
+    });
     return {
         clubId: club._id,
         mandatory: club.form101Settings?.mandatory !== false,

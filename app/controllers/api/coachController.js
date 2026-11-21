@@ -59,6 +59,7 @@ const formatCoach = (record, assignedTeams = null) => ({
     club: record.clubId ? { _id: record.clubId._id, name: record.clubId.name } : null,
     preferredTrainingDays: record.preferredTrainingDays || [],
     unavailableHours: (record.unavailableHours || []).map((b) => ({ day: b.day, from: b.from, to: b.to })),
+    form101Required: record.form101Required !== false,
     teams: assignedTeams || record.teams || [],
     createdAt: record.createdAt,
 });
@@ -96,7 +97,8 @@ const validateAvailability = (body) => {
 /**
  * POST /api/user/coaches/create   (superAdmin ya clubAdmin)
  * body: { firstname, lastname, countryCode, mobileNumber, clubId (clubAdmin ke liye ignore), email?, birthDate?,
- *         preferredTrainingDays?: ["sun","tue"], unavailableHours?: [{ day, from, to }] }
+ *         preferredTrainingDays?: ["sun","tue"], unavailableHours?: [{ day, from, to }],
+ *         form101Required?: boolean }
  * User (role: coach) + Coach record dono banata hai.
  */
 const createCoach = async (req, res) => {
@@ -138,6 +140,7 @@ const createCoach = async (req, res) => {
             userId: user._id,
             clubId: club._id,
             ...availability.values,
+            form101Required: body.form101Required !== false,
             createdBy: req.user._id,
         });
 
@@ -203,6 +206,7 @@ const listCoaches = async (req, res) => {
             const subs = await Form101Submission.find({ coachId: { $in: records.map((r) => r._id) }, year }).select("coachId status submittedAt");
             const byCoach = new Map(subs.map((s) => [String(s.coachId), s]));
             form101Of = (record) => {
+                if (record.form101Required === false) return null;
                 const sub = byCoach.get(String(record._id));
                 const status = sub?.status || "not_submitted";
                 return {
@@ -260,7 +264,7 @@ const getCoach = async (req, res) => {
 /**
  * PUT /api/user/coaches/:id/update   (superAdmin ya clubAdmin, :id = Coach ki _id)
  * body: jo badalna hai wahi { firstname?, lastname?, email?, countryCode?, mobileNumber?, birthDate?,
- *       clubId? (sirf superAdmin), preferredTrainingDays?, unavailableHours? }
+ *       clubId? (sirf superAdmin), preferredTrainingDays?, unavailableHours?, form101Required? }
  * preferredTrainingDays / unavailableHours bheje toh POORI list replace hoti hai ([] = sab hatana).
  */
 const updateCoach = async (req, res) => {
@@ -291,6 +295,13 @@ const updateCoach = async (req, res) => {
         }
 
         Object.assign(record, availability.values);
+        if (body.form101Required !== undefined) {
+            record.form101Required =
+                body.form101Required === true ||
+                body.form101Required === "true" ||
+                body.form101Required === 1 ||
+                body.form101Required === "1";
+        }
 
         await user.save();
         await record.save();
