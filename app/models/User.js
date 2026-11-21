@@ -5,7 +5,7 @@ const UserSchema = new mongoose.Schema(
     {
         firstname: { type: String, trim: true, default: "" },
         lastname: { type: String, trim: true, default: "" },
-        username: { type: String, trim: true, default: "" },
+        username: { type: String, trim: true, default: "" }, 
         profile_image: { type: String, default: "" },
 
         // Optional. sparse = jinke paas email nahi unpe unique check nahi lagega
