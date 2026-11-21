@@ -17,6 +17,27 @@ const { providerForClub, returnUrls, addEvent, syncStandingOrder, planDates, lat
 const { PaymentError } = require("../../payments");
 const { ensureSeasonCharges, syncPlanBills } = require("../../helpers/autoBill");
 const { parseSeason, currentSeason } = require("../../helpers/season");
+const { listTransactions, TRANSACTION_FIELDS, MONEY_FILTER } = require("../../helpers/transactions");
+const { getPagination } = require("../../helpers/common");
+const { ageGroupsFor } = require("../../helpers/ageGroup");
+
+// Bill ke options (withPayOptions) -> app ke liye seedha: kya pay ho sakta hai aur kaise
+const payableOf = (bill) => {
+    if (!bill.options) return null; // paid / refunded / cancelled
+    const oneTime = bill.options.oneTime || null;
+    const so = bill.options.standingOrder || null;
+    return {
+        chargeId: bill._id, // isi se checkout: POST /user/parent/payments/:chargeId/checkout
+        category: bill.category, // subscription | jersey | camp | other
+        title: bill.title,
+        amount: bill.amount,
+        outstandingAmount: bill.outstandingAmount,
+        badge: bill.badge, // unpaid | overdue | pending
+        paymentOptions: oneTime && so ? "both" : so ? "standing_order" : "one_time", // kaunse button dikhane hain
+        oneTime: oneTime ? { amount: oneTime.amount } : null, // checkout body: { "plan": "one_time" }
+        emi: so ? { maxInstallments: so.maxInstallments, choices: so.choices } : null, // checkout body: { "plan": "standing_order", "installments": n }
+    };
+};
 
 // Parent (mobile app): apne bachchon ke bills dekhna aur pay karna. Senior player apna khud.
 //   GET  /user/parent/payments
@@ -196,11 +217,14 @@ const listMyChildrenPayments = async (req, res) => {
                 .populate(PLAYER_POPULATE),
         ]);
         const formatted = await withPayOptions(charges);
+        const groups = await ageGroupsFor(ids, season.value); // team | chuna hua | birth date + gender se
 
         const children = players.map((player) => {
             const key = String(player._id);
             const bills = formatted.filter((c) => String(c.player?._id) === key);
             const subscriptionBill = bills.find((c) => (c.items || []).some((i) => i.type === "season_registration")) || null;
+            // Subscription pehle, phir jersey
+            const payable = bills.map(payableOf).filter(Boolean).sort((a, b) => (a.category === "subscription" ? -1 : b.category === "subscription" ? 1 : 0));
             const reason = reasons.get(key) || "no_plan";
             const totalAmount = round(bills.reduce((s, c) => s + (c.amount || 0), 0));
             const outstanding = round(charges.filter((c) => String(c.playerId?._id || c.playerId) === key).reduce((s, c) => s + amounts(c).outstanding, 0));
@@ -211,7 +235,7 @@ const listMyChildrenPayments = async (req, res) => {
                 profile_image: player.userId?.profile_image || "",
                 playerType: player.playerType,
                 team: player.teamId?._id ? { _id: player.teamId._id, name: player.teamId.name } : null,
-                ageGroup: player.teamId?.categoryId?.name || "",
+                ageGroup: groups.get(key)?.name || "", // fee isi age group ki lagti hai
                 season: season.value,
                 subscriptionStatus: subscriptionBill?.badge === "paid" ? "active" : "inactive",
                 paymentRequired: Boolean(subscriptionBill) && subscriptionBill.badge !== "paid",
@@ -220,6 +244,10 @@ const listMyChildrenPayments = async (req, res) => {
                 outstandingAmount: outstanding,
                 message: subscriptionBill ? "" : NO_BILL_MESSAGES[reason] || "",
                 noBillReason: subscriptionBill ? null : reason, // no_plan | no_team | no_fee | inactive | senior
+                // ---- Pay screen ke liye seedha (bills ki details neeche "bills" mein bhi hain) ----
+                amountToPay: round(payable.reduce((sum, b) => sum + (b.outstandingAmount || 0), 0)), // abhi kitna dena hai (paid nahi hue bills)
+                paymentOptions: payable.length ? (payable.some((b) => b.paymentOptions === "both") || (payable.some((b) => b.oneTime) && payable.some((b) => b.emi)) ? "both" : payable.some((b) => b.emi) ? "standing_order" : "one_time") : null,
+                payableBills: payable, // har bill: chargeId, amount, paymentOptions, oneTime, emi (installments)
                 bills, // har bill: items, badge, options (pay once / monthly)
             };
         });
@@ -360,6 +388,76 @@ const checkoutCharge = async (req, res) => {
 /**
  * Aakhri Tranzila receipt ka link. App data.receipt.url browser mein khole (PDF / page).
  */
+
+// ?type=payment|installment|refund&from=YYYY-MM-DD&to=YYYY-MM-DD
+const parseTxnQuery = (query) => {
+    const out = {};
+    if (query.type) {
+        if (!["payment", "installment", "refund"].includes(String(query.type))) return { message: "Type must be payment, installment or refund." };
+        out.type = String(query.type);
+    }
+    for (const key of ["from", "to"]) {
+        if (!query[key]) continue;
+        const m = moment(query[key], ["YYYY-MM-DD", moment.ISO_8601], true);
+        if (!m.isValid()) return { message: `${key} must be YYYY-MM-DD.` };
+        out[key] = key === "from" ? m.startOf("day").toDate() : m.endOf("day").toDate();
+    }
+    return { data: out };
+};
+
+/**
+ * GET /api/user/parent/payments/transactions   (parent: bachchon ke, senior: apne)
+ * Saare lene-dene, naye pehle: payment (ek baar / pehli kisht), installment (har mahine), refund.
+ * query: season?, playerId?, type? (payment | installment | refund), from?, to? (YYYY-MM-DD), page?, limit?
+ * data: { transactions: [...], totals: { paid, refunded, net, count }, pagination }
+ */
+const listMyTransactions = async (req, res) => {
+    try {
+        let ids = await myPlayerIds(req.user);
+        if (ids === null) return sendError(res, 403, "Only parents and senior players can see payments.");
+        if (req.query.playerId) {
+            if (!isValidId(req.query.playerId)) return sendError(res, 400, "Invalid player id.");
+            ids = ids.filter((id) => String(id) === String(req.query.playerId));
+            if (!ids.length) return sendError(res, 404, "Player not found.");
+        }
+        const parsed = parseTxnQuery(req.query);
+        if (parsed.message) return sendError(res, 400, parsed.message);
+
+        const filter = { playerId: { $in: ids }, ...MONEY_FILTER };
+        if (req.query.season) {
+            const season = parseSeason(req.query.season);
+            if (season.message) return sendError(res, 400, season.message);
+            filter.season = season.value;
+        }
+        const charges = await Charge.find(filter).select(TRANSACTION_FIELDS).populate(PLAYER_POPULATE);
+        await Promise.all(charges.filter((c) => c.plan === "standing_order").map((c) => syncStandingOrder(c))); // nayi kishtein Tranzila se
+        const { page, limit } = getPagination(req.query);
+        return sendOk(res, "My transactions.", listTransactions(charges, { ...parsed.data, page, limit }));
+    } catch (e) {
+        return sendServerError(res, "listMyTransactions", e);
+    }
+};
+
+/**
+ * GET /api/user/parent/payments/:id   ek bill (pay ke baad app isi se status dekhe: badge "paid" hone tak)
+ * Response: data.charge (listMyPayments jaisa: badge, paidAmount, options, receiptAvailable...)
+ */
+const getMyPayment = async (req, res) => {
+    try {
+        let { charge, status, message } = await findMyCharge(req, req.params.id);
+        if (!charge) return sendError(res, status, message);
+        if (charge.feePlanId && ["unpaid", "failed", "pending"].includes(charge.status)) {
+            await syncPlanBills([charge.playerId?._id || charge.playerId], charge.season); // price abhi ke plan ka
+            ({ charge } = await findMyCharge(req, req.params.id));
+            if (!charge) return sendError(res, 404, "This fee is no longer due.");
+        }
+        const [out] = await withPayOptions([charge]);
+        return sendOk(res, "Payment.", { charge: out });
+    } catch (e) {
+        return sendServerError(res, "getMyPayment", e);
+    }
+};
+
 const getMyReceipt = async (req, res) => {
     try {
         const { charge, status, message } = await findMyCharge(req, req.params.id);
@@ -437,4 +535,4 @@ const listMyRefundRequests = async (req, res) => {
     }
 };
 
-module.exports = { listMyPayments, listMyChildrenPayments, checkoutCharge, getMyReceipt, requestRefund, listMyRefundRequests };
+module.exports = { listMyPayments, listMyChildrenPayments, checkoutCharge, getMyReceipt, requestRefund, listMyRefundRequests, listMyTransactions, getMyPayment };

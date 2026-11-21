@@ -4913,7 +4913,7 @@
         ]
       },
       "put": {
-        "description": "**Access:** Super admin or club admin\n\npurane bills nahi badalte\n\n```\nPlan badalna (jo field bhejo wahi badlega). ageGroups bhejo toh poori list badal jaati hai.\nPehle bane bills nahi badalte, sirf naye bills naye price se.\nproductType bills bane hon toh nahi badalta.\nbody: { season?, productType?, pricingMode?, subscriptionAmount?, ageGroups?, jerseyAmount?, proRate?, paymentOptions?, campStartDate?, campDays?, name?, currency?, dueDate?, isActive? }\n```",
+        "description": "**Access:** Super admin or club admin\n\npurane bills nahi badalte\n\n```\nPlan badalna (jo field bhejo wahi badlega). ageGroups bhejo toh poori list badal jaati hai.\nUnpaid bills (parent ne pay shuru nahi kiya) naye price pe aa jaate hain (same _id). Paid / Standing Order / abhi pay ho rahe / custom fee wale nahi badalte.\nproductType bills bane hon toh nahi badalta.\nbody: { season?, productType?, pricingMode?, subscriptionAmount?, ageGroups?, jerseyAmount?, proRate?, paymentOptions?, campStartDate?, campDays?, name?, currency?, dueDate?, isActive? }\n```",
         "parameters": [
           {
             "name": "id",
@@ -5140,6 +5140,28 @@
           "Payments"
         ],
         "summary": "List charges",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/payments/transactions": {
+      "get": {
+        "description": "**Access:** Super admin or club admin\n\npaisa aaya / gaya, naye pehle\n\n```\nquery: clubId? (superAdmin), season?, teamId?, playerId?, type? (payment | installment | refund), from?, to? (YYYY-MM-DD), page?, limit?\ndata: { transactions: [...], totals: { paid, refunded, net, count }, pagination }\n```",
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Payments"
+        ],
+        "summary": "List club transactions",
         "security": [
           {
             "bearerAuth": []
@@ -5826,6 +5848,76 @@
         ]
       }
     },
+    "/user/parent/payments/transactions": {
+      "get": {
+        "description": "**Access:** Any logged-in user\n\npayment / kisht / refund history\n\n```\nSaare lene-dene, naye pehle: payment (ek baar / pehli kisht), installment (har mahine), refund.\nquery: season?, playerId?, type? (payment | installment | refund), from?, to? (YYYY-MM-DD), page?, limit?\ndata: { transactions: [...], totals: { paid, refunded, net, count }, pagination }\n```",
+        "parameters": [
+          {
+            "name": "playerId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "season",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Payments"
+        ],
+        "summary": "List my transactions",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/user/parent/payments/{id}": {
+      "get": {
+        "description": "**Access:** Any logged-in user\n\nek bill, pay ke baad status (\":id\" sabse aakhir mein)\n\n```\nResponse: data.charge (listMyPayments jaisa: badge, paidAmount, options, receiptAvailable...)\n```",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Payments"
+        ],
+        "summary": "Get my payment",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/user/parent/payments/{id}/checkout": {
       "post": {
         "description": "**Access:** Any logged-in user\n\nTranzila page ka URL deta hai\n\n```\nPay karna shuru. data.checkout.url app mein kholo (Tranzila ka page). Result webhook se aata hai.\nplan \"one_time\" = poora ek baar mein. plan \"standing_order\" = jersey + pehli kisht aaj, baaki har mahine.\nbody: { plan, installments?, language? }\n```",
@@ -5883,7 +5975,7 @@
     },
     "/user/parent/payments/{id}/receipt": {
       "get": {
-        "description": "**Access:** Any logged-in user\n\n```\nAakhri Tranzila receipt ka link. App data.receipt.url browser mein khole (PDF / page).\n```",
+        "description": "**Access:** Any logged-in user",
         "parameters": [
           {
             "name": "id",
@@ -6009,7 +6101,7 @@
     },
     "/user/coach/form101/draft": {
       "put": {
-        "description": "**Access:** Any logged-in user\n\ncoach: adhoora form save (1 mahina)\n\n```\nbody (JSON): { data: { employee, children, ... } }   wahi structure jo submit mein \"data\" hai, adhoora bhi chalega.\n1 mahina rehta hai (har save pe phir se 1 mahina). Files yahan nahi aati (pichhle submit ki saved files rehti hain).\n```",
+        "description": "**Access:** Any logged-in user\n\ncoach: adhoora form save (7 din)\n\n```\nDo tarike:\n  JSON:       { data: { employee, children, ... } }          -> sirf fields, pehle se saved documents waise hi rehte hain\n  form-data:  data (JSON string) + documents (submit wale keys: idCard, doc_<reason>, doc_taxCoordination, attachments)\n              + keepFiles (JSON array, /saved ke files[]._id jo rakhne hain)\n              -> documents ki list = keepFiles + nayi files. Jo na kept na naya, wo delete.\nAdhoora form chalega (koi validation nahi, reason select ho ya na ho). Signature save nahi hota.\n7 din rehta hai (har save pe phir se 7 din).\n```",
         "responses": {
           "401": {
             "description": "Missing or invalid token"
@@ -6047,11 +6139,31 @@
             "bearerAuth": []
           }
         ]
+      },
+      "get": {
+        "description": "**Access:** Any logged-in user\n\ncoach: apna saved form (= /saved)\n\n```\nForm wapas aaya (rejected / returned) ya adhoora chhoda: coach ne jo bhara tha wo + reject ka reason.\nApp isse form pre-fill kare, coach sirf galat cheez theek karke dobara submit kare.\n  hasSavedForm false = kuch save nahi (7 din nikal gaye / kabhi bhara nahi) -> khali form\n  form = wahi JSON structure jo submit ke \"data\" mein jaata hai\n  files = pichhle submit ke documents (ID card, ח / ט documents, attachments), har ek ka 30 min ka link.\n          Resubmit pe jo rakhni hai unke _id \"keepFiles\" mein bhejo, dobara upload nahi karni.\n  reupload = sirf signature (kabhi save nahi hota)\n```",
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "Get my form101 saved",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/user/coach/form101/saved": {
       "get": {
-        "description": "**Access:** Any logged-in user\n\ncoach: reject hua form ka bhara data + documents + reason\n\n```\nForm wapas aaya (rejected / returned) ya adhoora chhoda: coach ne jo bhara tha wo + reject ka reason.\nApp isse form pre-fill kare, coach sirf galat cheez theek karke dobara submit kare.\n  hasSavedForm false = kuch save nahi (1 mahina nikal gaya / approve ho gaya / kabhi bhara nahi) -> khali form\n  form = wahi JSON structure jo submit ke \"data\" mein jaata hai\n  files = pichhle submit ke documents (ID card, ח / ט documents, attachments), har ek ka 30 min ka link.\n          Resubmit pe jo rakhni hai unke _id \"keepFiles\" mein bhejo, dobara upload nahi karni.\n  reupload = sirf signature (kabhi save nahi hota)\n```",
+        "description": "**Access:** Any logged-in user\n\ncoach: reject hua form ka bhara data + documents + reason\n\n```\nForm wapas aaya (rejected / returned) ya adhoora chhoda: coach ne jo bhara tha wo + reject ka reason.\nApp isse form pre-fill kare, coach sirf galat cheez theek karke dobara submit kare.\n  hasSavedForm false = kuch save nahi (7 din nikal gaye / kabhi bhara nahi) -> khali form\n  form = wahi JSON structure jo submit ke \"data\" mein jaata hai\n  files = pichhle submit ke documents (ID card, ח / ט documents, attachments), har ek ka 30 min ka link.\n          Resubmit pe jo rakhni hai unke _id \"keepFiles\" mein bhejo, dobara upload nahi karni.\n  reupload = sirf signature (kabhi save nahi hota)\n```",
         "responses": {
           "401": {
             "description": "Missing or invalid token"
@@ -6097,7 +6209,7 @@
     },
     "/user/coach/form101/submit": {
       "post": {
-        "description": "**Access:** Any logged-in user\n\ncoach: form + signature + ID -> email\n\n```\nmultipart/form-data:\n  data        JSON string: { employee, children, employerIncome, otherIncome, spouse, changes,\n                             taxCredits, taxCoordination, declaration: { agreed: true } }\n              employer (section א) app NAHI bhejta / bheje toh ignore: hamesha club ki legal details se.\n  signature   PNG / JPG file (signature pad se) YA text field: \"data:image/png;base64,...\"\n  idCard      1-2 files: ID card + ספח (photo ya PDF)\n  doc_<reason> section ח ke reason ki file(s), max 3 har reason: doc_disabled, doc_disabilityAllowance,\n              doc_qualifyingSettlement, doc_newImmigrant (zaroori), doc_spouseNoIncome, doc_supportsChildren,\n              doc_disabledChildren (zaroori), doc_alimony, doc_dischargedSoldier, doc_academicDegree, doc_reserveCombat\n  doc_taxCoordination  section ט: assessor approval (reason assessorApproved pe zaroori) / salary slips\n  attachments 0-5 files: koi aur document\n  keepFiles   (optional) JSON array: pichhle submit ki saved files ke _id (GET /user/coach/form101/saved -> files[]).\n              Wo file apne purane field mein lagti hai, dobara upload nahi karni. Limits mein ginti hoti hai.\n              Jo id ab saved nahi (purani / expire) wo chhod di jaati hai, response mein skippedKeepFiles.\n              Document badla? Us purani file ki id keepFiles se hata do, nayi file us field mein bhejo.\nEmail fail = status nahi badalta, coach dobara bheje.\nSuccess pe: PDF (encrypted) + status save, aur bhara hua data + documents (signature nahi) 1 mahine ke liye\n(wapas aaye toh pre-fill). Approve hote hi data + documents delete.\n```",
+        "description": "**Access:** Any logged-in user\n\ncoach: form + signature + ID -> email\n\n```\nmultipart/form-data:\n  data        JSON string: { employee, children, employerIncome, otherIncome, spouse, changes,\n                             taxCredits, taxCoordination, declaration: { agreed: true } }\n              employer (section א) app NAHI bhejta / bheje toh ignore: hamesha club ki legal details se.\n  signature   PNG / JPG file (signature pad se) YA text field: \"data:image/png;base64,...\"\n  idCard      1-2 files: ID card + ספח (photo ya PDF)\n  doc_<reason> section ח ke reason ki file(s), max 3 har reason: doc_disabled, doc_disabilityAllowance,\n              doc_qualifyingSettlement, doc_newImmigrant (zaroori), doc_spouseNoIncome, doc_supportsChildren,\n              doc_disabledChildren (zaroori), doc_alimony, doc_dischargedSoldier, doc_academicDegree, doc_reserveCombat\n  doc_taxCoordination  section ט: assessor approval (reason assessorApproved pe zaroori) / salary slips\n  attachments 0-5 files: koi aur document\n  keepFiles   (optional) JSON array: pichhle submit ki saved files ke _id (GET /user/coach/form101/saved -> files[]).\n              Wo file apne purane field mein lagti hai, dobara upload nahi karni. Limits mein ginti hoti hai.\n              Jo id ab saved nahi (purani / expire) wo chhod di jaati hai, response mein skippedKeepFiles.\n              Document badla? Us purani file ki id keepFiles se hata do, nayi file us field mein bhejo.\nEmail fail = status nahi badalta, coach dobara bheje.\nSuccess pe: PDF (encrypted) + status save, aur bhara hua data + documents (signature nahi) 7 din ke liye\n(wapas aaye toh pre-fill / preview). Approve ke baad bhi 7 din. Email: club admin (+ accounting) aur coach dono ko.\n```",
         "responses": {
           "401": {
             "description": "Missing or invalid token"
@@ -6350,6 +6462,52 @@
           "Form 101"
         ],
         "summary": "Download form101 pdf by link"
+      }
+    },
+    "/user/coach/form101/preview-link": {
+      "get": {
+        "description": "**Access:** Any logged-in user\n\ncoach: saved form (draft / bheja hua) ka PDF preview link\n\n```\nSaved form (adhoora draft ya bheja hua) ka PDF preview. Response:\n  { url, expiresAt, filename, source: draft | submitted, savedAt, savedUntil, missing: [\"Last name is required.\", ...] }\n  url 5 min, bina token khulta hai (browser mein dikhta hai). missing = submit se pehle kya bharna baaki.\nKuch saved nahi -> 404.\n```",
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token"
+          },
+          "default": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "Get my form101 preview link",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/form101/preview/{token}": {
+      "get": {
+        "description": "**Access:** Public (no token)\n\nbina token: preview PDF (abhi ke saved data se)\n\n```\nHar baar abhi ka saved data (link ke baad coach ne save kiya toh naya data dikhega). inline = browser mein khulta hai.\n```",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "tags": [
+          "Form 101"
+        ],
+        "summary": "Download form101 preview"
       }
     },
     "/user/clubs/{id}/form101-settings": {

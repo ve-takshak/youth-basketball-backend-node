@@ -103,6 +103,7 @@ const {
 const {
     issueCharges,
     listCharges,
+    listClubTransactions,
     getPaymentsSummary,
     getCharge,
     updateCharge,
@@ -122,6 +123,8 @@ const {
     getMyReceipt,
     requestRefund,
     listMyRefundRequests,
+    listMyTransactions,
+    getMyPayment,
 } = require("../app/controllers/api/parentPaymentController");
 const {
     listRefundRequests,
@@ -320,6 +323,7 @@ router.delete("/user/payments/fee-plans/:id", superAdminOrClubAdminAuthenticatio
 router.post("/user/payments/charges/issue", superAdminOrClubAdminAuthentication, issueCharges);
 router.get("/user/payments/summary", superAdminOrClubAdminAuthentication, getPaymentsSummary);
 router.get("/user/payments/charges", superAdminOrClubAdminAuthentication, listCharges);
+router.get("/user/payments/transactions", superAdminOrClubAdminAuthentication, listClubTransactions); // paisa aaya / gaya, naye pehle
 router.get("/user/payments/charges/:id", superAdminOrClubAdminAuthentication, getCharge);
 router.put("/user/payments/charges/:id", superAdminOrClubAdminAuthentication, updateCharge); // ek player ki alag fee (pay se pehle)
 router.put("/user/payments/charges/:id/mark-paid", superAdminOrClubAdminAuthentication, markChargePaid);
@@ -338,6 +342,8 @@ router.get("/user/teams/:id/payment-status", authentication, getTeamPaymentStatu
 router.get("/user/parent/payments", authentication, listMyPayments);
 router.get("/user/parent/payments/children", authentication, listMyChildrenPayments); // har bachche ka kitna dena / diya
 router.get("/user/parent/payments/children/:playerId", authentication, listMyChildrenPayments); // sirf ek bachcha
+router.get("/user/parent/payments/transactions", authentication, listMyTransactions); // payment / kisht / refund history
+router.get("/user/parent/payments/:id", authentication, getMyPayment); // ek bill, pay ke baad status (":id" sabse aakhir mein)
 router.post("/user/parent/payments/:id/checkout", authentication, checkoutCharge); // Tranzila page ka URL deta hai
 router.get("/user/parent/payments/:id/receipt", authentication, getMyReceipt);
 router.post("/user/parent/payments/:id/refund-request", authentication, requestRefund); // club owner review karega

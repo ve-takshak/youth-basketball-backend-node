@@ -252,6 +252,24 @@ const issueCharges = async (req, res) => {
 };
 
 // List / summary ka common filter
+const { listTransactions, TRANSACTION_FIELDS, MONEY_FILTER } = require("../../helpers/transactions");
+
+// ?type=payment|installment|refund&from=YYYY-MM-DD&to=YYYY-MM-DD
+const parseTxnQuery = (query) => {
+    const out = {};
+    if (query.type) {
+        if (!["payment", "installment", "refund"].includes(String(query.type))) return { message: "Type must be payment, installment or refund." };
+        out.type = String(query.type);
+    }
+    for (const key of ["from", "to"]) {
+        if (!query[key]) continue;
+        const m = moment(query[key], ["YYYY-MM-DD", moment.ISO_8601], true);
+        if (!m.isValid()) return { message: `${key} must be YYYY-MM-DD.` };
+        out[key] = key === "from" ? m.startOf("day").toDate() : m.endOf("day").toDate();
+    }
+    return { data: out };
+};
+
 const buildFilter = async (req, query) => {
     const { clubId, message } = isSuperAdmin(req) && !query.clubId ? { clubId: null } : resolveClubId(req, query.clubId);
     if (message) return { message };
@@ -749,7 +767,28 @@ const getTeamPaymentStatus = async (req, res) => {
     }
 };
 
+/**
+ * GET /api/user/payments/transactions   (club admin / super admin) club ke saare lene-dene, naye pehle
+ * query: clubId? (superAdmin), season?, teamId?, playerId?, type? (payment | installment | refund), from?, to? (YYYY-MM-DD), page?, limit?
+ * data: { transactions: [...], totals: { paid, refunded, net, count }, pagination }
+ */
+const listClubTransactions = async (req, res) => {
+    try {
+        const { filter, message } = await buildFilter(req, req.query);
+        if (message) return sendError(res, 400, message);
+        const parsed = parseTxnQuery(req.query);
+        if (parsed.message) return sendError(res, 400, parsed.message);
+
+        const charges = await Charge.find({ $and: [filter, MONEY_FILTER] }).select(TRANSACTION_FIELDS).populate(PLAYER_POPULATE);
+        const { page, limit } = getPagination(req.query);
+        return sendOk(res, "Transactions.", listTransactions(charges, { ...parsed.data, page, limit }));
+    } catch (e) {
+        return sendServerError(res, "listClubTransactions", e);
+    }
+};
+
 module.exports = {
+    listClubTransactions,
     issueCharges,
     listCharges,
     getPaymentsSummary,
