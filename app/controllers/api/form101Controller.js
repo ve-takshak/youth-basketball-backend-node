@@ -55,9 +55,20 @@ const sendError = (res, status, message, data = {}) =>
 const sendOk = (res, message, data = {}) => res.status(200).json({ error: false, status: 200, message, message_desc: message, data });
 
 // Error log mein sirf message (stack mein form data nahi hota, par req.body kabhi log nahi karte)
+// 500: poora error (stack ke saath) console + temp log file mein, taaki asli wajah mile.
+// File OS temp folder mein (backend folder mein likhte toh nodemon restart karta rehta).
+// Production ke alawa response ke message_desc mein bhi asli message.
+const SERVER_ERROR_LOG = require("path").join(require("os").tmpdir(), "youth_basket_form101_errors.log");
 const sendServerError = (res, label, e) => {
-    console.error(`${label} error:`, e?.message || e);
-    return res.status(500).json({ error: true, status: 500, message: "Something went wrong.", message_desc: "Something went wrong.", data: {} });
+    const detail = e?.stack || e?.message || String(e);
+    console.error(`${label} error:`, detail);
+    try {
+        require("fs").appendFileSync(SERVER_ERROR_LOG, `[${new Date().toISOString()}] ${label}: ${detail}\n\n`);
+    } catch (logErr) {
+        // log file na likh paaye toh bhi response jaana chahiye
+    }
+    const desc = process.env.NODE_ENV === "production" ? "Something went wrong." : `${label}: ${e?.message || e}`;
+    return res.status(500).json({ error: true, status: 500, message: "Something went wrong.", message_desc: desc, data: {} });
 };
 
 // Israel ka current tax year
@@ -71,7 +82,7 @@ const employerOf = (club) => ({
     phone: club.phone || "",
     taxId: club.taxId || "",
     deductionFileNumber: club.deductionFileNumber || "",
-}).filter(Boolean);
+});
 
 const missingEmployerFields = (employer) => {
     const labels = { name: "legal name", address: "official address", deductionFileNumber: "deduction file number (תיק ניכויים)" };
